@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OrchestratorDecision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action", "message", "task"],
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["user_message", "run_implementer"]
+    },
+    "message": { "type": "string" },
+    "task": { "type": "string" }
+  }
+}

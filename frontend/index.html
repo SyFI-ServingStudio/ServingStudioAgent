@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLSim · Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=live-notes1" />
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">M<span>/</span>S</div>
+        <div class="brand-text">
+          <h1>MLSim</h1>
+          <p>assistant</p>
+        </div>
+      </div>
+
+      <button id="newChat" class="new-chat">
+        <span class="plus">+</span> New conversation
+      </button>
+
+      <nav class="conv-scroll">
+        <ul id="convList" class="conv-list"></ul>
+        <p id="convEmpty" class="conv-empty">No conversations yet.</p>
+      </nav>
+
+      <footer class="side-foot">
+        <span class="dot"></span> docker · codex · <code id="modelName">gpt-5.3-codex-spark</code>
+      </footer>
+    </aside>
+
+    <!-- Chat -->
+    <main class="chat">
+      <header class="chat-header">
+        <div class="chat-title" id="chatTitle">MLSim Assistant</div>
+        <div class="chat-sub">drives <code>codex exec</code> inside a copied <code>main/</code> workspace</div>
+      </header>
+
+      <section id="messages" class="messages">
+        <div id="welcome" class="welcome">
+          <h2>Ask MLSim anything</h2>
+          <p>Ask about MLSim or delegate changes. Each conversation edits an isolated
+             copy of <code>main/</code>, mounted into Docker for Codex.</p>
+          <div class="chips">
+            <button class="chip" data-fill="List the available MLSim L1 profilers.">List the L1 profilers</button>
+            <button class="chip" data-fill="Count missing rows for single_gemm, backend torch.">Count missing single_gemm rows</button>
+            <button class="chip" data-fill="What presets are available to run a simulation, and how do I dry-run one?">How do I run a simulation?</button>
+          </div>
+        </div>
+      </section>
+
+      <form id="composer" class="composer">
+        <div class="composer-row">
+          <textarea id="input" rows="1" placeholder="Message the MLSim assistant…" autocomplete="off"></textarea>
+          <button id="stop" type="button" class="stop" aria-label="Stop" hidden>
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/></svg>
+          </button>
+          <button id="send" type="submit" class="send" aria-label="Send">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 12l15-7-7 15-2-6-6-2z" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <div class="composer-meta">
+          <label class="sandbox" title="How much this turn is allowed to do in the copied Docker workspace">
+            <span class="sandbox-ico" id="sandboxIco"></span>
+            <select id="sandbox">
+              <option value="read-only">Read-only · ask / notify only</option>
+              <option value="workspace-write" selected>Workspace-write · implement in copy</option>
+              <option value="danger-full-access">Full access · bypass sandbox</option>
+            </select>
+          </label>
+          <span class="hint">Enter to send · Shift+Enter for newline</span>
+        </div>
+      </form>
+    </main>
+  </div>
+
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
+  <script src="/static/app.js?v=live-notes1"></script>
+</body>
+</html>

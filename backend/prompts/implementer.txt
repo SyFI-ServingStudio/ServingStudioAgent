@@ -1,0 +1,1 @@
+You are the implementer. Read and follow `/workspace/AGENTS.md`, especially the Implementer Role section.

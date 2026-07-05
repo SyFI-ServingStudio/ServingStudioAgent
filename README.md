@@ -1,0 +1,158 @@
+# user-facing-ui
+
+A small web chat UI for MLSim. The browser talks to a FastAPI backend, which
+drives **`codex exec` inside Docker**.
+
+Each conversation gets an isolated copy of git-tracked files from `../main`.
+That copy is mounted read/write into Docker at `/workspace`, while the real
+`../main` tree is left untouched.
+
+## Run
+
+```bash
+cd user-facing-ui
+./run.sh
+# then open http://<host>:8765
+```
+
+`run.sh` uses a prebuilt local Docker image for the Codex runner. If the image
+is missing, its MLSim runner label is stale, or its baked `main/uv.lock` hash
+does not match the current checkout, it builds it once from
+`docker/codex-runner.Dockerfile`; later turns and later conversations reuse that
+image. The image is based on CUDA 12.8 devel and includes Node/Codex, `uv`, git,
+Rust stable (`cargo`/`rustc`), `just`, `nvcc`, Python 3.12 dev headers, native
+build tools, and a prewarmed MLSim Python environment at `/opt/mlsim-venv`.
+The prewarmed env is built from `../main/pyproject.toml`, `../main/uv.lock`,
+and `../main/justfile`, so the default profiling stack, including pinned
+DeepGEMM, is already installed before any conversation starts. The Docker
+container and `codex exec` both run as the host UID/GID with `HOME` set to the
+matching `/home/<user>` path.
+
+To rebuild the runner image explicitly:
+
+```bash
+cd user-facing-ui
+CODEX_FORCE_IMAGE_BUILD=1 ./run.sh
+```
+
+## Turn Flow
+
+```text
+browser
+  -> FastAPI
+  -> prepare workspaces/<conversation-id>/main from git-tracked ../main files
+     - copy backend/prompts/AGENTS.md to /workspace/AGENTS.md
+     - link /workspace/.codex/skills -> /workspace/skills
+  -> seed workspaces/<id>/codex-home from host ~/.codex auth/config
+  -> docker run -v workspaces/<id>/main:/workspace -v workspaces/<id>/codex-home:/home/<user>/.codex
+     using the prebuilt CODEX_DOCKER_IMAGE
+  -> codex exec/resume as orchestrator
+       action=user_message   -> return ask/notify text to the user
+       action=run_implementer -> codex exec/resume as implementer
+  -> explicit handoff of implementer summary back to orchestrator
+       action=user_message   -> return reviewed result to the user
+       action=run_implementer -> continue with another bounded implementer task
+  -> stream progress + final text back to browser
+```
+
+The orchestrator is an active human-in-the-loop coordinator. It reads matching
+skills, classifies the request, decides whether clarification is needed, and
+delegates only bounded implementer tasks. The implementer returns free-form
+text; there is no judge, profiler, or shared `profile.db` write unless the
+copied workspace task does it. The orchestrator and implementer keep separate
+Codex session ids. Same-role continuity uses `codex exec resume`; cross-role
+handoff does not rely on shared context and is passed explicitly as task text
+and implementer summary.
+`backend/prompts/AGENTS.md` holds the detailed shared role and skill
+instructions and is copied into the workspace. The workspace also gets
+`.codex/skills -> ../skills` so Codex can discover the copied repo-local skills.
+The role startup prompts are sent only when a role session is first created;
+later turns resume that role and send only the new user message or delegated
+task. Implementer summaries are explicitly sent back to the orchestrator before
+the turn finishes.
+
+The UI shows the full orchestrator output for the turn and, when work is
+delegated, the implementer summary. If the orchestrator delegates multiple
+follow-ups in one browser turn, the final assistant message includes the
+implementer summaries and the orchestrator's final user-facing message.
+
+## Debug Logging
+
+The backend writes JSON-line logs to `logs/backend.log` and stdout. Useful
+fields:
+
+- `conversation_id`, `turn_id` — correlate one browser turn across the backend;
+- `prompt_fingerprint` — changes when role prompts/schema/model change;
+- `role`, `resume`, `codex_session_id` — confirm orchestrator/implementer
+  routing and Codex resume behavior;
+- `orchestrator.decision.action` — shows whether the orchestrator answered the
+  user directly or delegated to the implementer;
+- `container`, `workspace` — confirm which isolated Docker workspace is active;
+- `final_preview`, `stderr_tail`, `returncode` — debug Codex CLI failures.
+
+## Execution Modes
+
+- `read-only`: the backend will not run the implementer. The orchestrator can
+  answer, ask, or tell the user that write mode is needed.
+- `workspace-write`: the implementer can edit and run commands inside the copied
+  Docker workspace.
+- `danger-full-access`: same copied workspace and bypassed Codex sandboxing.
+
+GPU forwarding is controlled independently by `CODEX_DOCKER_GPUS`. It defaults
+to `all`, so `workspace-write` containers can run CUDA smoke checks and
+profiling code inside the copied workspace. Set `CODEX_DOCKER_GPUS=` to disable
+Docker GPU forwarding.
+
+## Layout
+
+| Path | Purpose |
+|------|---------|
+| `backend/app.py` | FastAPI routes + SSE streaming + static serving |
+| `backend/codex_runner.py` | workspace copy, Docker lifecycle, Codex orchestrator/implementer calls |
+| `backend/prompts/AGENTS.md` | detailed instructions copied into each `/workspace` |
+| `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
+| `backend/store.py` | in-memory + JSON-file conversation store |
+| `docker/codex-runner.Dockerfile` | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked MLSim deps |
+| `scripts/build-codex-runner-image.sh` | one-shot image builder used by `run.sh` when needed |
+| `frontend/` | vanilla HTML/CSS/JS chat UI |
+| `workspaces/` | generated per-conversation copies of `../main` |
+
+## Environment
+
+- `CODEX_MODEL` — Codex model, default `gpt-5.3-codex-spark`.
+- `CODEX_DOCKER_IMAGE` — Docker image, default `mlsim-ui-codex-runner:latest`.
+- `CODEX_CUDA_IMAGE` — CUDA devel base image baked into the runner image,
+  default `nvidia/cuda:12.8.1-devel-ubuntu24.04`.
+- `CODEX_UV_IMAGE` — source image copied for the `uv`/`uvx` binaries, default
+  `ghcr.io/astral-sh/uv:python3.12-bookworm`.
+- `CODEX_NPM_PACKAGE` — Codex npm package baked into the image by the build
+  script, default `@openai/codex@0.125.0`.
+- `RUST_TOOLCHAIN` — Rust toolchain baked into the image by the build script,
+  default `stable`.
+- `CODEX_RUNNER_IMAGE_VERSION` — expected image label, default
+  `prebuilt-codex-runner-v5`. `run.sh` rebuilds when this label differs or
+  when the baked `main/uv.lock` hash label differs from the current checkout.
+- `CODEX_FORCE_IMAGE_BUILD=1` — force `run.sh` to rebuild the runner image.
+- `CODEX_SKIP_IMAGE_BUILD=1` — skip the image existence check/build step.
+- `CODEX_TURN_TIMEOUT` — per Codex call timeout in seconds, default `600`.
+- `CODEX_DOCKER_GPUS` — value passed to `docker run --gpus`, default `all`.
+  Set it to an empty string to run without GPU forwarding.
+- `CODEX_DOCKER_DG_USE_LOCAL_VERSION` — DeepGEMM build mode inside Docker,
+  default `0`. This is the repo-supported DeepGEMM path from `main/justfile`;
+  it keeps DeepGEMM enabled while avoiding install-time build-clone assertions.
+- `CODEX_DOCKER_UID`, `CODEX_DOCKER_GID`, `CODEX_DOCKER_USER`,
+  `CODEX_DOCKER_HOME` — optional container identity override. Defaults to the
+  host user, so files written under `/workspace` are not root-owned and Codex
+  sees the same absolute `.codex` home path.
+- `CODEX_DOCKER_UV_PROJECT_ENVIRONMENT` — where `uv run` creates the project
+  virtualenv inside Docker, default `/opt/mlsim-venv`. The default is baked into
+  the runner image and chowned to the host UID/GID; per-container overlay writes
+  are isolated from other conversations.
+- `CODEX_DOCKER_UV_CACHE_DIR` — where `uv` stores cache inside Docker, default
+  `/opt/mlsim-uv-cache`, also baked into the runner image.
+- `PORT`, `HOST` — FastAPI bind settings used by `run.sh`.
+
+This is a local development tool. It copies host `~/.codex` authentication and
+configuration into an isolated per-conversation `codex-home`, then bind-mounts
+that clean home into Docker as `/home/<user>/.codex`. Runtime state such as
+`tmp`, `sessions`, and rollout logs stays isolated per conversation.
