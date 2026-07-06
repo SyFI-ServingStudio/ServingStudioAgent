@@ -11,11 +11,10 @@ Endpoints:
 
 The message endpoint streams Server-Sent Events: `session` (role Codex session id),
 `progress` (transient activity lines), `intermediate_output` (assistant commentary),
-`orchestrator` (full orchestrator output), `implementer` (implementer summary),
-then `done` (stored final answer). `orchestrator` and `implementer` can repeat
-inside one browser turn when the orchestrator issues follow-up tasks. A
-per-conversation lock prevents two turns racing the same copied
-workspace/container.
+`implementer` (implementer summary), then `done` (stored final answer).
+`implementer` can repeat inside one browser turn when the orchestrator issues
+follow-up tasks. A per-conversation lock prevents two turns racing the same
+copied workspace/container.
 """
 
 from __future__ import annotations
@@ -31,7 +30,17 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import codex_runner
+from .codex_runtime.config import (
+    DEFAULT_SANDBOX,
+    MAIN_DIR,
+    SANDBOX_MODES,
+    WORKSPACE,
+    WORKSPACES_DIR,
+    prompt_fingerprint,
+    workspace_main_for,
+)
+from .codex_runtime.docker import cleanup_conversation
+from .codex_runtime.turn import run_turn
 from .logging_config import compact_text, configure_logging, log_event
 from .store import Store
 
@@ -57,12 +66,12 @@ def _sse(event: str, data: dict) -> str:
 
 
 class NewConversation(BaseModel):
-    sandbox: str = codex_runner.DEFAULT_SANDBOX
+    sandbox: str = DEFAULT_SANDBOX
 
 
 class SendMessage(BaseModel):
     text: str
-    sandbox_mode: str = codex_runner.DEFAULT_SANDBOX
+    sandbox_mode: str = DEFAULT_SANDBOX
 
 
 @app.get("/")
@@ -75,13 +84,13 @@ def index() -> FileResponse:
 
 @app.get("/api/conversations")
 def list_conversations() -> dict:
-    return {"conversations": store.list(), "sandbox_modes": list(codex_runner.SANDBOX_MODES)}
+    return {"conversations": store.list(), "sandbox_modes": list(SANDBOX_MODES)}
 
 
 @app.post("/api/conversations")
 def create_conversation(body: NewConversation) -> dict:
     cid = uuid.uuid4().hex[:12]
-    fingerprint = codex_runner.prompt_fingerprint()
+    fingerprint = prompt_fingerprint()
     log_event(
         LOG,
         "conversation.create",
@@ -105,7 +114,7 @@ def delete_conversation(cid: str) -> dict:
     log_event(LOG, "conversation.delete", conversation_id=cid)
     store.delete(cid)
     _conv_locks.pop(cid, None)
-    codex_runner.cleanup_conversation(cid)
+    cleanup_conversation(cid)
     return {"ok": True}
 
 
@@ -118,7 +127,7 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"}
 @app.get("/api/file")
 def serve_file(path: str = Query(...), cid: str | None = Query(default=None)) -> FileResponse:
     requested = Path(path)
-    root = codex_runner.workspace_main_for(cid) if cid else codex_runner.MAIN_DIR
+    root = workspace_main_for(cid) if cid else MAIN_DIR
     if requested == Path("/workspace") or Path("/workspace") in requested.parents:
         requested = root / requested.relative_to("/workspace")
     elif not requested.is_absolute():
@@ -128,7 +137,7 @@ def serve_file(path: str = Query(...), cid: str | None = Query(default=None)) ->
     except (OSError, RuntimeError):
         raise HTTPException(status_code=404, detail="not found")
 
-    allowed_root = (codex_runner.WORKSPACES_DIR if cid else codex_runner.WORKSPACE).resolve()
+    allowed_root = (WORKSPACES_DIR if cid else WORKSPACE).resolve()
     if resolved != allowed_root and allowed_root not in resolved.parents:
         raise HTTPException(status_code=403, detail="outside workspace")
     if resolved.suffix.lower() not in _IMAGE_EXTS:
@@ -149,18 +158,18 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
         raise HTTPException(status_code=400, detail="empty message")
 
     sandbox = body.sandbox_mode
-    prompt_fingerprint = codex_runner.prompt_fingerprint()
+    current_prompt_fingerprint = prompt_fingerprint()
     turn_id = uuid.uuid4().hex[:10]
     previous_sessions = dict(conv.get("codex_sessions") or {})
     store.add_message(cid, "user", text)
-    sessions = store.sessions_for_prompt(cid, prompt_fingerprint)
+    sessions = store.sessions_for_prompt(cid, current_prompt_fingerprint)
     log_event(
         LOG,
         "turn.received",
         conversation_id=cid,
         turn_id=turn_id,
         sandbox=sandbox,
-        prompt_fingerprint=prompt_fingerprint,
+        prompt_fingerprint=current_prompt_fingerprint,
         prompt_len=len(text),
         prompt_preview=compact_text(text),
         previous_session_roles=sorted(previous_sessions),
@@ -174,13 +183,13 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
             final_text: str | None = None
             intermediate_outputs: list[dict[str, str]] = []
             try:
-                async for ev in codex_runner.run_turn(
+                async for ev in run_turn(
                     cid,
                     text,
                     sandbox=sandbox,
                     sessions=sessions,
                     turn_id=turn_id,
-                    prompt_fingerprint=prompt_fingerprint,
+                    prompt_fingerprint=current_prompt_fingerprint,
                 ):
                     kind = ev.get("kind")
                     if kind == "session":
@@ -197,8 +206,8 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
                             "session",
                             {"role": ev.get("role"), "session_id": ev.get("session_id")},
                         )
-                    elif kind in ("orchestrator", "implementer"):
-                        yield _sse(kind, {"text": ev.get("text", "")})
+                    elif kind == "implementer":
+                        yield _sse("implementer", {"text": ev.get("text", "")})
                     elif kind == "intermediate_output":
                         intermediate_output = {
                             "role": str(ev.get("role") or ""),

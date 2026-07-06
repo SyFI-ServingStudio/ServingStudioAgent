@@ -124,7 +124,13 @@ Docker GPU forwarding.
 | Path | Purpose |
 |------|---------|
 | `backend/app.py` | FastAPI routes + SSE streaming + Vite static serving |
-| `backend/codex_runner.py` | workspace copy, Docker lifecycle, Codex orchestrator/implementer calls |
+| `backend/codex_runtime/config.py` | environment, path, mode, prompt-fingerprint settings |
+| `backend/codex_runtime/workspace.py` | per-conversation `main/` copy and local git bootstrap |
+| `backend/codex_runtime/docker.py` | Docker container lifecycle and isolated Codex home setup |
+| `backend/codex_runtime/codex_cli.py` | low-level `codex exec` subprocess runner |
+| `backend/codex_runtime/codex_events.py` | Codex JSON/rollout event translation |
+| `backend/codex_runtime/prompts.py` | role prompts and orchestrator JSON parsing |
+| `backend/codex_runtime/turn.py` | high-level orchestrator/implementer turn loop |
 | `backend/prompts/AGENTS.md` | detailed instructions copied into each `/workspace` |
 | `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
 | `backend/store.py` | in-memory + JSON-file conversation store |
