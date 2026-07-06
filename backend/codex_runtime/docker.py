@@ -29,12 +29,19 @@ from .config import (
 )
 from ..logging_config import log_event
 
+
+def remove_container(conversation_id: str) -> None:
+    """Best-effort removal of the Docker container for a conversation/eval id."""
+    container = container_name(conversation_id)
+    log_event(LOG, "container.remove", conversation_id=conversation_id, container=container)
+    subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
+
+
 def cleanup_conversation(conversation_id: str) -> None:
     """Best-effort cleanup for a deleted conversation."""
-    container = container_name(conversation_id)
-    log_event(LOG, "conversation.cleanup", conversation_id=conversation_id, container=container)
-    subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
+    remove_container(conversation_id)
     shutil.rmtree(WORKSPACES_DIR / conversation_id, ignore_errors=True)
+
 
 def _copy_codex_auth_entry(src: Path, dst: Path) -> None:
     if not src.exists():

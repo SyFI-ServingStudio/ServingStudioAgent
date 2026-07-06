@@ -1,0 +1,98 @@
+"""JSON eval endpoint backed by the normal Codex turn runtime."""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from typing import Any
+
+from pydantic import BaseModel
+
+from .codex_runtime.config import DEFAULT_SANDBOX, prompt_fingerprint, workspace_main_for
+from .codex_runtime.docker import remove_container
+from .codex_runtime.turn import run_turn
+
+
+class EvalRequest(BaseModel):
+    prompt: str
+    sandbox: str = DEFAULT_SANDBOX
+    autonomous: bool = True
+    keep_container: bool = False
+
+
+async def run_eval(
+    *,
+    prompt: str,
+    sandbox: str = DEFAULT_SANDBOX,
+    autonomous: bool = True,
+    keep_container: bool = False,
+) -> dict[str, Any]:
+    """Run one prompt through `run_turn` and return a script-friendly JSON object."""
+    text = prompt.strip()
+    if not text:
+        raise ValueError("empty prompt")
+
+    conversation_id = f"eval-{uuid.uuid4().hex[:12]}"
+    turn_id = uuid.uuid4().hex[:10]
+    fingerprint = prompt_fingerprint(autonomous=autonomous)
+    result: dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "sandbox": sandbox,
+        "autonomous": autonomous,
+        "kept_workspace": True,
+        "kept_container": keep_container,
+        "workspace": str(workspace_main_for(conversation_id)),
+        "sessions": {},
+        "progress": [],
+        "intermediate_outputs": [],
+        "implementer_summaries": [],
+        "final": "",
+        "ok": False,
+        "error": "",
+    }
+
+    try:
+        async for event in run_turn(
+            conversation_id,
+            text,
+            sandbox=sandbox,
+            sessions={},
+            turn_id=turn_id,
+            prompt_fingerprint=fingerprint,
+            autonomous=autonomous,
+        ):
+            _collect_eval_event(result, event)
+        result["ok"] = bool(result["final"]) and not bool(result["error"])
+    except Exception as exc:
+        result["error"] = str(exc)
+    finally:
+        if not keep_container:
+            await asyncio.to_thread(remove_container, conversation_id)
+
+    return result
+
+
+def _collect_eval_event(result: dict[str, Any], event: dict[str, str]) -> None:
+    kind = event.get("kind")
+    if kind == "session":
+        role = str(event.get("role") or "")
+        session_id = str(event.get("session_id") or "")
+        if role and session_id:
+            result["sessions"][role] = session_id
+    elif kind == "progress":
+        result["progress"].append(str(event.get("text") or ""))
+    elif kind == "error":
+        result["progress"].append(str(event.get("text") or ""))
+        result["error"] = str(event.get("text") or "")
+    elif kind == "intermediate_output":
+        result["intermediate_outputs"].append(
+            {
+                "role": str(event.get("role") or ""),
+                "text": str(event.get("text") or ""),
+            }
+        )
+    elif kind == "implementer":
+        result["implementer_summaries"].append(str(event.get("text") or ""))
+    elif kind == "final":
+        result["final"] = str(event.get("text") or "")

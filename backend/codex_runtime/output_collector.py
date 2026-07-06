@@ -12,7 +12,7 @@ from .codex_events import (
     _scan_rollout_agent_messages,
     _translate,
 )
-from .config import CODEX_CALL_TIMEOUT, LOG
+from .config import CODEX_IDLE_TIMEOUT, LOG
 from .exec_types import CodexEvent, CodexExecRequest
 from ..logging_config import compact_text, log_event
 
@@ -86,11 +86,14 @@ class CodexOutputCollector:
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
-            timeout_s=CODEX_CALL_TIMEOUT,
+            idle_timeout_s=CODEX_IDLE_TIMEOUT,
         )
         return {
             "kind": "error",
-            "text": f"{self.request.label}: codex call timed out after {CODEX_CALL_TIMEOUT:.0f}s",
+            "text": (
+                f"{self.request.label}: codex call timed out after "
+                f"{CODEX_IDLE_TIMEOUT:.0f}s without output"
+            ),
         }
 
     def final_event(self, returncode: int | None) -> CodexEvent:

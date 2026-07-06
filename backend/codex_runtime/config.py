@@ -16,7 +16,9 @@ PROMPTS_DIR = UI_DIR / "backend" / "prompts"
 
 CODEX_DOCKER_IMAGE = os.environ.get("CODEX_DOCKER_IMAGE", "mlsim-ui-codex-runner:latest")
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.3-codex-spark")
-CODEX_CALL_TIMEOUT = float(os.environ.get("CODEX_TURN_TIMEOUT", "600"))
+CODEX_IDLE_TIMEOUT = float(
+    os.environ.get("CODEX_IDLE_TIMEOUT", os.environ.get("CODEX_TURN_TIMEOUT", "600"))
+)
 CODEX_DOCKER_GPUS = os.environ.get("CODEX_DOCKER_GPUS", "all").strip()
 CODEX_DOCKER_UID = int(os.environ.get("CODEX_DOCKER_UID", str(os.getuid())))
 CODEX_DOCKER_GID = int(os.environ.get("CODEX_DOCKER_GID", str(os.getgid())))

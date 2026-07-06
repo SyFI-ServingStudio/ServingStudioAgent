@@ -8,6 +8,7 @@ Endpoints:
   GET    /api/conversations/{cid}       -> full conversation (messages, role sessions)
   DELETE /api/conversations/{cid}       -> delete
   POST   /api/conversations/{cid}/messages  -> SSE stream of one turn
+  POST   /api/eval                          -> JSON single-turn eval
 
 The message endpoint streams Server-Sent Events: `session` (role Codex session id),
 `progress` (transient activity lines), `intermediate_output` (assistant commentary),
@@ -41,6 +42,7 @@ from .codex_runtime.config import (
 )
 from .codex_runtime.docker import cleanup_conversation
 from .codex_runtime.turn import run_turn
+from .eval import EvalRequest, run_eval
 from .logging_config import compact_text, configure_logging, log_event
 from .store import Store
 
@@ -109,6 +111,19 @@ def create_conversation(body: NewConversation) -> dict:
         prompt_fingerprint=fingerprint,
     )
     return store.create(cid, body.sandbox, fingerprint, autonomous=body.autonomous)
+
+
+@app.post("/api/eval")
+async def eval_run(body: EvalRequest) -> dict:
+    try:
+        return await run_eval(
+            prompt=body.prompt,
+            sandbox=body.sandbox,
+            autonomous=body.autonomous,
+            keep_container=body.keep_container,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/conversations/{cid}")

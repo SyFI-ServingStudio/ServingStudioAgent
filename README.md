@@ -99,6 +99,33 @@ implementer summary. If the orchestrator delegates multiple follow-ups in one
 browser turn, the final assistant message includes the implementer summaries and
 the orchestrator's final user-facing message.
 
+## Eval API
+
+For capability checks that do not need the browser, call the single-turn JSON
+endpoint:
+
+```bash
+curl -sS http://127.0.0.1:8765/api/eval \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"List the available MLSim L1 profilers."}'
+```
+
+`/api/eval` still prepares the isolated workspace and Docker Codex container.
+It does not write to the UI conversation list, does not use SSE, and defaults to
+`autonomous: true`. By default it keeps the temporary eval workspace so code,
+logs, plots, and artifacts can be inspected, but removes the corresponding
+Docker container after the run. Batch execution is intentionally outside the
+backend: run multiple `/api/eval` calls from the test harness with the
+concurrency you want.
+
+Useful request fields:
+
+- `prompt`: required user task.
+- `sandbox`: optional, default `workspace-write`.
+- `autonomous`: optional, default `true`.
+- `keep_container`: optional, default `false`; normally leave this off so evals
+  do not accumulate Docker containers.
+
 ## Debug Logging
 
 The backend writes JSON-line logs to `logs/backend.log` and stdout. Useful
@@ -147,6 +174,7 @@ Docker GPU forwarding.
 | `backend/codex_runtime/codex_events.py` | Codex JSON/rollout event translation |
 | `backend/codex_runtime/prompts.py` | role prompts and orchestrator JSON parsing |
 | `backend/codex_runtime/turn.py` | high-level orchestrator/implementer turn loop |
+| `backend/eval.py` | JSON `/api/eval` wrapper around one `run_turn()` |
 | `backend/prompts/AGENTS.md` | detailed instructions copied into each `/workspace` |
 | `backend/prompts/AGENTS.autonomous.md` | autonomous-mode instructions copied as `/workspace/AGENTS.md` |
 | `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
@@ -173,7 +201,10 @@ Docker GPU forwarding.
   when the baked `main/uv.lock` hash label differs from the current checkout.
 - `CODEX_FORCE_IMAGE_BUILD=1` — force `run.sh` to rebuild the runner image.
 - `CODEX_SKIP_IMAGE_BUILD=1` — skip the image existence check/build step.
-- `CODEX_TURN_TIMEOUT` — per Codex call timeout in seconds, default `600`.
+- `CODEX_IDLE_TIMEOUT` — per Codex call idle timeout in seconds, default `600`.
+  Long tasks may run past this as long as Codex keeps producing stdout or
+  rollout commentary. `CODEX_TURN_TIMEOUT` is still accepted as a backward
+  compatible fallback name.
 - `CODEX_DOCKER_GPUS` — value passed to `docker run --gpus`, default `all`.
   Set it to an empty string to run without GPU forwarding.
 - `CODEX_DOCKER_DG_USE_LOCAL_VERSION` — DeepGEMM build mode inside Docker,

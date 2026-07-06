@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 
 from .codex_command import build_codex_exec_command
 from .config import (
-    CODEX_CALL_TIMEOUT,
+    CODEX_IDLE_TIMEOUT,
     CODEX_DOCKER_GID,
     CODEX_DOCKER_HOME,
     CODEX_DOCKER_UID,
@@ -120,20 +120,23 @@ class CodexExecCall:
         assert process.stdout is not None
         stdout_buffer = b""
         read_task = asyncio.create_task(process.stdout.read(8192))
-        deadline = _deadline()
+        idle_deadline = _new_idle_deadline()
 
         try:
             while True:
-                if _timed_out(deadline):
+                if _timed_out(idle_deadline):
                     output.mark_timed_out()
                     break
 
                 done, _pending = await asyncio.wait(
                     {read_task},
-                    timeout=_poll_interval(deadline),
+                    timeout=_poll_interval(idle_deadline),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
-                for event in output.poll_rollout_intermediate_outputs():
+                rollout_events = output.poll_rollout_intermediate_outputs()
+                if rollout_events:
+                    idle_deadline = _new_idle_deadline()
+                for event in rollout_events:
                     yield event
                 if not done:
                     continue
@@ -141,6 +144,7 @@ class CodexExecCall:
                 raw = read_task.result()
                 if not raw:
                     break
+                idle_deadline = _new_idle_deadline()
                 stdout_buffer += raw
                 complete_lines, stdout_buffer = _split_stdout_lines(stdout_buffer)
                 for raw_line in complete_lines:
@@ -187,8 +191,8 @@ class CodexExecCall:
             await stderr_task
 
 
-def _deadline() -> float:
-    return asyncio.get_event_loop().time() + CODEX_CALL_TIMEOUT
+def _new_idle_deadline() -> float:
+    return asyncio.get_event_loop().time() + CODEX_IDLE_TIMEOUT
 
 
 def _timed_out(deadline: float) -> bool:
