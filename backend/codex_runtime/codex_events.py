@@ -8,6 +8,7 @@ from typing import Any
 
 from .config import codex_home_for
 
+
 def _describe_item(item: dict[str, Any]) -> str:
     itype = item.get("type", "item")
     if itype in ("command_execution", "command", "local_shell_call"):
@@ -23,6 +24,7 @@ def _describe_item(item: dict[str, Any]) -> str:
         return f"tool: {item.get('tool') or item.get('name') or ''}"
     text = item.get("text") or item.get("summary") or itype
     return str(text)[:240]
+
 
 def _assistant_message_from_payload(payload: dict[str, Any]) -> tuple[str, str] | None:
     """Extract assistant text plus Codex phase from known JSON event payloads."""
@@ -49,6 +51,7 @@ def _assistant_message_from_payload(payload: dict[str, Any]) -> tuple[str, str] 
 
     return "".join(parts), str(payload.get("phase") or "")
 
+
 def _find_rollout_file(conversation_id: str, session_id: str) -> Path | None:
     sessions_dir = codex_home_for(conversation_id) / "sessions"
     if not sessions_dir.exists():
@@ -62,6 +65,7 @@ def _find_rollout_file(conversation_id: str, session_id: str) -> Path | None:
     if not candidates:
         return None
     return max(candidates, key=lambda item: item[0])[1]
+
 
 def _scan_rollout_agent_messages(
     rollout_file: Path,
@@ -95,6 +99,7 @@ def _scan_rollout_agent_messages(
     except OSError:
         return [], offset
 
+
 def _translate(ev: dict[str, Any]) -> list[dict[str, str]]:
     etype = ev.get("type")
     if etype == "thread.started" and ev.get("thread_id"):
@@ -121,8 +126,10 @@ def _translate(ev: dict[str, Any]) -> list[dict[str, str]]:
         if etype == "item.completed":
             return [{"kind": "progress", "text": _describe_item(item)}]
     if etype == "error":
-        return [{"kind": "progress", "text": "warning: " + str(ev.get("message") or ev.get("error") or "error")}]
+        message = str(ev.get("message") or ev.get("error") or "error")
+        return [{"kind": "progress", "text": f"warning: {message}"}]
     return []
+
 
 def _codex_stderr_for_error(stderr_text: str, *, returncode: int | None, has_final_text: bool) -> str:
     """Drop known Codex CLI bookkeeping noise after successful calls."""

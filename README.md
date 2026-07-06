@@ -127,7 +127,10 @@ Docker GPU forwarding.
 | `backend/codex_runtime/config.py` | environment, path, mode, prompt-fingerprint settings |
 | `backend/codex_runtime/workspace.py` | per-conversation `main/` copy and local git bootstrap |
 | `backend/codex_runtime/docker.py` | Docker container lifecycle and isolated Codex home setup |
-| `backend/codex_runtime/codex_cli.py` | low-level `codex exec` subprocess runner |
+| `backend/codex_runtime/exec_types.py` | shared Codex execution request/event types |
+| `backend/codex_runtime/codex_command.py` | Docker + `codex exec` command construction |
+| `backend/codex_runtime/codex_cli.py` | Codex subprocess lifecycle, timeout, and cancellation |
+| `backend/codex_runtime/output_collector.py` | stdout/stderr/rollout collection into UI events |
 | `backend/codex_runtime/codex_events.py` | Codex JSON/rollout event translation |
 | `backend/codex_runtime/prompts.py` | role prompts and orchestrator JSON parsing |
 | `backend/codex_runtime/turn.py` | high-level orchestrator/implementer turn loop |
