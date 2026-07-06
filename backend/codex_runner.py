@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import html
 import json
 import logging
 import os
@@ -1036,31 +1035,6 @@ def _parse_orchestrator(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _orchestrator_block(orchestrator_text: str) -> str:
-    stripped = orchestrator_text.strip()
-    parsed = _parse_orchestrator(stripped)
-    if parsed is not None:
-        body = json.dumps(parsed, ensure_ascii=False, indent=2)
-        escaped_body = html.escape(body)
-        return (
-            '<details class="role-output orchestrator">\n'
-            '<summary class="role-title">Orchestrator Raw</summary>\n'
-            f'<pre class="role-raw"><code>{escaped_body}</code></pre>\n'
-            "</details>"
-        )
-    escaped_text = html.escape(stripped)
-    return (
-        '<details class="role-output orchestrator">\n'
-        '<summary class="role-title">Orchestrator Raw</summary>\n'
-        f'<pre class="role-raw"><code>{escaped_text}</code></pre>\n'
-        "</details>"
-    )
-
-
-def _compose_orchestrator_message(orchestrator_text: str, title: str, body: str) -> str:
-    return f"{_orchestrator_block(orchestrator_text)}\n\n### {title}\n\n{body.strip()}"
-
-
 def _format_implementer_summaries(summaries: list[str]) -> str:
     if not summaries:
         return ""
@@ -1073,11 +1047,12 @@ def _format_implementer_summaries(summaries: list[str]) -> str:
 
 
 def _compose_final_message(
-    orchestrator_text: str,
     message: str,
     implementer_summaries: list[str],
 ) -> str:
-    sections = [_orchestrator_block(orchestrator_text)]
+    if not implementer_summaries:
+        return message.strip()
+    sections = []
     if implementer_summaries:
         sections.append(
             "### Implementer Summary\n\n"
@@ -1194,9 +1169,7 @@ async def run_turn(
                 turn_id=turn_id,
                 text_preview=compact_text(orchestrator_text),
             )
-            sections = [
-                _orchestrator_block(orchestrator_text),
-            ]
+            sections = []
             if implementer_summaries:
                 sections.append(
                     "### Implementer Summary\n\n"
@@ -1220,7 +1193,6 @@ async def run_turn(
             yield {
                 "kind": "final",
                 "text": _compose_final_message(
-                    orchestrator_text,
                     decision["message"],
                     implementer_summaries,
                 ),
@@ -1235,7 +1207,7 @@ async def run_turn(
             )
             yield {
                 "kind": "final",
-                "text": _compose_final_message(orchestrator_text, body, implementer_summaries),
+                "text": _compose_final_message(body, implementer_summaries),
             }
             return
 
