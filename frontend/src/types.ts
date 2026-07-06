@@ -21,6 +21,7 @@ export interface Conversation {
   id: string;
   title: string;
   sandbox?: SandboxMode | string;
+  autonomous?: boolean;
   messages: ChatMessage[];
   codex_sessions?: Record<string, string>;
 }

@@ -32,6 +32,7 @@ class Store:
                 if "id" in conv:
                     conv.setdefault("messages", [])
                     conv.setdefault("codex_sessions", {})
+                    conv.setdefault("autonomous", False)
                     self._conversations[conv["id"]] = conv
         except (json.JSONDecodeError, OSError):
             # Corrupt/unreadable store: start empty rather than crash the server.
@@ -60,12 +61,20 @@ class Store:
             conv = self._conversations.get(cid)
             return json.loads(json.dumps(conv)) if conv else None
 
-    def create(self, cid: str, sandbox: str, prompt_fingerprint: str | None = None) -> dict[str, Any]:
+    def create(
+        self,
+        cid: str,
+        sandbox: str,
+        prompt_fingerprint: str | None = None,
+        *,
+        autonomous: bool = False,
+    ) -> dict[str, Any]:
         now = time.time()
         conv = {
             "id": cid,
             "title": "New chat",
             "sandbox": sandbox,
+            "autonomous": autonomous,
             "prompt_fingerprint": prompt_fingerprint,
             "codex_sessions": {},
             "messages": [],
@@ -76,6 +85,16 @@ class Store:
             self._conversations[cid] = conv
             self._save()
             return dict(conv)
+
+    def update_runtime_settings(self, cid: str, *, sandbox: str, autonomous: bool) -> None:
+        with self._lock:
+            conv = self._conversations.get(cid)
+            if conv is None:
+                return
+            conv["sandbox"] = sandbox
+            conv["autonomous"] = autonomous
+            conv["updated_at"] = time.time()
+            self._save()
 
     def add_message(self, cid: str, role: str, content: str, **metadata: Any) -> None:
         with self._lock:

@@ -57,6 +57,9 @@ function App() {
   const [sandbox, setSandbox] = useState<SandboxMode>(
     (localStorage.getItem("mlsim_sandbox") as SandboxMode | null) || DEFAULT_SANDBOX,
   );
+  const [autonomous, setAutonomous] = useState(
+    localStorage.getItem("mlsim_autonomous") === "1",
+  );
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [stream, setStream] = useState<StreamState | null>(null);
@@ -75,6 +78,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem("mlsim_sandbox", sandbox);
   }, [sandbox]);
+
+  useEffect(() => {
+    localStorage.setItem("mlsim_autonomous", autonomous ? "1" : "0");
+  }, [autonomous]);
 
   useEffect(() => {
     messagesRef.current?.scrollTo({
@@ -108,6 +115,10 @@ function App() {
   function loadConversation(conversation: Conversation): void {
     setCurrentId(conversation.id);
     setMessages(conversation.messages || []);
+    if (conversation.sandbox) {
+      setSandbox(conversation.sandbox as SandboxMode);
+    }
+    setAutonomous(Boolean(conversation.autonomous));
     setTitle(
       conversation.title && conversation.title !== "New chat"
         ? conversation.title
@@ -119,7 +130,7 @@ function App() {
     if (streaming) {
       return;
     }
-    const conversation = await createConversation(sandbox);
+    const conversation = await createConversation(sandbox, autonomous);
     setCurrentId(conversation.id);
     setMessages([]);
     setTitle("MLSim Assistant");
@@ -149,7 +160,7 @@ function App() {
 
     let conversationId = currentId;
     if (!conversationId) {
-      const conversation = await createConversation(sandbox);
+      const conversation = await createConversation(sandbox, autonomous);
       conversationId = conversation.id;
       setCurrentId(conversation.id);
       await refreshSidebar();
@@ -169,6 +180,7 @@ function App() {
         conversationId,
         text,
         sandbox,
+        autonomous,
         {
           progress: (line) => {
             if (!line) {
@@ -330,6 +342,20 @@ function App() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label
+              className="mode-toggle"
+              title="Use autonomous AGENTS.md so the orchestrator proceeds with assumptions instead of asking clarification questions"
+            >
+              <input
+                type="checkbox"
+                checked={autonomous}
+                onChange={(event) => setAutonomous(event.target.checked)}
+              />
+              <span className="toggle-track" aria-hidden="true">
+                <span className="toggle-thumb" />
+              </span>
+              <span>Autonomous</span>
             </label>
             <span className="hint">Enter to send · Shift+Enter for newline</span>
           </div>

@@ -315,7 +315,7 @@ summary.role-title::-webkit-details-marker { display: none; }
   color: var(--coral);
 }
 
-.composer-meta { display: flex; align-items: center; justify-content: space-between; margin-top: 9px; padding: 0 4px; gap: 16px; }
+.composer-meta { display: flex; align-items: center; margin-top: 9px; padding: 0 4px; gap: 16px; }
 .sandbox { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .sandbox-ico { width: 9px; height: 9px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 3px rgba(232,163,61,.16); transition: all .2s; flex: 0 0 auto; }
 .sandbox-ico.ro { background: var(--green); box-shadow: 0 0 0 3px rgba(127,170,114,.16); }
@@ -326,7 +326,29 @@ summary.role-title::-webkit-details-marker { display: none; }
   min-width: 0; max-width: 100%;
 }
 #sandbox option { background: var(--panel-2); color: var(--text); }
-.hint { font-size: 12px; color: var(--faint); white-space: nowrap; }
+.mode-toggle {
+  display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto;
+  font-size: 12.5px; color: var(--muted); cursor: pointer; user-select: none;
+}
+.mode-toggle input {
+  position: absolute; opacity: 0; pointer-events: none;
+}
+.toggle-track {
+  position: relative; width: 30px; height: 17px; border-radius: 999px;
+  background: rgba(139,148,164,.18); border: 1px solid var(--line);
+  transition: background .16s ease, border-color .16s ease;
+}
+.toggle-thumb {
+  position: absolute; width: 13px; height: 13px; border-radius: 50%;
+  left: 1px; top: 1px; background: var(--muted); transition: transform .16s ease, background .16s ease;
+}
+.mode-toggle input:checked + .toggle-track {
+  background: rgba(232,163,61,.18); border-color: rgba(232,163,61,.55);
+}
+.mode-toggle input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(13px); background: var(--amber);
+}
+.hint { margin-left: auto; font-size: 12px; color: var(--faint); white-space: nowrap; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
@@ -340,5 +362,6 @@ summary.role-title::-webkit-details-marker { display: none; }
   .sidebar { display: none; }
   .messages, .composer, .chat-header { padding-left: 18px; padding-right: 18px; }
   .composer-meta { align-items: flex-start; flex-direction: column; }
+  .hint { margin-left: 0; }
   .hint { white-space: normal; }
 }

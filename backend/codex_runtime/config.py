@@ -31,6 +31,8 @@ CODEX_DOCKER_UV_PROJECT_ENVIRONMENT = os.environ.get(
 CODEX_DOCKER_UV_CACHE_DIR = os.environ.get("CODEX_DOCKER_UV_CACHE_DIR", "/opt/mlsim-uv-cache")
 CONTAINER_RUNTIME_VERSION = os.environ.get("CODEX_RUNNER_IMAGE_VERSION", "prebuilt-codex-runner-v5")
 ORCHESTRATOR_SCHEMA_IN_CONTAINER = "/workspace/.codex/orchestrator.schema.json"
+AGENTS_PROMPT_DEFAULT = "AGENTS.md"
+AGENTS_PROMPT_AUTONOMOUS = "AGENTS.autonomous.md"
 
 EXECUTION_MODES = ("read-only", "workspace-write", "danger-full-access")
 SANDBOX_MODES = EXECUTION_MODES
@@ -48,15 +50,27 @@ def _sha256_file(path: Path) -> str:
 
 MAIN_LOCK_SHA = os.environ.get("CODEX_MAIN_LOCK_SHA") or _sha256_file(MAIN_DIR / "uv.lock")
 
-def prompt_fingerprint() -> str:
+
+def agents_prompt_name(autonomous: bool) -> str:
+    return AGENTS_PROMPT_AUTONOMOUS if autonomous else AGENTS_PROMPT_DEFAULT
+
+
+def prompt_fingerprint(*, autonomous: bool = False) -> str:
     """Hash role prompts/schema so stale Codex sessions are not resumed."""
     digest = hashlib.sha256()
-    for name in ("AGENTS.md", "orchestrator.txt", "implementer.txt", "orchestrator.schema.json"):
+    for name in (
+        agents_prompt_name(autonomous),
+        "orchestrator.txt",
+        "implementer.txt",
+        "orchestrator.schema.json",
+    ):
         digest.update(name.encode("utf-8"))
         digest.update(b"\0")
         digest.update((PROMPTS_DIR / name).read_bytes())
         digest.update(b"\0")
     digest.update(CODEX_MODEL.encode("utf-8"))
+    digest.update(b"\0autonomous=")
+    digest.update(str(autonomous).encode("utf-8"))
     return digest.hexdigest()[:16]
 
 def workspace_main_for(conversation_id: str) -> Path:

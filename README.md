@@ -57,7 +57,7 @@ npm run dev
 browser
   -> FastAPI
   -> prepare workspaces/<conversation-id>/main from git-tracked ../main files
-     - copy backend/prompts/AGENTS.md to /workspace/AGENTS.md
+     - copy backend/prompts/AGENTS.md or AGENTS.autonomous.md to /workspace/AGENTS.md
      - link /workspace/.codex/skills -> /workspace/skills
   -> seed workspaces/<id>/codex-home from host ~/.codex auth/config
   -> docker run -v workspaces/<id>/main:/workspace -v workspaces/<id>/codex-home:/home/<user>/.codex
@@ -71,21 +71,27 @@ browser
   -> stream progress + final text back to browser
 ```
 
-The orchestrator is an active human-in-the-loop coordinator. It reads matching
-skills, classifies the request, decides whether clarification is needed, and
-delegates only bounded implementer tasks. The implementer returns free-form
-text; there is no judge, profiler, or shared `profile.db` write unless the
-copied workspace task does it. The orchestrator and implementer keep separate
-Codex session ids. Same-role continuity uses `codex exec resume`; cross-role
-handoff does not rely on shared context and is passed explicitly as task text
-and implementer summary.
-`backend/prompts/AGENTS.md` holds the detailed shared role and skill
-instructions and is copied into the workspace. The workspace also gets
-`.codex/skills -> ../skills` so Codex can discover the copied repo-local skills.
-The role startup prompts are sent only when a role session is first created;
-later turns resume that role and send only the new user message or delegated
-task. Implementer summaries are explicitly sent back to the orchestrator before
-the turn finishes.
+The orchestrator is normally an active human-in-the-loop coordinator. It reads
+matching skills, classifies the request, decides whether clarification is
+needed, and delegates only bounded implementer tasks. When the UI's Autonomous
+toggle is enabled, the backend copies `backend/prompts/AGENTS.autonomous.md`
+instead; that prompt tells the orchestrator to proceed with conservative
+assumptions instead of asking preference or clarification questions. The
+autonomous flag is part of the prompt fingerprint, so switching it resets role
+sessions before the next `codex exec`.
+
+The implementer returns free-form text; there is no judge, profiler, or shared
+`profile.db` write unless the copied workspace task does it. The orchestrator
+and implementer keep separate Codex session ids. Same-role continuity uses
+`codex exec resume`; cross-role handoff does not rely on shared context and is
+passed explicitly as task text and implementer summary.
+`backend/prompts/AGENTS.md` and `backend/prompts/AGENTS.autonomous.md` hold the
+detailed shared role and skill instructions. One of them is copied into the
+workspace as `/workspace/AGENTS.md`. The workspace also gets `.codex/skills ->
+../skills` so Codex can discover the copied repo-local skills. The role startup
+prompts are sent only when a role session is first created; later turns resume
+that role and send only the new user message or delegated task. Implementer
+summaries are explicitly sent back to the orchestrator before the turn finishes.
 
 The UI shows assistant intermediate output and, when work is delegated, the
 implementer summary. If the orchestrator delegates multiple follow-ups in one
@@ -114,6 +120,11 @@ fields:
   Docker workspace.
 - `danger-full-access`: same copied workspace and bypassed Codex sandboxing.
 
+The Autonomous toggle is independent from execution mode. It changes the
+workspace prompt file, not filesystem permissions: the orchestrator should avoid
+clarification questions and continue with stated assumptions, while still
+stopping for missing credentials or destructive/shared-state authorization.
+
 GPU forwarding is controlled independently by `CODEX_DOCKER_GPUS`. It defaults
 to `all`, so `workspace-write` containers can run CUDA smoke checks and
 profiling code inside the copied workspace. Set `CODEX_DOCKER_GPUS=` to disable
@@ -135,6 +146,7 @@ Docker GPU forwarding.
 | `backend/codex_runtime/prompts.py` | role prompts and orchestrator JSON parsing |
 | `backend/codex_runtime/turn.py` | high-level orchestrator/implementer turn loop |
 | `backend/prompts/AGENTS.md` | detailed instructions copied into each `/workspace` |
+| `backend/prompts/AGENTS.autonomous.md` | autonomous-mode instructions copied as `/workspace/AGENTS.md` |
 | `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
 | `backend/store.py` | in-memory + JSON-file conversation store |
 | `docker/codex-runner.Dockerfile` | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked MLSim deps |

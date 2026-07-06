@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 
 from .commands import run_checked
-from .config import LOG, MAIN_DIR, PROMPTS_DIR, workspace_main_for
+from .config import LOG, MAIN_DIR, PROMPTS_DIR, agents_prompt_name, workspace_main_for
 from ..logging_config import log_event
 
 def _git_tracked_files() -> list[Path]:
@@ -36,7 +36,7 @@ def _copy_tracked_file(rel_path: Path, dst_root: Path) -> None:
     else:
         shutil.copy2(src, dst)
 
-def _refresh_workspace_agent_files(workspace_main: Path) -> None:
+def _refresh_workspace_agent_files(workspace_main: Path, *, autonomous: bool) -> None:
     """Copy runtime role instructions into the copied workspace.
 
     ``main`` currently has no tracked ``AGENTS.md``. Keeping this file inside the
@@ -44,8 +44,15 @@ def _refresh_workspace_agent_files(workspace_main: Path) -> None:
     implementer sessions. ``.codex/skills`` points at the copied repo-local skill
     tree so Codex can discover skills through its native workspace convention.
     """
-    log_event(LOG, "workspace.refresh_agent_files", workspace=str(workspace_main))
-    shutil.copy2(PROMPTS_DIR / "AGENTS.md", workspace_main / "AGENTS.md")
+    prompt_name = agents_prompt_name(autonomous)
+    log_event(
+        LOG,
+        "workspace.refresh_agent_files",
+        workspace=str(workspace_main),
+        autonomous=autonomous,
+        prompt_name=prompt_name,
+    )
+    shutil.copy2(PROMPTS_DIR / prompt_name, workspace_main / "AGENTS.md")
     codex_dir = workspace_main / ".codex"
     codex_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(PROMPTS_DIR / "orchestrator.schema.json", codex_dir / "orchestrator.schema.json")
@@ -77,7 +84,7 @@ def _ensure_workspace_git(workspace_main: Path) -> None:
         timeout=120,
     )
 
-def prepare_workspace(conversation_id: str) -> Path:
+def prepare_workspace(conversation_id: str, *, autonomous: bool = False) -> Path:
     """Create the per-conversation copy of git-tracked ``main`` files."""
     workspace_main = workspace_main_for(conversation_id)
     if workspace_main.exists():
@@ -87,7 +94,7 @@ def prepare_workspace(conversation_id: str) -> Path:
             conversation_id=conversation_id,
             workspace=str(workspace_main),
         )
-        _refresh_workspace_agent_files(workspace_main)
+        _refresh_workspace_agent_files(workspace_main, autonomous=autonomous)
         _ensure_workspace_git(workspace_main)
         return workspace_main
 
@@ -105,7 +112,7 @@ def prepare_workspace(conversation_id: str) -> Path:
 
     for rel_path in _git_tracked_files():
         _copy_tracked_file(rel_path, tmp_main)
-    _refresh_workspace_agent_files(tmp_main)
+    _refresh_workspace_agent_files(tmp_main, autonomous=autonomous)
     _ensure_workspace_git(tmp_main)
 
     workspace_main.parent.parent.mkdir(parents=True, exist_ok=True)

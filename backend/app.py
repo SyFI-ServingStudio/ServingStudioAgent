@@ -67,11 +67,13 @@ def _sse(event: str, data: dict) -> str:
 
 class NewConversation(BaseModel):
     sandbox: str = DEFAULT_SANDBOX
+    autonomous: bool = False
 
 
 class SendMessage(BaseModel):
     text: str
     sandbox_mode: str = DEFAULT_SANDBOX
+    autonomous_mode: bool = False
 
 
 @app.get("/")
@@ -90,15 +92,16 @@ def list_conversations() -> dict:
 @app.post("/api/conversations")
 def create_conversation(body: NewConversation) -> dict:
     cid = uuid.uuid4().hex[:12]
-    fingerprint = prompt_fingerprint()
+    fingerprint = prompt_fingerprint(autonomous=body.autonomous)
     log_event(
         LOG,
         "conversation.create",
         conversation_id=cid,
         sandbox=body.sandbox,
+        autonomous=body.autonomous,
         prompt_fingerprint=fingerprint,
     )
-    return store.create(cid, body.sandbox, fingerprint)
+    return store.create(cid, body.sandbox, fingerprint, autonomous=body.autonomous)
 
 
 @app.get("/api/conversations/{cid}")
@@ -158,9 +161,11 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
         raise HTTPException(status_code=400, detail="empty message")
 
     sandbox = body.sandbox_mode
-    current_prompt_fingerprint = prompt_fingerprint()
+    autonomous = body.autonomous_mode
+    current_prompt_fingerprint = prompt_fingerprint(autonomous=autonomous)
     turn_id = uuid.uuid4().hex[:10]
     previous_sessions = dict(conv.get("codex_sessions") or {})
+    store.update_runtime_settings(cid, sandbox=sandbox, autonomous=autonomous)
     store.add_message(cid, "user", text)
     sessions = store.sessions_for_prompt(cid, current_prompt_fingerprint)
     log_event(
@@ -169,6 +174,7 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
         conversation_id=cid,
         turn_id=turn_id,
         sandbox=sandbox,
+        autonomous=autonomous,
         prompt_fingerprint=current_prompt_fingerprint,
         prompt_len=len(text),
         prompt_preview=compact_text(text),
@@ -190,6 +196,7 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
                     sessions=sessions,
                     turn_id=turn_id,
                     prompt_fingerprint=current_prompt_fingerprint,
+                    autonomous=autonomous,
                 ):
                     kind = ev.get("kind")
                     if kind == "session":

@@ -35,6 +35,7 @@ async def run_turn(
     sessions: dict[str, str] | None = None,
     turn_id: str = "",
     prompt_fingerprint: str = "",
+    autonomous: bool = False,
 ) -> AsyncIterator[dict[str, str]]:
     """Run one user turn through orchestrator/implementer handoffs."""
     turn_id = turn_id or "unknown"
@@ -47,6 +48,7 @@ async def run_turn(
         turn_id=turn_id,
         mode=mode,
         prompt_fingerprint=prompt_fingerprint,
+        autonomous=autonomous,
         session_roles=sorted(sessions),
     )
 
@@ -57,7 +59,9 @@ async def run_turn(
         yield {"kind": "progress", "text": "creating isolated MLSim workspace..."}
     loop = asyncio.get_event_loop()
     workspace_started = loop.time()
-    workspace_task = asyncio.create_task(asyncio.to_thread(prepare_workspace, conversation_id))
+    workspace_task = asyncio.create_task(
+        asyncio.to_thread(prepare_workspace, conversation_id, autonomous=autonomous),
+    )
     while True:
         done, _pending = await asyncio.wait({workspace_task}, timeout=5)
         if done:

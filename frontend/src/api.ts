@@ -15,11 +15,14 @@ export async function listConversations(): Promise<ConversationListResponse> {
   return response.json();
 }
 
-export async function createConversation(sandbox: SandboxMode): Promise<Conversation> {
+export async function createConversation(
+  sandbox: SandboxMode,
+  autonomous: boolean,
+): Promise<Conversation> {
   const response = await fetch("/api/conversations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sandbox }),
+    body: JSON.stringify({ sandbox, autonomous }),
   });
   if (!response.ok) {
     throw new Error(`failed to create conversation: ${response.status}`);
@@ -57,13 +60,14 @@ export async function streamTurn(
   conversationId: string,
   text: string,
   sandbox: SandboxMode,
+  autonomous: boolean,
   handlers: StreamHandlers,
   signal: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`/api/conversations/${conversationId}/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, sandbox_mode: sandbox }),
+    body: JSON.stringify({ text, sandbox_mode: sandbox, autonomous_mode: autonomous }),
     signal,
   });
   if (!response.ok || !response.body) {
