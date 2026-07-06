@@ -10,6 +10,13 @@ export CODEX_DOCKER_GPUS="${CODEX_DOCKER_GPUS-all}"
 export CODEX_DOCKER_DG_USE_LOCAL_VERSION="${CODEX_DOCKER_DG_USE_LOCAL_VERSION:-0}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$PWD/.uv-cache}"
 
+if [ "${FRONTEND_SKIP_BUILD:-0}" != "1" ]; then
+  if [ ! -d frontend/node_modules ]; then
+    (cd frontend && npm ci)
+  fi
+  (cd frontend && npm run build)
+fi
+
 if [ "${CODEX_SKIP_IMAGE_BUILD:-0}" != "1" ]; then
   image_version="$(docker image inspect -f '{{ index .Config.Labels "org.mlsim.ui.codex-runner.version" }}' "$CODEX_DOCKER_IMAGE" 2>/dev/null || true)"
   image_lock_sha="$(docker image inspect -f '{{ index .Config.Labels "org.mlsim.ui.main-lock-sha" }}' "$CODEX_DOCKER_IMAGE" 2>/dev/null || true)"

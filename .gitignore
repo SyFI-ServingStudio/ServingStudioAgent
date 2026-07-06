@@ -2,7 +2,10 @@
 .uv-cache/
 __pycache__/
 *.pyc
+*.tsbuildinfo
 conversations.json
 *.tmp
 workspaces/
 logs/
+frontend/node_modules/
+frontend/dist/

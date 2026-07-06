@@ -15,9 +15,14 @@ cd user-facing-ui
 # then open http://<host>:8765
 ```
 
-`run.sh` uses a prebuilt local Docker image for the Codex runner. If the image
+`run.sh` first builds the React/Vite frontend into `frontend/dist`, then starts
+the FastAPI backend. If `frontend/node_modules` is missing, it runs `npm ci`
+once before the build. Set `FRONTEND_SKIP_BUILD=1` when you are already running
+the Vite dev server.
+
+The backend uses a prebuilt local Docker image for the Codex runner. If the image
 is missing, its MLSim runner label is stale, or its baked `main/uv.lock` hash
-does not match the current checkout, it builds it once from
+does not match the current checkout, `run.sh` builds it once from
 `docker/codex-runner.Dockerfile`; later turns and later conversations reuse that
 image. The image is based on CUDA 12.8 devel and includes Node/Codex, `uv`, git,
 Rust stable (`cargo`/`rustc`), `just`, `nvcc`, Python 3.12 dev headers, native
@@ -33,6 +38,17 @@ To rebuild the runner image explicitly:
 ```bash
 cd user-facing-ui
 CODEX_FORCE_IMAGE_BUILD=1 ./run.sh
+```
+
+Frontend-only development can run Vite against the same backend:
+
+```bash
+cd user-facing-ui
+./run.sh
+# in another shell
+cd frontend
+npm run dev
+# then open http://<host>:5173
 ```
 
 ## Turn Flow
@@ -107,14 +123,14 @@ Docker GPU forwarding.
 
 | Path | Purpose |
 |------|---------|
-| `backend/app.py` | FastAPI routes + SSE streaming + static serving |
+| `backend/app.py` | FastAPI routes + SSE streaming + Vite static serving |
 | `backend/codex_runner.py` | workspace copy, Docker lifecycle, Codex orchestrator/implementer calls |
 | `backend/prompts/AGENTS.md` | detailed instructions copied into each `/workspace` |
 | `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
 | `backend/store.py` | in-memory + JSON-file conversation store |
 | `docker/codex-runner.Dockerfile` | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked MLSim deps |
 | `scripts/build-codex-runner-image.sh` | one-shot image builder used by `run.sh` when needed |
-| `frontend/` | vanilla HTML/CSS/JS chat UI |
+| `frontend/` | React + TypeScript + Vite chat UI |
 | `workspaces/` | generated per-conversation copies of `../main` |
 
 ## Environment
@@ -150,6 +166,8 @@ Docker GPU forwarding.
   are isolated from other conversations.
 - `CODEX_DOCKER_UV_CACHE_DIR` — where `uv` stores cache inside Docker, default
   `/opt/mlsim-uv-cache`, also baked into the runner image.
+- `FRONTEND_SKIP_BUILD=1` — skip `npm ci` / `npm run build` in `run.sh`, useful
+  when `npm run dev` is serving the frontend separately.
 - `PORT`, `HOST` — FastAPI bind settings used by `run.sh`.
 
 This is a local development tool. It copies host `~/.codex` authentication and

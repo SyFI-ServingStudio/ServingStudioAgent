@@ -1,8 +1,8 @@
 """FastAPI app: REST + SSE chat over Docker-backed `codex exec`.
 
 Endpoints:
-  GET    /                              -> frontend/index.html
-  GET    /static/*                      -> frontend assets
+  GET    /                              -> Vite frontend index
+  GET    /assets/*                      -> Vite frontend assets
   GET    /api/conversations             -> list (id, title, updated_at)
   POST   /api/conversations             -> create empty conversation
   GET    /api/conversations/{cid}       -> full conversation (messages, role sessions)
@@ -40,6 +40,7 @@ LOG = logging.getLogger("mlsim_ui.app")
 
 UI_DIR = Path(__file__).resolve().parents[1]
 FRONTEND = UI_DIR / "frontend"
+FRONTEND_DIST = FRONTEND / "dist"
 
 app = FastAPI(title="MLSim Chat")
 store = Store()
@@ -66,6 +67,9 @@ class SendMessage(BaseModel):
 
 @app.get("/")
 def index() -> FileResponse:
+    dist_index = FRONTEND_DIST / "index.html"
+    if dist_index.exists():
+        return FileResponse(dist_index)
     return FileResponse(FRONTEND / "index.html")
 
 
@@ -259,5 +263,10 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
     )
 
 
-# Mounted last so it doesn't shadow the API routes above.
-app.mount("/static", StaticFiles(directory=str(FRONTEND)), name="static")
+# Mounted last so it doesn't shadow the API routes above. The directory may not
+# exist before the first frontend build; `run.sh` creates it for normal serving.
+app.mount(
+    "/assets",
+    StaticFiles(directory=str(FRONTEND_DIST / "assets"), check_dir=False),
+    name="assets",
+)
