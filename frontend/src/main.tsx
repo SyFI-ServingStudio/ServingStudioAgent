@@ -285,7 +285,11 @@ function App() {
 
         <section ref={messagesRef} className="messages">
           {messages.length === 0 && !stream ? (
-            <Welcome onSuggestion={(fill) => updateInput(fill)} />
+            <Welcome
+              autonomous={autonomous}
+              onAutonomousChange={setAutonomous}
+              onSuggestion={(fill) => updateInput(fill)}
+            />
           ) : (
             <>
               {messages.map((message, index) => (
@@ -342,20 +346,6 @@ function App() {
                   </option>
                 ))}
               </select>
-            </label>
-            <label
-              className="mode-toggle"
-              title="Use autonomous AGENTS.md so the orchestrator proceeds with assumptions instead of asking clarification questions"
-            >
-              <input
-                type="checkbox"
-                checked={autonomous}
-                onChange={(event) => setAutonomous(event.target.checked)}
-              />
-              <span className="toggle-track" aria-hidden="true">
-                <span className="toggle-thumb" />
-              </span>
-              <span>Autonomous</span>
             </label>
             <span className="hint">Enter to send · Shift+Enter for newline</span>
           </div>
@@ -430,7 +420,15 @@ function Sidebar({
   );
 }
 
-function Welcome({ onSuggestion }: { onSuggestion: (text: string) => void }) {
+function Welcome({
+  autonomous,
+  onAutonomousChange,
+  onSuggestion,
+}: {
+  autonomous: boolean;
+  onAutonomousChange: (enabled: boolean) => void;
+  onSuggestion: (text: string) => void;
+}) {
   return (
     <div className="welcome">
       <h2>Ask MLSim anything</h2>
@@ -450,6 +448,16 @@ function Welcome({ onSuggestion }: { onSuggestion: (text: string) => void }) {
           </button>
         ))}
       </div>
+      <button
+        type="button"
+        className={`autonomous-button ${autonomous ? "active" : ""}`}
+        aria-pressed={autonomous}
+        title="Use autonomous AGENTS.md so the orchestrator proceeds with assumptions instead of asking clarification questions"
+        onClick={() => onAutonomousChange(!autonomous)}
+      >
+        <span className="autonomous-dot" aria-hidden="true" />
+        <span>{autonomous ? "Autonomous on" : "Autonomous off"}</span>
+      </button>
     </div>
   );
 }

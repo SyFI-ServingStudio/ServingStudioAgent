@@ -142,6 +142,23 @@ button, textarea, select { font: inherit; }
   border: 1px solid var(--line); transition: all .16s ease;
 }
 .chip:hover { border-color: var(--amber); color: var(--amber-soft); transform: translateY(-1px); }
+.autonomous-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  margin-top: 16px; padding: 8px 13px; border-radius: 999px; cursor: pointer;
+  color: var(--muted); background: rgba(255,255,255,.025); border: 1px solid var(--line);
+  font-size: 12.5px; transition: all .16s ease;
+}
+.autonomous-button:hover { color: var(--text); border-color: rgba(232,163,61,.42); transform: translateY(-1px); }
+.autonomous-button.active {
+  color: var(--amber-soft); background: rgba(232,163,61,.08); border-color: rgba(232,163,61,.48);
+}
+.autonomous-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--faint);
+  box-shadow: 0 0 0 3px rgba(107,105,98,.12);
+}
+.autonomous-button.active .autonomous-dot {
+  background: var(--amber); box-shadow: 0 0 0 3px rgba(232,163,61,.16);
+}
 
 .msg { display: flex; gap: 14px; max-width: 860px; min-width: 0; width: 100%; animation: rise .32s ease both; }
 .msg.user { align-self: flex-end; flex-direction: row-reverse; max-width: 680px; }
@@ -326,28 +343,6 @@ summary.role-title::-webkit-details-marker { display: none; }
   min-width: 0; max-width: 100%;
 }
 #sandbox option { background: var(--panel-2); color: var(--text); }
-.mode-toggle {
-  display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto;
-  font-size: 12.5px; color: var(--muted); cursor: pointer; user-select: none;
-}
-.mode-toggle input {
-  position: absolute; opacity: 0; pointer-events: none;
-}
-.toggle-track {
-  position: relative; width: 30px; height: 17px; border-radius: 999px;
-  background: rgba(139,148,164,.18); border: 1px solid var(--line);
-  transition: background .16s ease, border-color .16s ease;
-}
-.toggle-thumb {
-  position: absolute; width: 13px; height: 13px; border-radius: 50%;
-  left: 1px; top: 1px; background: var(--muted); transition: transform .16s ease, background .16s ease;
-}
-.mode-toggle input:checked + .toggle-track {
-  background: rgba(232,163,61,.18); border-color: rgba(232,163,61,.55);
-}
-.mode-toggle input:checked + .toggle-track .toggle-thumb {
-  transform: translateX(13px); background: var(--amber);
-}
 .hint { margin-left: auto; font-size: 12px; color: var(--faint); white-space: nowrap; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }

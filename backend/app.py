@@ -65,6 +65,13 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _autonomous_for_turn(conv: dict, requested_autonomous: bool) -> bool:
+    """Lock autonomous mode once the conversation has a user-visible history."""
+    if conv.get("messages"):
+        return bool(conv.get("autonomous"))
+    return requested_autonomous
+
+
 class NewConversation(BaseModel):
     sandbox: str = DEFAULT_SANDBOX
     autonomous: bool = False
@@ -161,7 +168,7 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
         raise HTTPException(status_code=400, detail="empty message")
 
     sandbox = body.sandbox_mode
-    autonomous = body.autonomous_mode
+    autonomous = _autonomous_for_turn(conv, body.autonomous_mode)
     current_prompt_fingerprint = prompt_fingerprint(autonomous=autonomous)
     turn_id = uuid.uuid4().hex[:10]
     previous_sessions = dict(conv.get("codex_sessions") or {})

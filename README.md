@@ -73,12 +73,13 @@ browser
 
 The orchestrator is normally an active human-in-the-loop coordinator. It reads
 matching skills, classifies the request, decides whether clarification is
-needed, and delegates only bounded implementer tasks. When the UI's Autonomous
-toggle is enabled, the backend copies `backend/prompts/AGENTS.autonomous.md`
-instead; that prompt tells the orchestrator to proceed with conservative
-assumptions instead of asking preference or clarification questions. The
-autonomous flag is part of the prompt fingerprint, so switching it resets role
-sessions before the next `codex exec`.
+needed, and delegates only bounded implementer tasks. Before the first message
+in a conversation, the welcome area shows an Autonomous button below the example
+questions. When enabled, the backend copies
+`backend/prompts/AGENTS.autonomous.md` instead; that prompt tells the
+orchestrator to proceed with conservative assumptions instead of asking
+preference or clarification questions. After the first user message, the
+conversation's autonomous setting is fixed.
 
 The implementer returns free-form text; there is no judge, profiler, or shared
 `profile.db` write unless the copied workspace task does it. The orchestrator
@@ -120,10 +121,11 @@ fields:
   Docker workspace.
 - `danger-full-access`: same copied workspace and bypassed Codex sandboxing.
 
-The Autonomous toggle is independent from execution mode. It changes the
-workspace prompt file, not filesystem permissions: the orchestrator should avoid
-clarification questions and continue with stated assumptions, while still
-stopping for missing credentials or destructive/shared-state authorization.
+The Autonomous button is independent from execution mode. It is available in the
+welcome area before the first user message, and changes the workspace prompt
+file, not filesystem permissions: the orchestrator should avoid clarification
+questions and continue with stated assumptions, while still stopping for missing
+credentials or destructive/shared-state authorization.
 
 GPU forwarding is controlled independently by `CODEX_DOCKER_GPUS`. It defaults
 to `all`, so `workspace-write` containers can run CUDA smoke checks and
