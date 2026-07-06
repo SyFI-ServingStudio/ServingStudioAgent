@@ -24,7 +24,6 @@ import "./styles.css";
 const EMPTY_STREAM: StreamState = {
   intermediateOutputs: [],
   progress: "",
-  orchestrator: "",
   implementer: "",
   final: "",
   stopped: false,
@@ -181,12 +180,6 @@ function App() {
             setStream((current) => ({
               ...(current || EMPTY_STREAM),
               intermediateOutputs: [...(current?.intermediateOutputs || []), output],
-            }));
-          },
-          orchestrator: (text) => {
-            setStream((current) => ({
-              ...(current || EMPTY_STREAM),
-              orchestrator: normalizeBackendText(text) || "(empty orchestrator output)",
             }));
           },
           implementer: (text) => {
@@ -363,7 +356,7 @@ function Sidebar({
     <aside className="sidebar">
       <div className="brand">
         <div className="brand-mark">
-          M<span>/</span>S
+          <LogoMark />
         </div>
         <div className="brand-text">
           <h1>MLSim</h1>
@@ -445,7 +438,9 @@ function MessageRow({
   const isAssistant = message.role === "assistant";
   return (
     <div className={`msg ${isAssistant ? "assistant" : "user"}`}>
-      <div className="avatar">{isAssistant ? "M/S" : "you"}</div>
+      <div className={`avatar ${isAssistant ? "assistant-avatar" : ""}`}>
+        {isAssistant ? <LogoMark compact /> : "you"}
+      </div>
       <div className="bubble">
         {isAssistant ? (
           <>
@@ -470,15 +465,13 @@ function StreamingAssistant({
   const hasFinal = Boolean(stream.final);
   return (
     <div className="msg assistant">
-      <div className="avatar">M/S</div>
+      <div className="avatar assistant-avatar">
+        <LogoMark compact />
+      </div>
       <div className="bubble">
         <IntermediateOutputs outputs={stream.intermediateOutputs} />
         {!hasFinal && !stream.stopped ? (
           <div className="turn-work">
-            <details className={`role-output orchestrator ${stream.orchestrator ? "" : "pending"}`}>
-              <summary className="role-title">Orchestrator Raw</summary>
-              <pre className="role-raw">{stream.orchestrator || "Waiting for decision..."}</pre>
-            </details>
             {stream.implementer ? (
               <div className="role-output implementer">
                 <div className="role-title">Implementer Summary</div>
@@ -539,6 +532,23 @@ function MarkdownBlock({
     [source, conversationId],
   );
   return <div className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function LogoMark({ compact = false }: { compact?: boolean }) {
+  return (
+    <svg
+      className={`logo-glyph ${compact ? "compact" : ""}`}
+      viewBox="0 0 44 44"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path className="logo-shell" d="M22 5.5 36.5 13.75v16.5L22 38.5 7.5 30.25v-16.5L22 5.5Z" />
+      <path className="logo-trace" d="M13.5 25.5 18.8 18l5.4 9.8 4.1-12.2 3.5 8.7h4.5" />
+      <circle className="logo-node" cx="13.5" cy="25.5" r="2.2" />
+      <circle className="logo-node" cx="24.2" cy="27.8" r="2.2" />
+      <circle className="logo-node" cx="31.8" cy="24.3" r="2.2" />
+    </svg>
+  );
 }
 
 function sandboxClass(mode: string): string {

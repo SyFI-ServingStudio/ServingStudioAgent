@@ -87,10 +87,10 @@ later turns resume that role and send only the new user message or delegated
 task. Implementer summaries are explicitly sent back to the orchestrator before
 the turn finishes.
 
-The UI shows the full orchestrator output for the turn and, when work is
-delegated, the implementer summary. If the orchestrator delegates multiple
-follow-ups in one browser turn, the final assistant message includes the
-implementer summaries and the orchestrator's final user-facing message.
+The UI shows assistant intermediate output and, when work is delegated, the
+implementer summary. If the orchestrator delegates multiple follow-ups in one
+browser turn, the final assistant message includes the implementer summaries and
+the orchestrator's final user-facing message.
 
 ## Debug Logging
 

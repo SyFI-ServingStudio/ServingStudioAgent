@@ -49,7 +49,6 @@ export interface StreamHandlers {
   session?: (data: unknown) => void;
   progress?: (text: string) => void;
   intermediateOutput?: (output: IntermediateOutput) => void;
-  orchestrator?: (text: string) => void;
   implementer?: (text: string) => void;
   done?: (text: string) => void;
 }
@@ -122,8 +121,6 @@ function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
       role: data.role ? String(data.role) : "",
       text: data.text ? String(data.text) : "",
     });
-  } else if (event === "orchestrator") {
-    handlers.orchestrator?.(String(data.text || ""));
   } else if (event === "implementer") {
     handlers.implementer?.(String(data.text || ""));
   } else if (event === "done") {

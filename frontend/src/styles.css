@@ -55,12 +55,38 @@ button, textarea, select { font: inherit; }
 
 .brand { display: flex; align-items: center; gap: 12px; padding: 4px 6px 18px; }
 .brand-mark {
-  font-family: "Fraunces", serif; font-weight: 900; font-size: 20px; letter-spacing: -.5px;
   width: 44px; height: 44px; display: grid; place-items: center;
-  color: var(--ink); background: linear-gradient(150deg, var(--amber-soft), var(--amber));
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 67% 22%, rgba(255,255,255,.55), transparent 22%),
+    linear-gradient(150deg, var(--amber-soft), var(--amber));
   border-radius: 12px; box-shadow: 0 8px 20px -8px rgba(232,163,61,.6);
 }
-.brand-mark span { opacity: .55; }
+.logo-glyph {
+  width: 31px;
+  height: 31px;
+  display: block;
+}
+.logo-glyph.compact {
+  width: 22px;
+  height: 22px;
+}
+.logo-shell {
+  stroke: rgba(13,14,18,.78);
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+}
+.logo-trace {
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.logo-node {
+  fill: var(--ink);
+  stroke: rgba(240,192,116,.95);
+  stroke-width: 1.4;
+}
 .brand-text h1 { font-family: "Fraunces", serif; font-weight: 600; font-size: 22px; margin: 0; letter-spacing: -.3px; }
 .brand-text p { margin: 0; font-size: 12px; letter-spacing: .22em; text-transform: uppercase; color: var(--faint); }
 
@@ -123,7 +149,12 @@ button, textarea, select { font: inherit; }
   flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
   font-size: 12px; font-weight: 700; font-family: "IBM Plex Mono", monospace; margin-top: 2px;
 }
-.msg.assistant .avatar { background: linear-gradient(150deg, var(--amber-soft), var(--amber)); color: var(--ink); }
+.msg.assistant .avatar {
+  background:
+    radial-gradient(circle at 68% 20%, rgba(255,255,255,.48), transparent 23%),
+    linear-gradient(150deg, var(--amber-soft), var(--amber));
+  color: var(--ink);
+}
 .msg.user .avatar { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
 
 .bubble {
@@ -193,28 +224,6 @@ button, textarea, select { font: inherit; }
 }
 summary.role-title { cursor: pointer; user-select: none; }
 summary.role-title::-webkit-details-marker { display: none; }
-summary.role-title::before {
-  content: ">";
-  display: inline-block;
-  margin-right: 7px;
-  color: var(--faint);
-}
-details[open] > summary.role-title::before { content: "v"; }
-.role-raw {
-  margin: 0;
-  padding: 10px;
-  max-height: 280px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 12.3px;
-  line-height: 1.5;
-  color: #d8d2c6;
-  background: var(--ink);
-}
 .role-md { padding: 10px 12px; }
 .role-md > :first-child { margin-top: 0; }
 .role-md > :last-child { margin-bottom: 0; }

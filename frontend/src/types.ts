@@ -33,7 +33,6 @@ export interface ConversationListResponse {
 export interface StreamState {
   intermediateOutputs: IntermediateOutput[];
   progress: string;
-  orchestrator: string;
   implementer: string;
   final: string;
   stopped: boolean;
