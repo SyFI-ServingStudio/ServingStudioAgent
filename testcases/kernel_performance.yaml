@@ -6,6 +6,8 @@ defaults:
 cases:
   - id: torch_gemm_4096_batch_sweep
     question: "What is the performance of torch GEMM with dimensions N=4096, K=4096 for batch sizes [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]?"
+    requirements:
+      gpu: H200
     answer_description: >
       The answer should use the existing MLSim profiling flow for the torch
       single GEMM backend, run or query the requested batch sweep without
