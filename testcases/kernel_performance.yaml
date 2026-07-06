@@ -1,0 +1,15 @@
+topic: kernel_performance
+description: Questions about measuring or reporting kernel performance through MLSim profiling.
+defaults:
+  sandbox: workspace-write
+  autonomous: true
+cases:
+  - id: torch_gemm_4096_batch_sweep
+    question: "What is the performance of torch GEMM with dimensions N=4096, K=4096 for batch sizes [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]?"
+    answer_description: >
+      The answer should use the existing MLSim profiling flow for the torch
+      single GEMM backend, run or query the requested batch sweep without
+      guessing from theoretical peak values, and report the measured timing or
+      throughput for each batch size. It should mention the GPU used, whether
+      values came from existing profile data or a fresh run, and any failures or
+      missing rows.
