@@ -226,7 +226,7 @@ details[open] > summary.role-title::before { content: "▾"; }
 .role-md { padding: 10px 12px; }
 .role-md > :first-child { margin-top: 0; }
 .role-md > :last-child { margin-bottom: 0; }
-.live-notes {
+.intermediate-outputs {
   min-width: 0;
   max-width: 100%;
   border: 1px solid rgba(95,182,168,.34);
@@ -235,20 +235,20 @@ details[open] > summary.role-title::before { content: "▾"; }
   margin: 0 0 12px;
   overflow: hidden;
 }
-.live-note-list {
+.intermediate-output-list {
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
-.live-note {
+.intermediate-output {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 9px;
   padding: 8px 10px;
   border-top: 1px solid rgba(255,255,255,.035);
 }
-.live-note:first-child { border-top: none; }
-.live-note-role {
+.intermediate-output:first-child { border-top: none; }
+.intermediate-output-role {
   font-family: "IBM Plex Mono", monospace;
   font-size: 10.8px;
   line-height: 1.5;
@@ -256,7 +256,7 @@ details[open] > summary.role-title::before { content: "▾"; }
   text-transform: uppercase;
   letter-spacing: .05em;
 }
-.live-note-text {
+.intermediate-output-text {
   min-width: 0;
   font-size: 13px;
   line-height: 1.5;

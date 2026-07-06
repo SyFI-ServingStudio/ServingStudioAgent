@@ -741,7 +741,7 @@ async def _run_codex(
 
     err_task = asyncio.create_task(_drain_stderr())
     final_text: str | None = None
-    seen_live_notes: set[tuple[str, str]] = set()
+    seen_intermediate_outputs: set[tuple[str, str]] = set()
     current_session_id = session_id
     rollout_file: Path | None = None
     rollout_offset = 0
@@ -754,7 +754,7 @@ async def _run_codex(
     deadline = loop.time() + CODEX_CALL_TIMEOUT
     timed_out = False
 
-    def _poll_rollout_live_notes() -> list[dict[str, str]]:
+    def _poll_rollout_intermediate_outputs() -> list[dict[str, str]]:
         nonlocal rollout_file, rollout_offset
         if not current_session_id:
             return []
@@ -771,19 +771,19 @@ async def _run_codex(
             if not note_text:
                 continue
             note_key = (label, note_text)
-            if note_key in seen_live_notes:
+            if note_key in seen_intermediate_outputs:
                 continue
-            seen_live_notes.add(note_key)
+            seen_intermediate_outputs.add(note_key)
             log_event(
                 LOG,
-                "codex.live_note",
+                "codex.intermediate_output",
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 role=label,
                 text=note_text,
                 source="rollout",
             )
-            notes.append({"kind": "live_note", "role": label, "text": note_text})
+            notes.append({"kind": "intermediate_output", "role": label, "text": note_text})
         return notes
 
     def _translate_stdout_line(raw_line: bytes) -> list[dict[str, str]]:
@@ -821,19 +821,19 @@ async def _run_codex(
                 if not note_text:
                     return
                 note_key = (label, note_text)
-                if note_key in seen_live_notes:
+                if note_key in seen_intermediate_outputs:
                     return
-                seen_live_notes.add(note_key)
+                seen_intermediate_outputs.add(note_key)
                 log_event(
                     LOG,
-                    "codex.live_note",
+                    "codex.intermediate_output",
                     conversation_id=conversation_id,
                     turn_id=turn_id,
                     role=label,
                     text=note_text,
                     source="stdout",
                 )
-                yield {"kind": "live_note", "role": label, "text": note_text}
+                yield {"kind": "intermediate_output", "role": label, "text": note_text}
             elif text.strip():
                 final_text = text.strip()
         else:
@@ -862,7 +862,7 @@ async def _run_codex(
                 timeout=min(1.0, remaining),
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            for note in _poll_rollout_live_notes():
+            for note in _poll_rollout_intermediate_outputs():
                 yield note
             if not done:
                 continue
@@ -885,7 +885,7 @@ async def _run_codex(
             for out in _translate_stdout_line(stdout_buffer):
                 async for emitted in _emit_translated(out):
                     yield emitted
-        for note in _poll_rollout_live_notes():
+        for note in _poll_rollout_intermediate_outputs():
             yield note
         if timed_out:
             proc.kill()

@@ -10,7 +10,7 @@ Endpoints:
   POST   /api/conversations/{cid}/messages  -> SSE stream of one turn
 
 The message endpoint streams Server-Sent Events: `session` (role Codex session id),
-`progress` (transient activity lines), `live_note` (assistant commentary messages),
+`progress` (transient activity lines), `intermediate_output` (assistant commentary),
 `orchestrator` (full orchestrator output), `implementer` (implementer summary),
 then `done` (stored final answer). `orchestrator` and `implementer` can repeat
 inside one browser turn when the orchestrator issues follow-up tasks. A
@@ -168,7 +168,7 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
         lock = _lock_for(cid)
         async with lock:
             final_text: str | None = None
-            live_notes: list[dict[str, str]] = []
+            intermediate_outputs: list[dict[str, str]] = []
             try:
                 async for ev in codex_runner.run_turn(
                     cid,
@@ -195,13 +195,13 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
                         )
                     elif kind in ("orchestrator", "implementer"):
                         yield _sse(kind, {"text": ev.get("text", "")})
-                    elif kind in ("live_note", "user_progress"):
-                        note = {
+                    elif kind == "intermediate_output":
+                        intermediate_output = {
                             "role": str(ev.get("role") or ""),
                             "text": str(ev.get("text") or ""),
                         }
-                        live_notes.append(note)
-                        yield _sse("live_note", note)
+                        intermediate_outputs.append(intermediate_output)
+                        yield _sse("intermediate_output", intermediate_output)
                     elif kind in ("progress", "error"):
                         yield _sse("progress", {"text": ev.get("text", "")})
                     elif kind == "final":
@@ -216,7 +216,12 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
                     final_len=len(final_text),
                     final_preview=compact_text(final_text),
                 )
-                store.add_message(cid, "assistant", final_text, live_notes=live_notes or None)
+                store.add_message(
+                    cid,
+                    "assistant",
+                    final_text,
+                    intermediate_outputs=intermediate_outputs or None,
+                )
                 yield _sse("done", {"text": final_text})
             except asyncio.CancelledError:
                 log_event(
@@ -239,7 +244,12 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
                         }
                     },
                 )
-                store.add_message(cid, "assistant", msg, live_notes=live_notes or None)
+                store.add_message(
+                    cid,
+                    "assistant",
+                    msg,
+                    intermediate_outputs=intermediate_outputs or None,
+                )
                 yield _sse("done", {"text": msg})
 
     return StreamingResponse(

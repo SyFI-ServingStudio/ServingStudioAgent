@@ -177,7 +177,7 @@ function addMessageEl(role, contentHtml) {
 
 function scrollToEnd() { els.messages.scrollTop = els.messages.scrollHeight; }
 
-function normalizeLiveNote(note) {
+function normalizeIntermediateOutput(note) {
   if (typeof note === "string") return { role: "", text: note };
   return {
     role: note && note.role ? String(note.role) : "",
@@ -185,31 +185,31 @@ function normalizeLiveNote(note) {
   };
 }
 
-function liveNoteHtml(note) {
-  const normalized = normalizeLiveNote(note);
-  const role = normalized.role ? `<span class="live-note-role">${escHtml(normalized.role)}</span>` : "";
+function intermediateOutputHtml(note) {
+  const normalized = normalizeIntermediateOutput(note);
+  const role = normalized.role ? `<span class="intermediate-output-role">${escHtml(normalized.role)}</span>` : "";
   const text = escHtml(normalizeBackendText(normalized.text)).replace(/\n/g, "<br>");
-  return `<div class="live-note">${role}<div class="live-note-text">${text}</div></div>`;
+  return `<div class="intermediate-output">${role}<div class="intermediate-output-text">${text}</div></div>`;
 }
 
-function liveNotesHtml(notes) {
-  if (!Array.isArray(notes) || !notes.length) return "";
+function intermediateOutputsHtml(outputs) {
+  if (!Array.isArray(outputs) || !outputs.length) return "";
   return (
-    `<div class="live-notes">
-       <div class="role-title">Live Updates</div>
-       <div class="live-note-list">${notes.map(liveNoteHtml).join("")}</div>
+    `<div class="intermediate-outputs">
+       <div class="role-title">Intermediate Output</div>
+       <div class="intermediate-output-list">${outputs.map(intermediateOutputHtml).join("")}</div>
      </div>`
   );
 }
 
 function assistantMessageHtml(message) {
-  return `${liveNotesHtml(message.live_notes)}<div class="final-md">${renderMarkdown(message.content)}</div>`;
+  return `${intermediateOutputsHtml(message.intermediate_outputs)}<div class="final-md">${renderMarkdown(message.content)}</div>`;
 }
 
-function appendLiveNote(list, note) {
+function appendIntermediateOutput(list, note) {
   if (!list) return;
   const template = document.createElement("template");
-  template.innerHTML = liveNoteHtml(note);
+  template.innerHTML = intermediateOutputHtml(note);
   list.appendChild(template.content.firstElementChild);
 }
 
@@ -297,8 +297,8 @@ async function streamTurn(cid, text, sandbox, handlers, signal) {
       try { data = JSON.parse(dataStr); } catch { /* ignore */ }
       if (event === "session") handlers.session && handlers.session(data);
       else if (event === "progress") handlers.progress && handlers.progress(data.text || "");
-      else if (event === "live_note" || event === "user_progress") {
-        handlers.liveNote && handlers.liveNote(data);
+      else if (event === "intermediate_output") {
+        handlers.intermediateOutput && handlers.intermediateOutput(data);
       }
       else if (event === "orchestrator") handlers.orchestrator && handlers.orchestrator(data.text || "");
       else if (event === "implementer") handlers.implementer && handlers.implementer(data.text || "");
@@ -322,13 +322,13 @@ async function sendMessage(text) {
 
   addMessageEl("user", escHtml(text));
 
-  // Assistant placeholder with live progress.
+  // Assistant placeholder with streamed progress.
   const row = addMessageEl("assistant",
-    `<div class="live-notes" hidden>
-       <div class="role-title">Live Updates</div>
-       <div class="live-note-list"></div>
+    `<div class="intermediate-outputs" hidden>
+       <div class="role-title">Intermediate Output</div>
+       <div class="intermediate-output-list"></div>
      </div>
-     <div class="live-work">
+     <div class="turn-work">
        <details class="role-output orchestrator pending">
          <summary class="role-title">Orchestrator Raw</summary>
          <pre class="role-raw">Waiting for decision…</pre>
@@ -341,9 +341,9 @@ async function sendMessage(text) {
      </div>
      <div class="final-md" hidden></div>`);
   const bubble = row.querySelector(".bubble");
-  const liveNotes = bubble.querySelector(".live-notes");
-  const liveNoteList = bubble.querySelector(".live-note-list");
-  const liveWork = bubble.querySelector(".live-work");
+  const intermediateOutputs = bubble.querySelector(".intermediate-outputs");
+  const intermediateOutputList = bubble.querySelector(".intermediate-output-list");
+  const turnWork = bubble.querySelector(".turn-work");
   const finalMd = bubble.querySelector(".final-md");
   const progressLine = bubble.querySelector(".line");
   const progressBox = bubble.querySelector(".progress");
@@ -367,9 +367,9 @@ async function sendMessage(text) {
         if (progressLine) { progressLine.textContent = line; }
         scrollToEnd();
       },
-      liveNote: (note) => {
-        appendLiveNote(liveNoteList, note);
-        if (liveNotes) liveNotes.hidden = false;
+      intermediateOutput: (note) => {
+        appendIntermediateOutput(intermediateOutputList, note);
+        if (intermediateOutputs) intermediateOutputs.hidden = false;
         scrollToEnd();
       },
       orchestrator: (text) => {
@@ -392,7 +392,7 @@ async function sendMessage(text) {
       },
       done: (answer) => {
         if (progressBox) progressBox.remove();
-        if (liveWork) liveWork.remove();
+        if (turnWork) turnWork.remove();
         if (finalMd) {
           finalMd.hidden = false;
           finalMd.innerHTML = renderMarkdown(answer);
