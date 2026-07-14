@@ -1,8 +1,9 @@
 import type {
   Conversation,
   ConversationListResponse,
-  IntermediateOutput,
   SandboxMode,
+  Tokens,
+  TurnEvent,
 } from "./types";
 
 export const DEFAULT_SANDBOX: SandboxMode = "workspace-write";
@@ -51,8 +52,8 @@ export async function deleteConversation(id: string): Promise<void> {
 export interface StreamHandlers {
   session?: (data: unknown) => void;
   progress?: (text: string) => void;
-  intermediateOutput?: (output: IntermediateOutput) => void;
-  implementer?: (text: string) => void;
+  /** One render-relevant turn event (intermediate_output/decision/usage/implementer/final). */
+  event?: (event: TurnEvent) => void;
   done?: (text: string) => void;
 }
 
@@ -96,6 +97,12 @@ export async function streamTurn(
   }
 }
 
+function parseTokens(raw: unknown): Tokens {
+  const source = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const num = (value: unknown): number => (typeof value === "number" ? value : 0);
+  return { read: num(source.read), prefill: num(source.prefill), output: num(source.output) };
+}
+
 function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
   let event = "message";
   const dataLines: string[] = [];
@@ -116,18 +123,41 @@ function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
     data = {};
   }
 
-  if (event === "session") {
-    handlers.session?.(data);
-  } else if (event === "progress") {
-    handlers.progress?.(String(data.text || ""));
-  } else if (event === "intermediate_output") {
-    handlers.intermediateOutput?.({
-      role: data.role ? String(data.role) : "",
-      text: data.text ? String(data.text) : "",
-    });
-  } else if (event === "implementer") {
-    handlers.implementer?.(String(data.text || ""));
-  } else if (event === "done") {
-    handlers.done?.(String(data.text || ""));
+  switch (event) {
+    case "session":
+      handlers.session?.(data);
+      break;
+    case "progress":
+      handlers.progress?.(String(data.text || ""));
+      break;
+    case "intermediate_output":
+      handlers.event?.({
+        kind: "intermediate_output",
+        role: data.role ? String(data.role) : "",
+        text: data.text ? String(data.text) : "",
+      });
+      break;
+    case "decision":
+      handlers.event?.({
+        kind: "decision",
+        action: data.action ? String(data.action) : "",
+        task: data.task ? String(data.task) : "",
+      });
+      break;
+    case "usage":
+      handlers.event?.({
+        kind: "usage",
+        role: data.role ? String(data.role) : "",
+        duration_ms: typeof data.duration_ms === "number" ? data.duration_ms : 0,
+        tokens: parseTokens(data.tokens),
+      });
+      break;
+    case "implementer":
+      handlers.event?.({ kind: "implementer", text: String(data.text || "") });
+      break;
+    case "done":
+      handlers.event?.({ kind: "final", text: String(data.text || "") });
+      handlers.done?.(String(data.text || ""));
+      break;
   }
 }
