@@ -15,7 +15,11 @@ WORKSPACES_DIR = UI_DIR / "workspaces"
 PROMPTS_DIR = UI_DIR / "backend" / "prompts"
 
 CODEX_DOCKER_IMAGE = os.environ.get("CODEX_DOCKER_IMAGE", "mlsim-ui-codex-runner:latest")
-CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.3-codex-spark")
+CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.5")
+# Bearer token gating the agent-facing HTTP API (/api/agent/*, /api/eval).
+# Unset -> no auth, so local dev and the same-host eval harness keep working.
+# Set it when exposing the backend to cross-machine agents.
+VIBESIM_API_TOKEN = os.environ.get("VIBESIM_API_TOKEN", "").strip()
 CODEX_IDLE_TIMEOUT = float(
     os.environ.get("CODEX_IDLE_TIMEOUT", os.environ.get("CODEX_TURN_TIMEOUT", "600"))
 )

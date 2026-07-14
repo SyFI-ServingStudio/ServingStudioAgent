@@ -99,23 +99,81 @@ implementer summary. If the orchestrator delegates multiple follow-ups in one
 browser turn, the final assistant message includes the implementer summaries and
 the orchestrator's final user-facing message.
 
-## Eval API
+## Agent API
 
-For capability checks that do not need the browser, call the single-turn JSON
-endpoint:
+Besides the browser UI, VibeSim exposes a small **HTTP surface for other agents**
+to call. It is self-describing: fetch `GET /api/agent/skill` to get the full skill
+(`SKILL.md` — what VibeSim does, when to call it, what to expect, and the
+contract), then drive everything with plain HTTP — no framework glue.
+
+The **real interactive interface** is the agent conversation API: multi-turn,
+synchronous JSON, with workspace + Codex-session continuity across turns (it
+reuses the same `store` and `run_turn` as the browser SSE path). The calling
+agent reads each turn's `final` and, like a human, answers clarifying questions
+or steers with another turn. `/api/eval` is **evaluation-only** (single-turn,
+stateless; for testcases).
+
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/api/agent/skill` | public | Agent skill doc (`SKILL.md`, `text/markdown`). |
+| POST | `/api/agent/conversations` | token | Create an interactive conversation. |
+| POST | `/api/agent/conversations/{cid}/messages` | token | Run one turn; synchronous JSON. |
+| GET | `/api/agent/conversations/{cid}` | token | Full conversation history. |
+| DELETE | `/api/agent/conversations/{cid}` | token | Delete + clean up. |
+| GET | `/api/agent/artifacts` | token | List files in a conversation's workspace. |
+| GET | `/api/agent/artifacts/download` | token | Download one workspace file. |
+| POST | `/api/eval` | token | Single-turn evaluation only (not interactive). |
+
+**Auth** is gated by `VIBESIM_API_TOKEN`. When it is set, agent endpoints require
+`Authorization: Bearer <token>` (missing/wrong → `401`); `/api/agent/skill` stays
+public. When it is unset (local dev / same-host eval harness), no header is
+needed. The browser UI routes (`/api/conversations*`, image `/api/file`) are
+**not** token-gated in v1 — if you expose this backend cross-machine, bind the UI
+to localhost or add auth there (follow-up).
+
+### Interactive conversation — `/api/agent/conversations*`
+
+```bash
+# 1. create (autonomous defaults false, so VibeSim will ask clarifying questions)
+cid=$(curl -sS http://127.0.0.1:8765/api/agent/conversations \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  -d '{"sandbox":"workspace-write"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+# 2. send a turn; read `final`. If it is a question or you want to steer, send another.
+curl -sS "http://127.0.0.1:8765/api/agent/conversations/$cid/messages" \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  -d '{"text":"Simulate Llama-3-8B dense on 1xH200 at Poisson rate 48; report throughput and TPOT."}'
+
+# 3. delete when done
+curl -sS -X DELETE -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  "http://127.0.0.1:8765/api/agent/conversations/$cid"
+```
+
+A turn is **synchronous** and may take minutes (profiling/sim) — set a generous
+client timeout. The turn response includes `final`, `ok`, `conversation_id`,
+`implementer_summaries`, `intermediate_outputs`, `progress`, and `sessions`.
+`scripts/agent_conversation_smoke.sh` exercises this whole path.
+
+### Single-turn eval — `POST /api/eval` (evaluation only)
+
+For capability checks / testcases that do not need a conversation. **Not the
+interactive interface** — prefer `/api/agent/conversations*` for real agent work.
 
 ```bash
 curl -sS http://127.0.0.1:8765/api/eval \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"prompt":"List the available MLSim L1 profilers."}'
 ```
 
-`/api/eval` still prepares the isolated workspace and Docker Codex container.
-It does not write to the UI conversation list, does not use SSE, and defaults to
-`autonomous: true`. By default it keeps the temporary eval workspace so code,
-logs, plots, and artifacts can be inspected, but removes the corresponding
-Docker container after the run. Batch execution is intentionally outside the
-backend: run multiple `/api/eval` calls from the test harness with the
+`/api/eval` prepares the isolated workspace and Docker Codex container. It does
+not write to the UI conversation list, does not use SSE, and defaults to
+`autonomous: true`. It is **synchronous** — the response returns only after the
+task finishes, so set a generous client timeout for profiling/sim runs. By
+default it keeps the eval workspace so code, logs, plots, and artifacts can be
+fetched afterwards (via `/api/agent/artifacts*` using the returned `conversation_id`),
+but removes the Docker container after the run. Batch execution is intentionally
+outside the backend: run multiple `/api/eval` calls from the harness with the
 concurrency you want.
 
 Useful request fields:
@@ -125,6 +183,26 @@ Useful request fields:
 - `autonomous`: optional, default `true`.
 - `keep_container`: optional, default `false`; normally leave this off so evals
   do not accumulate Docker containers.
+
+The response includes `conversation_id` (use as `cid` for artifact retrieval),
+`final`, `ok`, `implementer_summaries`, `progress`, and `workspace`.
+
+### Artifact retrieval
+
+```bash
+# list files the run produced
+curl -sS -G http://127.0.0.1:8765/api/agent/artifacts \
+  -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  --data-urlencode "cid=eval-1a2b3c4d5e6f" --data-urlencode "subdir=logs"
+
+# download one of them
+curl -sS -OJ -G http://127.0.0.1:8765/api/agent/artifacts/download \
+  -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  --data-urlencode "cid=eval-1a2b3c4d5e6f" \
+  --data-urlencode "path=logs/<run>/summary.json"
+```
+
+`scripts/agent_api_smoke.sh` exercises this whole path end to end.
 
 ## Debug Logging
 
@@ -174,7 +252,9 @@ Docker GPU forwarding.
 | `backend/codex_runtime/codex_events.py` | Codex JSON/rollout event translation |
 | `backend/codex_runtime/prompts.py` | role prompts and orchestrator JSON parsing |
 | `backend/codex_runtime/turn.py` | high-level orchestrator/implementer turn loop |
-| `backend/eval.py` | JSON `/api/eval` wrapper around one `run_turn()` |
+| `backend/eval.py` | JSON `/api/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`) |
+| `backend/artifacts.py` | list/resolve files in a run workspace for the agent artifact endpoints |
+| `SKILL.md` | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/skill` |
 | `backend/prompts/AGENTS.md` | detailed instructions copied into each `/workspace` |
 | `backend/prompts/AGENTS.autonomous.md` | autonomous-mode instructions copied as `/workspace/AGENTS.md` |
 | `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
@@ -186,7 +266,11 @@ Docker GPU forwarding.
 
 ## Environment
 
-- `CODEX_MODEL` — Codex model, default `gpt-5.3-codex-spark`.
+- `VIBESIM_API_TOKEN` — bearer token gating the agent endpoints (`/api/eval`,
+  `/api/agent/artifacts`, `/api/agent/artifacts/download`). Unset → those endpoints are open
+  (local dev). Set → they require `Authorization: Bearer <token>`. `/api/agent/skill`
+  is public regardless.
+- `CODEX_MODEL` — Codex model, default `gpt-5.5`.
 - `CODEX_DOCKER_IMAGE` — Docker image, default `mlsim-ui-codex-runner:latest`.
 - `CODEX_CUDA_IMAGE` — CUDA devel base image baked into the runner image,
   default `nvidia/cuda:12.8.1-devel-ubuntu24.04`.
