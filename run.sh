@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 export CODEX_DOCKER_IMAGE="${CODEX_DOCKER_IMAGE:-vibesim-ui-codex-runner:latest}"
-export CODEX_RUNNER_IMAGE_VERSION="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v5}"
+export CODEX_RUNNER_IMAGE_VERSION="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v6}"
 export CODEX_DOCKER_GPUS="${CODEX_DOCKER_GPUS-all}"
 export CODEX_DOCKER_DG_USE_LOCAL_VERSION="${CODEX_DOCKER_DG_USE_LOCAL_VERSION:-0}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$PWD/.uv-cache}"

@@ -12,6 +12,7 @@ from .config import (
     CODEX_DOCKER_UV_CACHE_DIR,
     CODEX_DOCKER_UV_PROJECT_ENVIRONMENT,
     CODEX_MODEL,
+    CODEX_REASONING_EFFORT,
     MAIN_LOCK_SHA,
 )
 from .exec_types import CodexExecRequest
@@ -24,6 +25,8 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
     codex_options = [
         "-m",
         CODEX_MODEL,
+        "-c",
+        f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"',
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",

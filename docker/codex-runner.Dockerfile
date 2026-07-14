@@ -7,17 +7,14 @@ FROM ${CUDA_IMAGE}
 
 ARG NODE_VERSION=v20.18.1
 ARG NODE_ARCH=linux-x64
-ARG CODEX_NPM_PACKAGE=@openai/codex@0.125.0
+ARG CODEX_NPM_PACKAGE=@openai/codex@0.144.0
 ARG APP_UID=1001
 ARG APP_GID=1001
 ARG APP_USER=kanzhu
 ARG RUST_TOOLCHAIN=stable
-ARG RUNNER_VERSION=prebuilt-codex-runner-v5
+ARG RUNNER_VERSION=prebuilt-codex-runner-v6
 ARG VIBESIM_LOCK_SHA=unknown
 ARG DEBIAN_FRONTEND=noninteractive
-
-LABEL org.vibesim.ui.codex-runner.version="${RUNNER_VERSION}"
-LABEL org.vibesim.ui.main-lock-sha="${VIBESIM_LOCK_SHA}"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV RUSTUP_HOME=/opt/rustup
@@ -127,3 +124,8 @@ RUN cd "${VIBESIM_BAKED_PROJECT}" \
   && uv run python -c "import torch, triton, deep_gemm; print('prewarmed', torch.__version__)"
 
 WORKDIR /workspace
+
+# Metadata labels last so bumping the runner/codex version does not invalidate
+# the expensive apt/node/rust/prewarm layers above.
+LABEL org.vibesim.ui.codex-runner.version="${RUNNER_VERSION}"
+LABEL org.vibesim.ui.main-lock-sha="${VIBESIM_LOCK_SHA}"

@@ -15,7 +15,9 @@ WORKSPACES_DIR = UI_DIR / "workspaces"
 PROMPTS_DIR = UI_DIR / "backend" / "prompts"
 
 CODEX_DOCKER_IMAGE = os.environ.get("CODEX_DOCKER_IMAGE", "vibesim-ui-codex-runner:latest")
-CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.5")
+CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
+# Codex reasoning effort, passed per call as `-c model_reasoning_effort=...`.
+CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "xhigh")
 # Bearer token gating the agent-facing HTTP API (/api/agent/*, /api/eval).
 # Unset -> no auth, so local dev and the same-host eval harness keep working.
 # Set it when exposing the backend to cross-machine agents.
@@ -35,7 +37,7 @@ CODEX_DOCKER_UV_PROJECT_ENVIRONMENT = os.environ.get(
     "/opt/vibesim-venv",
 )
 CODEX_DOCKER_UV_CACHE_DIR = os.environ.get("CODEX_DOCKER_UV_CACHE_DIR", "/opt/vibesim-uv-cache")
-CONTAINER_RUNTIME_VERSION = os.environ.get("CODEX_RUNNER_IMAGE_VERSION", "prebuilt-codex-runner-v5")
+CONTAINER_RUNTIME_VERSION = os.environ.get("CODEX_RUNNER_IMAGE_VERSION", "prebuilt-codex-runner-v6")
 ORCHESTRATOR_SCHEMA_IN_CONTAINER = "/workspace/.codex/orchestrator.schema.json"
 AGENTS_PROMPT_DEFAULT = "AGENTS.md"
 AGENTS_PROMPT_AUTONOMOUS = "AGENTS.autonomous.md"

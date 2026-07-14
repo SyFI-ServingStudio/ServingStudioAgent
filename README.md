@@ -270,18 +270,20 @@ Docker GPU forwarding.
   `/api/agent/artifacts`, `/api/agent/artifacts/download`). Unset → those endpoints are open
   (local dev). Set → they require `Authorization: Bearer <token>`. `/api/agent/skill`
   is public regardless.
-- `CODEX_MODEL` — Codex model, default `gpt-5.5`.
+- `CODEX_MODEL` — Codex model, default `gpt-5.6-sol`.
+- `CODEX_REASONING_EFFORT` — Codex reasoning effort passed as
+  `-c model_reasoning_effort=...`, default `xhigh`.
 - `CODEX_DOCKER_IMAGE` — Docker image, default `vibesim-ui-codex-runner:latest`.
 - `CODEX_CUDA_IMAGE` — CUDA devel base image baked into the runner image,
   default `nvidia/cuda:12.8.1-devel-ubuntu24.04`.
 - `CODEX_UV_IMAGE` — source image copied for the `uv`/`uvx` binaries, default
   `ghcr.io/astral-sh/uv:python3.12-bookworm`.
 - `CODEX_NPM_PACKAGE` — Codex npm package baked into the image by the build
-  script, default `@openai/codex@0.125.0`.
+  script, default `@openai/codex@0.144.0`.
 - `RUST_TOOLCHAIN` — Rust toolchain baked into the image by the build script,
   default `stable`.
 - `CODEX_RUNNER_IMAGE_VERSION` — expected image label, default
-  `prebuilt-codex-runner-v5`. `run.sh` rebuilds when this label differs or
+  `prebuilt-codex-runner-v6`. `run.sh` rebuilds when this label differs or
   when the baked `main/uv.lock` hash label differs from the current checkout.
 - `CODEX_FORCE_IMAGE_BUILD=1` — force `run.sh` to rebuild the runner image.
 - `CODEX_SKIP_IMAGE_BUILD=1` — skip the image existence check/build step.
