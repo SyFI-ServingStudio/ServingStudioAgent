@@ -1,0 +1,110 @@
+topic: gpu_specs
+description: Questions about MLSim GPU hardware spec lookup, catalog provenance, and web-searched fallback for chips missing from gpu/spec.json. Each question should ask only for values with known catalog or official-source ground truth; do not create tests that require unavailable or uncertain numbers.
+defaults:
+  sandbox: workspace-write
+  autonomous: true
+cases:
+  - id: catalog_h200_sxm_dense_specs
+    question: "For an H200 GPU, what is memory size, dense compute for various data types, and NVLink bandwidth?"
+    answer_description: >
+      The answer should use `operate-gpu-spec` and read `gpu/spec.json`, not
+      rely on memory or web search. It should map the user's loose name to
+      `H200-SXM-141GB` and report catalog-backed values: 141 GB HBM3e, 4800
+      GB/s memory bandwidth, dense BF16 990 TFLOP/s, dense FP8 1979 TFLOP/s,
+      FP32 67 TFLOP/s, NVLink 4.0 with 900 GB/s bidirectional bandwidth, so
+      one-way NVLink is about 450 GB/s, `nvl_domain_size=8`, and
+      `dollar_per_hour=4.33`. The answer must explicitly avoid sparse compute
+      numbers: do not double the FP8/BF16 values for 2:4 sparsity.
+
+  - id: catalog_h200_vs_b200_dense_compare
+    question: "How does B200 compare with H200 for memory, tensor compute, NVLink bandwidth, and hourly price?"
+    answer_description: >
+      The answer should read `gpu/spec.json` and compare `H200-SXM-141GB` with
+      `B200-SXM-180GB`. Expected catalog-backed values: H200 has 141 GB, 4800
+      GB/s HBM, dense BF16 990 TFLOP/s, dense FP8 1979 TFLOP/s, no FP4 entry,
+      NVLink 4.0 at 900 GB/s bidirectional, and $4.33/hr. B200 has 180 GB, 8000
+      GB/s HBM, dense BF16 2250 TFLOP/s, dense FP8 4500 TFLOP/s, dense FP4 9000
+      TFLOP/s, NVLink 5.0 at 1800 GB/s bidirectional, and $6.73/hr. It should
+      state that all compute figures are the catalog's dense/non-sparse peaks,
+      not sparse marketing peaks.
+
+  - id: catalog_gb200_superchip_per_gpu_conversion
+    question: "For GB200, what specs should I use per GPU, and how about a whole Grace-Blackwell system?"
+    answer_description: >
+      The answer should read the `GB200-Superchip` row and handle its note
+      correctly. Expected combined-for-2-GPU catalog values: 384 GB HBM3e,
+      16000 GB/s HBM bandwidth, dense BF16 4500 TFLOP/s, dense FP8 9000
+      TFLOP/s, dense FP4 18000 TFLOP/s, FP32 180 TFLOP/s, NVLink 5.0, 1800
+      GB/s bidirectional interconnect, and `nvl_domain_size=72`. Expected
+      per-GPU conversion: 192 GB, 8000 GB/s, dense BF16 2250 TFLOP/s, dense FP8
+      4500 TFLOP/s, dense FP4 9000 TFLOP/s, and FP32 90 TFLOP/s. The
+      `dollar_per_hour` value, 17.85, is already per GPU and should not be
+      divided by two. The answer must not apply sparse or effective-W4A8
+      multipliers.
+
+  - id: catalog_mi325x_vs_gaudi3_dense_specs
+    question: "Can you compare MI325X and Gaudi3 for memory, bandwidth, dense BF16/FP8 compute, interconnect, and price?"
+    answer_description: >
+      The answer should read `gpu/spec.json` and report catalog-backed values.
+      MI325X: 256 GB HBM3e, 6000 GB/s, dense BF16 1307 TFLOP/s, dense FP8 2615
+      TFLOP/s, FP32 163.4 TFLOP/s, Infinity Fabric, 896 GB/s interconnect,
+      `nvl_domain_size=null`, and $3.26/hr. Gaudi3: 128 GB HBM2e, 3670 GB/s,
+      dense BF16 1678 TFLOP/s, dense FP8 1678 TFLOP/s, FP32 229 TFLOP/s, RoCE,
+      4800 GB/s interconnect, `nvl_domain_size=null`, and price `null`. It
+      should mention the catalog note that Gaudi3's BF16 and FP8 peaks are the
+      same by design, and it should not use sparse compute values.
+
+  - id: web_trainium2_trn2_specs_not_catalog_backed
+    question: "What is AWS Trainium2 specs per-chip FP8 compute, HBM capacity, and memory bandwidth?"
+    answer_description: >
+      The answer should first check `gpu/spec.json` and state that Trainium2 is
+      not catalog-backed. It should then web-search official AWS Neuron sources
+      and clearly label the result as searched, not catalog-backed. The ground
+      truth source should be the AWS Neuron Trainium2 Architecture page for
+      per-chip values: 8 NeuronCore-v3 cores, 1,299 FP8 TFLOP/s, 667
+      BF16/FP16/TF32 TFLOP/s, 181 FP32 TFLOP/s, 96 GiB device memory, 2.9 TB/s
+      device memory bandwidth, 3.5 TB/s DMA bandwidth, and NeuronLink-v3 at
+      1.28 TB/s per chip. It may also use the AWS Neuron Trn2 Architecture page
+      to cross-check instance aggregates: trn2.48xlarge/trn2u.48xlarge has 16
+      Trainium2 chips, 20.8 FP8 PFLOP/s, 10.7 FP16/BF16/TF32 PFLOP/s, 2.9 FP32
+      PFLOP/s, 1,536 GiB device memory, and 46.4 TB/s device memory bandwidth;
+      Trn2 UltraServer has 64 chips, 83.2 FP8 PFLOP/s, 42.8 FP16/BF16/TF32
+      PFLOP/s, 11.6 FP32 PFLOP/s, 6,144 GiB device memory, and 185.6 TB/s
+      bandwidth. The answer must use the non-sparse compute values and
+      explicitly reject the 2,563 TFLOP/s per-chip or 41/164 PFLOP/s aggregate
+      sparse figures for roofline math. Include the AWS Neuron source URLs.
+
+  - id: web_inferentia2_inf2_specs_not_catalog_backed
+    question: "Can you look up AWS Inferentia2 specs per chip: compute, HBM capacity, memory bandwidth, and DMA bandwidth?"
+    answer_description: >
+      The answer should first check `gpu/spec.json` and state that Inferentia2
+      is not catalog-backed. It should then use the official AWS Neuron
+      Inferentia2 Architecture page and clearly label the result as searched,
+      not catalog-backed. Expected per-chip values from that page: two
+      NeuronCore-v2 cores, 380 INT8 TOPS, 190 FP16/BF16/cFP8/TF32 TFLOP/s,
+      47.5 FP32 TFLOP/s, 32 GiB HBM, 820 GiB/s HBM bandwidth, 1 TB/s DMA
+      bandwidth. The compute numbers must be treated as non-sparse dense
+      values; do not apply sparse or effective throughput multipliers. Include
+      the AWS Neuron Inferentia2 Architecture source URL.
+
+  - id: web_trainium3_ultraserver_specs_not_catalog_backed
+    question: "Can you look up AWS Trainium3 UltraServer specs and give me per-chip memory, bandwidth, and MXFP8 compute?"
+    answer_description: >
+      The answer should first check `gpu/spec.json` and state that Trainium3 is
+      not catalog-backed. It should then use official AWS Neuron sources and
+      label the answer as searched, not catalog-backed. The ground truth source
+      should be the AWS Neuron Trn3 Architecture page. Expected aggregate
+      values from that page: Gen1 UltraServer has 64 Trainium3 devices, 161,088
+      MXFP8/MXFP4 TFLOP/s, 42,944 FP16/BF16/TF32 TFLOP/s, 11,712 FP32 TFLOP/s,
+      9,216 GiB device memory, 313.6 TB/s device memory bandwidth, 2,048 GiB/s
+      NeuronLink-v4 bandwidth per device, and 12,800 Gbps EFA bandwidth. Gen2
+      UltraServer has 144 Trainium3 devices, 362,448 MXFP8/MXFP4 TFLOP/s,
+      96,624 FP16/BF16/TF32 TFLOP/s, 26,352 FP32 TFLOP/s, 20,736 GiB device
+      memory, 705.6 TB/s device memory bandwidth, 2,048 GiB/s NeuronLink-v4
+      bandwidth per device, and 28,800 Gbps EFA bandwidth. Expected per-chip
+      values are the same from either Gen1 or Gen2: 2,517 MXFP8/MXFP4 TFLOP/s,
+      671 FP16/BF16/TF32 TFLOP/s, 183 FP32 TFLOP/s, 144 GiB device memory, and
+      4.9 TB/s device memory bandwidth. The answer must keep these as
+      non-sparse dense values and must not multiply by W4A8 effective
+      weight-loading or sparsity claims. Include the AWS Neuron Trn3
+      Architecture source URL.

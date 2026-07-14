@@ -5,13 +5,144 @@ defaults:
   autonomous: true
 cases:
   - id: torch_gemm_4096_batch_sweep
-    question: "What is the performance of torch GEMM with dimensions N=4096, K=4096 for batch sizes [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]?"
+    question: "On an NVIDIA H200, what is the bf16 torch GEMM performance with dimensions N=4096, K=4096 for batch sizes [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]?"
     requirements:
       gpu: H200
     answer_description: >
-      The answer should use the existing MLSim profiling flow for the torch
-      single GEMM backend, run or query the requested batch sweep without
-      guessing from theoretical peak values, and report the measured timing or
-      throughput for each batch size. It should mention the GPU used, whether
-      values came from existing profile data or a fresh run, and any failures or
-      missing rows.
+      The answer should use `operate-profile-existing-kernel` and the public
+      `uv run python -m profiling` CLI for the existing `single_gemm` table with
+      `backend=torch`. The question explicitly requests `bf16` on
+      `NVIDIA H200`, which is the expected DB-backed dtype/GPU key for this
+      case. It should first
+      run `list --json` to confirm `single_gemm/torch` has args `m,n,k,dtype`,
+      then run `count-missing` or `query` for specs
+      `m=[32,64,128,256,512,1024,2048,4096,8192], n=4096, k=4096, dtype=bf16`
+      with `--gpu-name "NVIDIA H200"`. Expected current result: 0 missing rows
+      in `/workspace/profiling/profile.db` and one compute row per batch.
+      Report measured values, not theoretical peak estimates. The expected
+      H200 bf16 throughput/timing shape is roughly:
+      m=32 ~0.016 ms / 66 TFLOP/s; m=64 ~0.014 ms / 158 TFLOP/s;
+      m=128 ~0.015 ms / 280 TFLOP/s; m=256 ~0.020 ms / 437 TFLOP/s;
+      m=512 ~0.024 ms / 710 TFLOP/s; m=1024 ~0.044 ms / 787 TFLOP/s;
+      m=2048 ~0.100 ms / 689 TFLOP/s; m=4096 ~0.215 ms / 640 TFLOP/s;
+      m=8192 ~0.413 ms / 666 TFLOP/s. The answer should include GPU key,
+      dtype, backend, DB path, whether the values came from existing rows or a
+      fresh run, and any missing/failure rows. If it tries `fp16`, it should say
+      those H200 rows are currently missing rather than inventing results.
+
+  - id: torch_gemm_4096_half_hit_half_missing
+    question: "Do we have NVIDIA H200 bf16 torch GEMM measurements for N=4096, K=4096 at batch sizes m=[32, 48, 64, 96]? Show the available numbers and tell me which ones are missing."
+    requirements:
+      gpu: H200
+    answer_description: >
+      The answer should use `operate-profile-existing-kernel` and the public
+      `uv run python -m profiling` CLI for table `single_gemm`,
+      `backend=torch`, with `--gpu-name "NVIDIA H200"` and specs
+      `m=[32,48,64,96], n=4096, k=4096, dtype=bf16`. This case is intentionally
+      half hit and half miss in the shared DB. Expected current result:
+      `count-missing` or `query` reports `missing_count=2` out of 4. The answer
+      should report the two available rows: m=32 ~0.0162 ms / 66.5 TFLOP/s /
+      2109 GB/s and m=64 ~0.0136 ms / 158 TFLOP/s / 2539 GB/s. It should list
+      m=48 and m=96 as missing and should not silently invent or interpolate
+      their values. Unless the user explicitly asks to fill missing rows, this
+      case should stay read-only against `/workspace/profiling/profile.db`.
+
+  - id: rms_norm_flashinfer_h200_bf16_hidden4096_direct_read
+    question: "How fast is bf16 FlashInfer RMSNorm on an NVIDIA H200 for hidden=4096 and token counts m=[32, 512, 2048, 8192]?"
+    requirements:
+      gpu: H200
+    answer_description: >
+      The answer should use `operate-profile-existing-kernel` and query the
+      existing `/workspace/profiling/profile.db`; it should not run fresh
+      profiling for this direct-read case. It should confirm `rms_norm` with
+      `backend=flashinfer` exists and has args `m,hidden,dtype`, then run
+      `count-missing` or `query` with `--gpu-name "NVIDIA H200"` for
+      `dtype=bf16, hidden=4096, m=[32,512,2048,8192]`. Expected current result:
+      0 missing rows and four compute rows. Expected timing/throughput shape:
+      m=32 ~0.00276 ms / 0.238 TFLOP/s / 190 GB/s; m=512 ~0.00421 ms /
+      2.49 TFLOP/s / 1994 GB/s; m=2048 ~0.00992 ms / 4.23 TFLOP/s /
+      3383 GB/s; m=8192 ~0.0345 ms / 4.87 TFLOP/s / 3893 GB/s. The answer
+      should call this RMSNorm, not generic LayerNorm, because that is the
+      registered profiler kind.
+
+  - id: flashinfer_decode_fa3_h200_bf16_direct_read
+    question: "Can you report bf16 FlashInfer FA3 attention decode performance on an NVIDIA H200 for num_qo_heads=32, num_kv_heads=8, head_dim=128, batch_size=1, and total_tokens=[8192, 65536, 524288]?"
+    requirements:
+      gpu: H200
+    answer_description: >
+      The answer should query the existing DB, not force-refresh or use a
+      temporary DB. It should use table `flashinfer_attn_decode`,
+      `backend=fa3`, `--gpu-name "NVIDIA H200"`, and specs containing exactly
+      `num_qo_heads,num_kv_heads,head_dim,q_dtype,kv_dtype,o_dtype,batch_size,total_tokens`
+      with all dtypes `bf16`, `num_qo_heads=32`, `num_kv_heads=8`,
+      `head_dim=128`, `batch_size=1`, and `total_tokens=[8192,65536,524288]`.
+      Expected current result: 0 missing rows and three compute rows. Expected
+      values: total_tokens=8192 ~0.114 ms / 1.18 TFLOP/s / 295 GB/s;
+      total_tokens=65536 ~0.860 ms / 1.25 TFLOP/s / 312 GB/s;
+      total_tokens=524288 ~6.79 ms / 1.27 TFLOP/s / 316 GB/s.
+
+  - id: p2p_intra_nccl_h200_bf16_nvlink_direct_read
+    question: "What bandwidth do we get for bf16 NCCL P2P over NVLink on an NVIDIA H200 for message sizes [1024, 1048576, 268435456] bytes?"
+    requirements:
+      gpu: H200
+    answer_description: >
+      The answer should query the existing DB only. It should use table
+      `p2p_intra`, `backend=nccl`, `--gpu-name "NVIDIA H200"`, and specs
+      `message_size_bytes=[1024,1048576,268435456], dtype=bf16, fabric=nvlink`.
+      Expected current result: 0 missing rows and three comm rows. Expected
+      values: 1024 bytes ~0.0732 ms / 0.014 GB/s algbw; 1048576 bytes
+      ~0.0376 ms / 27.9 GB/s algbw; 268435456 bytes ~0.753 ms / 356 GB/s
+      algbw. The answer should report `algbw_gbps` and `busbw_gbps` for comm
+      rows, not TFLOP/s.
+
+  - id: flashinfer_prefill_fa3_h200_bf16_tempdb_jit
+    question: "Please profile bf16 FlashInfer FA3 attention prefill on an NVIDIA H200 for (prefix_len, append_len) pairs [(0,128), (896,256), (8064,256)] with num_qo_heads=32, num_kv_heads=8, and head_dim=128."
+    requirements:
+      gpu: H200
+    answer_description: >
+      The answer should use `uv run python -m profiling` through the
+      `operate-profile-existing-kernel` workflow and explicitly use a temporary
+      DB such as `/tmp/eval_flashinfer_prefill_jit.db`, not the shared
+      `/workspace/profiling/profile.db`. It should show `count-missing` before
+      profiling returns 3 missing rows, then `run` fills them, then post-run
+      `count-missing` returns 0. Use table `flashinfer_attn_prefill`,
+      `backend=fa3`, `--gpu-name "NVIDIA H200"`, all dtypes `bf16`,
+      `num_qo_heads=32`, `num_kv_heads=8`, and `head_dim=128`. Fresh JIT values
+      can vary, but the verified golden run produced approximately:
+      (0,128) ~0.00725 ms / 18.5 TFLOP/s / 362 GB/s; (896,256) ~0.0193 ms /
+      222 TFLOP/s / 461 GB/s; (8064,256) ~0.0972 ms / 353 TFLOP/s /
+      394 GB/s. The answer should identify this as JIT-fill mode and include
+      the temporary DB path.
+
+  - id: p2p_intra_nvshmem_h200_bf16_nvlink_tempdb_jit
+    question: "Please profile bf16 NVSHMEM P2P over NVLink on an NVIDIA H200 for message sizes [1024, 1048576, 268435456] bytes."
+    requirements:
+      gpu: H200
+    answer_description: >
+      The answer should use a temporary DB such as
+      `/tmp/eval_p2p_intra_nvshmem_jit.db` and should not write the shared DB.
+      It should use table `p2p_intra`, `backend=nvshmem`, `--gpu-name
+      "NVIDIA H200"`, and specs `message_size_bytes=[1024,1048576,268435456],
+      dtype=bf16, fabric=nvlink`. Expected validation flow: pre-run
+      `count-missing` is 3, `run` completes in JIT-fill mode with three
+      `status=ok` comm rows, and post-run `count-missing` is 0. Verified golden
+      values: 1024 bytes ~0.00997 ms / 0.103 GB/s algbw; 1048576 bytes
+      ~0.0111 ms / 94.8 GB/s algbw; 268435456 bytes ~0.680 ms / 395 GB/s
+      algbw. The answer should report comm metrics (`algbw_gbps`,
+      `busbw_gbps`, `time_ms`, `energy_j`) and mention that `--gpu-name` is the
+      DB key, not the CUDA selector.
+
+  - id: elementwise_triton_h200_tempdb_jit
+    question: "Please profile the Triton elementwise kernel on an NVIDIA H200 for (input_size_bytes, output_size_bytes) pairs [(393216,196608), (11010048,5505024), (23592960,11796480)]."
+    requirements:
+      gpu: H200
+    answer_description: >
+      The answer should use table `elementwise`, `backend=triton`, `--gpu-name
+      "NVIDIA H200"`, and a temporary DB such as `/tmp/eval_elementwise_jit.db`.
+      It should show the JIT validation sequence: pre-run `count-missing` is 3,
+      `run` returns three `status=ok` compute rows, and post-run
+      `count-missing` is 0. Verified golden values from a fresh temporary-DB
+      run: (393216,196608) ~0.00188 ms / 313 GB/s; (11010048,5505024)
+      ~0.00575 ms / 2870 GB/s; (23592960,11796480) ~0.0109 ms / 3244 GB/s.
+      `tflops` is expected to be 0.0 for this elementwise profiler, so the
+      answer should focus on `time_ms` and `memory_bandwidth_gbps`.
