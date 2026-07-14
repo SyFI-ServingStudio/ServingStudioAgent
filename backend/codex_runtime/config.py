@@ -14,7 +14,7 @@ MAIN_DIR = WORKSPACE / "main"
 WORKSPACES_DIR = UI_DIR / "workspaces"
 PROMPTS_DIR = UI_DIR / "backend" / "prompts"
 
-CODEX_DOCKER_IMAGE = os.environ.get("CODEX_DOCKER_IMAGE", "mlsim-ui-codex-runner:latest")
+CODEX_DOCKER_IMAGE = os.environ.get("CODEX_DOCKER_IMAGE", "vibesim-ui-codex-runner:latest")
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.5")
 # Bearer token gating the agent-facing HTTP API (/api/agent/*, /api/eval).
 # Unset -> no auth, so local dev and the same-host eval harness keep working.
@@ -32,9 +32,9 @@ CODEX_DOCKER_AUTH_DIR = f"{CODEX_DOCKER_HOME}/.codex"
 CODEX_DOCKER_DG_USE_LOCAL_VERSION = os.environ.get("CODEX_DOCKER_DG_USE_LOCAL_VERSION", "0")
 CODEX_DOCKER_UV_PROJECT_ENVIRONMENT = os.environ.get(
     "CODEX_DOCKER_UV_PROJECT_ENVIRONMENT",
-    "/opt/mlsim-venv",
+    "/opt/vibesim-venv",
 )
-CODEX_DOCKER_UV_CACHE_DIR = os.environ.get("CODEX_DOCKER_UV_CACHE_DIR", "/opt/mlsim-uv-cache")
+CODEX_DOCKER_UV_CACHE_DIR = os.environ.get("CODEX_DOCKER_UV_CACHE_DIR", "/opt/vibesim-uv-cache")
 CONTAINER_RUNTIME_VERSION = os.environ.get("CODEX_RUNNER_IMAGE_VERSION", "prebuilt-codex-runner-v5")
 ORCHESTRATOR_SCHEMA_IN_CONTAINER = "/workspace/.codex/orchestrator.schema.json"
 AGENTS_PROMPT_DEFAULT = "AGENTS.md"
@@ -44,7 +44,7 @@ EXECUTION_MODES = ("read-only", "workspace-write", "danger-full-access")
 SANDBOX_MODES = EXECUTION_MODES
 DEFAULT_SANDBOX = "workspace-write"
 
-LOG = logging.getLogger("mlsim_ui.codex_runtime")
+LOG = logging.getLogger("vibesim_ui.codex_runtime")
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -87,4 +87,4 @@ def codex_home_for(conversation_id: str) -> Path:
 
 def container_name(conversation_id: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", conversation_id)[:48]
-    return f"mlsim-ui-{safe}"
+    return f"vibesim-ui-{safe}"

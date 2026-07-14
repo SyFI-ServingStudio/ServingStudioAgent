@@ -54,9 +54,9 @@ async def run_turn(
 
     workspace_main_path = workspace_main_for(conversation_id)
     if workspace_main_path.exists():
-        yield {"kind": "progress", "text": "checking isolated MLSim workspace..."}
+        yield {"kind": "progress", "text": "checking isolated VibeSim workspace..."}
     else:
-        yield {"kind": "progress", "text": "creating isolated MLSim workspace..."}
+        yield {"kind": "progress", "text": "creating isolated VibeSim workspace..."}
     loop = asyncio.get_event_loop()
     workspace_started = loop.time()
     workspace_task = asyncio.create_task(

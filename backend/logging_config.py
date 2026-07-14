@@ -1,4 +1,4 @@
-"""Structured logging for the MLSim UI backend."""
+"""Structured logging for the VibeSim UI backend."""
 
 from __future__ import annotations
 
@@ -32,8 +32,8 @@ class JsonLineFormatter(logging.Formatter):
 
 def configure_logging() -> None:
     """Install stdout and rotating-file JSON logs once per process."""
-    root = logging.getLogger("mlsim_ui")
-    if getattr(root, "_mlsim_configured", False):
+    root = logging.getLogger("vibesim_ui")
+    if getattr(root, "_vibesim_configured", False):
         return
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -54,7 +54,7 @@ def configure_logging() -> None:
     root.addHandler(stream_handler)
     root.addHandler(file_handler)
     root.propagate = False
-    root._mlsim_configured = True  # type: ignore[attr-defined]
+    root._vibesim_configured = True  # type: ignore[attr-defined]
 
 
 def log_event(logger: logging.Logger, event: str, **fields: Any) -> None:

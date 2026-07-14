@@ -13,21 +13,21 @@ ARG APP_GID=1001
 ARG APP_USER=kanzhu
 ARG RUST_TOOLCHAIN=stable
 ARG RUNNER_VERSION=prebuilt-codex-runner-v5
-ARG MLSIM_LOCK_SHA=unknown
+ARG VIBESIM_LOCK_SHA=unknown
 ARG DEBIAN_FRONTEND=noninteractive
 
-LABEL org.mlsim.ui.codex-runner.version="${RUNNER_VERSION}"
-LABEL org.mlsim.ui.main-lock-sha="${MLSIM_LOCK_SHA}"
+LABEL org.vibesim.ui.codex-runner.version="${RUNNER_VERSION}"
+LABEL org.vibesim.ui.main-lock-sha="${VIBESIM_LOCK_SHA}"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV RUSTUP_HOME=/opt/rustup
 ENV CARGO_HOME=/opt/cargo
 ENV DG_USE_LOCAL_VERSION=0
-ENV MLSIM_BAKED_LOCK_SHA=${MLSIM_LOCK_SHA}
-ENV MLSIM_BAKED_PROJECT=/opt/mlsim-prewarm
+ENV VIBESIM_BAKED_LOCK_SHA=${VIBESIM_LOCK_SHA}
+ENV VIBESIM_BAKED_PROJECT=/opt/vibesim-prewarm
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV UV_PROJECT_ENVIRONMENT=/opt/mlsim-venv
-ENV UV_CACHE_DIR=/opt/mlsim-uv-cache
+ENV UV_PROJECT_ENVIRONMENT=/opt/vibesim-venv
+ENV UV_CACHE_DIR=/opt/vibesim-uv-cache
 ENV PATH=/opt/cargo/bin:/opt/node/bin:${PATH}
 
 RUN apt-get update -qq \
@@ -106,23 +106,23 @@ RUN if ! getent group "${APP_GID}" >/dev/null 2>&1; then \
     "/home/${APP_USER}/.local" \
     "/home/${APP_USER}/.npm" \
     "/workspace" \
-    "${MLSIM_BAKED_PROJECT}" \
+    "${VIBESIM_BAKED_PROJECT}" \
     "${UV_PROJECT_ENVIRONMENT}" \
     "${UV_CACHE_DIR}" \
   && chown -R "${APP_UID}:${APP_GID}" \
     "/home/${APP_USER}" \
     "/workspace" \
-    "${MLSIM_BAKED_PROJECT}" \
+    "${VIBESIM_BAKED_PROJECT}" \
     "${UV_PROJECT_ENVIRONMENT}" \
     "${UV_CACHE_DIR}"
 
-COPY --chown=${APP_UID}:${APP_GID} mlsim/ /opt/mlsim-prewarm/
+COPY --chown=${APP_UID}:${APP_GID} vibesim/ /opt/vibesim-prewarm/
 
 ENV HOME=/home/${APP_USER}
 
 USER ${APP_UID}:${APP_GID}
 
-RUN cd "${MLSIM_BAKED_PROJECT}" \
+RUN cd "${VIBESIM_BAKED_PROJECT}" \
   && DG_USE_LOCAL_VERSION=0 just sync \
   && uv run python -c "import torch, triton, deep_gemm; print('prewarmed', torch.__version__)"
 

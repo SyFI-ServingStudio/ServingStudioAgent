@@ -1,7 +1,7 @@
 [project]
-name = "mlsim-user-facing-ui"
+name = "vibesim-user-facing-ui"
 version = "0.1.0"
-description = "Web chat UI that drives codex exec as the LLM backend for MLSim"
+description = "Web chat UI that drives codex exec as the LLM backend for VibeSim"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

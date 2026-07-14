@@ -116,8 +116,8 @@ if [ "${{DG_USE_LOCAL_VERSION:-}}" != "$EXPECTED_DG_USE_LOCAL_VERSION" ]; then
   exit 127
 fi
 
-if [ "${{MLSIM_BAKED_LOCK_SHA:-}}" != "$EXPECTED_LOCK_SHA" ]; then
-  echo "Docker runner was prewarmed for lock ${{MLSIM_BAKED_LOCK_SHA:-unset}}, expected $EXPECTED_LOCK_SHA" >&2
+if [ "${{VIBESIM_BAKED_LOCK_SHA:-}}" != "$EXPECTED_LOCK_SHA" ]; then
+  echo "Docker runner was prewarmed for lock ${{VIBESIM_BAKED_LOCK_SHA:-unset}}, expected $EXPECTED_LOCK_SHA" >&2
   exit 127
 fi
 
@@ -145,11 +145,11 @@ if [ "$GPU_REQUEST" != "" ]; then
   fi
 fi
 
-echo "$RUNTIME_VERSION" > /tmp/mlsim_ui_runtime_version
-echo "$RUNTIME_IMAGE" > /tmp/mlsim_ui_runtime_image
-echo "$GPU_REQUEST" > /tmp/mlsim_ui_gpu_request
-echo "$EXPECTED_LOCK_SHA" > /tmp/mlsim_ui_main_lock_sha
-touch /tmp/mlsim_ui_codex_ready
+echo "$RUNTIME_VERSION" > /tmp/vibesim_ui_runtime_version
+echo "$RUNTIME_IMAGE" > /tmp/vibesim_ui_runtime_image
+echo "$GPU_REQUEST" > /tmp/vibesim_ui_gpu_request
+echo "$EXPECTED_LOCK_SHA" > /tmp/vibesim_ui_main_lock_sha
+touch /tmp/vibesim_ui_codex_ready
 """
 
 def container_running(container: str) -> bool:
@@ -198,13 +198,13 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
                 "bash",
                 "-lc",
                 (
-                    "test -f /tmp/mlsim_ui_codex_ready "
-                    f"&& test \"$(cat /tmp/mlsim_ui_runtime_version 2>/dev/null)\" = {CONTAINER_RUNTIME_VERSION!r} "
-                    f"&& test \"$(cat /tmp/mlsim_ui_runtime_image 2>/dev/null)\" = {CODEX_DOCKER_IMAGE!r} "
-                    f"&& test \"$(cat /tmp/mlsim_ui_gpu_request 2>/dev/null)\" = {CODEX_DOCKER_GPUS!r} "
-                    f"&& test \"$(cat /tmp/mlsim_ui_main_lock_sha 2>/dev/null)\" = {MAIN_LOCK_SHA!r} "
+                    "test -f /tmp/vibesim_ui_codex_ready "
+                    f"&& test \"$(cat /tmp/vibesim_ui_runtime_version 2>/dev/null)\" = {CONTAINER_RUNTIME_VERSION!r} "
+                    f"&& test \"$(cat /tmp/vibesim_ui_runtime_image 2>/dev/null)\" = {CODEX_DOCKER_IMAGE!r} "
+                    f"&& test \"$(cat /tmp/vibesim_ui_gpu_request 2>/dev/null)\" = {CODEX_DOCKER_GPUS!r} "
+                    f"&& test \"$(cat /tmp/vibesim_ui_main_lock_sha 2>/dev/null)\" = {MAIN_LOCK_SHA!r} "
                     f"&& test \"${{DG_USE_LOCAL_VERSION:-}}\" = {CODEX_DOCKER_DG_USE_LOCAL_VERSION!r} "
-                    f"&& test \"${{MLSIM_BAKED_LOCK_SHA:-}}\" = {MAIN_LOCK_SHA!r} "
+                    f"&& test \"${{VIBESIM_BAKED_LOCK_SHA:-}}\" = {MAIN_LOCK_SHA!r} "
                     f"&& test -d {CODEX_DOCKER_UV_PROJECT_ENVIRONMENT!r} "
                     f"&& test -w {CODEX_DOCKER_UV_PROJECT_ENVIRONMENT!r} "
                     "&& command -v bash >/dev/null 2>&1 "
@@ -281,7 +281,7 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
         "-e",
         f"UV_CACHE_DIR={CODEX_DOCKER_UV_CACHE_DIR}",
         "-e",
-        f"MLSIM_EXPECTED_LOCK_SHA={MAIN_LOCK_SHA}",
+        f"VIBESIM_EXPECTED_LOCK_SHA={MAIN_LOCK_SHA}",
         "-e",
         f"DG_USE_LOCAL_VERSION={CODEX_DOCKER_DG_USE_LOCAL_VERSION}",
         "-e",
@@ -303,7 +303,7 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
             "-e",
             f"CODEX_DOCKER_GPUS={CODEX_DOCKER_GPUS}",
             "-e",
-            f"MLSIM_EXPECTED_LOCK_SHA={MAIN_LOCK_SHA}",
+            f"VIBESIM_EXPECTED_LOCK_SHA={MAIN_LOCK_SHA}",
             "-u",
             f"{CODEX_DOCKER_UID}:{CODEX_DOCKER_GID}",
             container,

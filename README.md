@@ -1,6 +1,6 @@
 # user-facing-ui
 
-A small web chat UI for MLSim. The browser talks to a FastAPI backend, which
+A small web chat UI for VibeSim. The browser talks to a FastAPI backend, which
 drives **`codex exec` inside Docker**.
 
 Each conversation gets an isolated copy of git-tracked files from `../main`.
@@ -21,12 +21,12 @@ once before the build. Set `FRONTEND_SKIP_BUILD=1` when you are already running
 the Vite dev server.
 
 The backend uses a prebuilt local Docker image for the Codex runner. If the image
-is missing, its MLSim runner label is stale, or its baked `main/uv.lock` hash
+is missing, its VibeSim runner label is stale, or its baked `main/uv.lock` hash
 does not match the current checkout, `run.sh` builds it once from
 `docker/codex-runner.Dockerfile`; later turns and later conversations reuse that
 image. The image is based on CUDA 12.8 devel and includes Node/Codex, `uv`, git,
 Rust stable (`cargo`/`rustc`), `just`, `nvcc`, Python 3.12 dev headers, native
-build tools, and a prewarmed MLSim Python environment at `/opt/mlsim-venv`.
+build tools, and a prewarmed VibeSim Python environment at `/opt/vibesim-venv`.
 The prewarmed env is built from `../main/pyproject.toml`, `../main/uv.lock`,
 and `../main/justfile`, so the default profiling stack, including pinned
 DeepGEMM, is already installed before any conversation starts. The Docker
@@ -163,7 +163,7 @@ interactive interface** — prefer `/api/agent/conversations*` for real agent wo
 curl -sS http://127.0.0.1:8765/api/eval \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
-  -d '{"prompt":"List the available MLSim L1 profilers."}'
+  -d '{"prompt":"List the available VibeSim L1 profilers."}'
 ```
 
 `/api/eval` prepares the isolated workspace and Docker Codex container. It does
@@ -259,7 +259,7 @@ Docker GPU forwarding.
 | `backend/prompts/AGENTS.autonomous.md` | autonomous-mode instructions copied as `/workspace/AGENTS.md` |
 | `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
 | `backend/store.py` | in-memory + JSON-file conversation store |
-| `docker/codex-runner.Dockerfile` | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked MLSim deps |
+| `docker/codex-runner.Dockerfile` | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked VibeSim deps |
 | `scripts/build-codex-runner-image.sh` | one-shot image builder used by `run.sh` when needed |
 | `frontend/` | React + TypeScript + Vite chat UI |
 | `workspaces/` | generated per-conversation copies of `../main` |
@@ -271,7 +271,7 @@ Docker GPU forwarding.
   (local dev). Set → they require `Authorization: Bearer <token>`. `/api/agent/skill`
   is public regardless.
 - `CODEX_MODEL` — Codex model, default `gpt-5.5`.
-- `CODEX_DOCKER_IMAGE` — Docker image, default `mlsim-ui-codex-runner:latest`.
+- `CODEX_DOCKER_IMAGE` — Docker image, default `vibesim-ui-codex-runner:latest`.
 - `CODEX_CUDA_IMAGE` — CUDA devel base image baked into the runner image,
   default `nvidia/cuda:12.8.1-devel-ubuntu24.04`.
 - `CODEX_UV_IMAGE` — source image copied for the `uv`/`uvx` binaries, default
@@ -299,11 +299,11 @@ Docker GPU forwarding.
   host user, so files written under `/workspace` are not root-owned and Codex
   sees the same absolute `.codex` home path.
 - `CODEX_DOCKER_UV_PROJECT_ENVIRONMENT` — where `uv run` creates the project
-  virtualenv inside Docker, default `/opt/mlsim-venv`. The default is baked into
+  virtualenv inside Docker, default `/opt/vibesim-venv`. The default is baked into
   the runner image and chowned to the host UID/GID; per-container overlay writes
   are isolated from other conversations.
 - `CODEX_DOCKER_UV_CACHE_DIR` — where `uv` stores cache inside Docker, default
-  `/opt/mlsim-uv-cache`, also baked into the runner image.
+  `/opt/vibesim-uv-cache`, also baked into the runner image.
 - `FRONTEND_SKIP_BUILD=1` — skip `npm ci` / `npm run build` in `run.sh`, useful
   when `npm run dev` is serving the frontend separately.
 - `PORT`, `HOST` — FastAPI bind settings used by `run.sh`.

@@ -73,14 +73,14 @@ def _ensure_workspace_git(workspace_main: Path) -> None:
     log_event(LOG, "workspace.git.init", workspace=str(workspace_main))
     run_checked(["git", "-C", str(workspace_main), "init"], timeout=60)
     run_checked(["git", "-C", str(workspace_main), "checkout", "-B", "main"], timeout=60)
-    run_checked(["git", "-C", str(workspace_main), "config", "user.name", "MLSim UI"], timeout=60)
+    run_checked(["git", "-C", str(workspace_main), "config", "user.name", "VibeSim UI"], timeout=60)
     run_checked(
-        ["git", "-C", str(workspace_main), "config", "user.email", "mlsim-ui@example.invalid"],
+        ["git", "-C", str(workspace_main), "config", "user.email", "vibesim-ui@example.invalid"],
         timeout=60,
     )
     run_checked(["git", "-C", str(workspace_main), "add", "-A"], timeout=60)
     run_checked(
-        ["git", "-C", str(workspace_main), "commit", "-m", "Initial MLSim workspace snapshot"],
+        ["git", "-C", str(workspace_main), "commit", "-m", "Initial VibeSim workspace snapshot"],
         timeout=120,
     )
 

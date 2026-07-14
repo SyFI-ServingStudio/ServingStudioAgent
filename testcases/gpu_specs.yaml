@@ -1,5 +1,5 @@
 topic: gpu_specs
-description: Questions about MLSim GPU hardware spec lookup, catalog provenance, and web-searched fallback for chips missing from gpu/spec.json. Each question should ask only for values with known catalog or official-source ground truth; do not create tests that require unavailable or uncertain numbers.
+description: Questions about VibeSim GPU hardware spec lookup, catalog provenance, and web-searched fallback for chips missing from gpu/spec.json. Each question should ask only for values with known catalog or official-source ground truth; do not create tests that require unavailable or uncertain numbers.
 defaults:
   sandbox: workspace-write
   autonomous: true

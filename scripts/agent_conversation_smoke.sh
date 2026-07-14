@@ -12,9 +12,9 @@
 #   VIBESIM_API_TOKEN=secret scripts/agent_conversation_smoke.sh http://127.0.0.1:8765
 set -euo pipefail
 
-BASE="${1:-${MLSIM_BASE_URL:-http://127.0.0.1:8765}}"
+BASE="${1:-${VIBESIM_BASE_URL:-http://127.0.0.1:8765}}"
 TOKEN="${VIBESIM_API_TOKEN:-}"
-PROMPT1="${SMOKE_PROMPT1:-Which MLSim L1 profilers are available? Do not change any files.}"
+PROMPT1="${SMOKE_PROMPT1:-Which VibeSim L1 profilers are available? Do not change any files.}"
 PROMPT2="${SMOKE_PROMPT2:-Thanks. Of those, which one would cost a bf16 GEMM?}"
 
 AUTH=()

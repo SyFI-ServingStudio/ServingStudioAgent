@@ -1,1 +1,1 @@
-"""Docker-backed Codex runtime for the MLSim assistant backend."""
+"""Docker-backed Codex runtime for the VibeSim assistant backend."""

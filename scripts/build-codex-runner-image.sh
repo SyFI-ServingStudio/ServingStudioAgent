@@ -6,7 +6,7 @@ workspace_dir="$(cd "$ui_dir/.." && pwd)"
 main_dir="$workspace_dir/main"
 cd "$ui_dir"
 
-image="${CODEX_DOCKER_IMAGE:-mlsim-ui-codex-runner:latest}"
+image="${CODEX_DOCKER_IMAGE:-vibesim-ui-codex-runner:latest}"
 cuda_image="${CODEX_CUDA_IMAGE:-nvidia/cuda:12.8.1-devel-ubuntu24.04}"
 uv_image="${CODEX_UV_IMAGE:-ghcr.io/astral-sh/uv:python3.12-bookworm}"
 codex_package="${CODEX_NPM_PACKAGE:-@openai/codex@0.125.0}"
@@ -18,13 +18,13 @@ app_user="${CODEX_DOCKER_USER:-${USER:-kanzhu}}"
 rust_toolchain="${RUST_TOOLCHAIN:-stable}"
 runner_version="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v5}"
 lock_sha="$(sha256sum "$main_dir/uv.lock" | awk '{print $1}')"
-build_context="$(mktemp -d "${TMPDIR:-/tmp}/mlsim-ui-runner-build.XXXXXX")"
+build_context="$(mktemp -d "${TMPDIR:-/tmp}/vibesim-ui-runner-build.XXXXXX")"
 trap 'rm -rf "$build_context"' EXIT
 
-mkdir -p "$build_context/mlsim"
-cp "$main_dir/pyproject.toml" "$build_context/mlsim/pyproject.toml"
-cp "$main_dir/uv.lock" "$build_context/mlsim/uv.lock"
-cp "$main_dir/justfile" "$build_context/mlsim/justfile"
+mkdir -p "$build_context/vibesim"
+cp "$main_dir/pyproject.toml" "$build_context/vibesim/pyproject.toml"
+cp "$main_dir/uv.lock" "$build_context/vibesim/uv.lock"
+cp "$main_dir/justfile" "$build_context/vibesim/justfile"
 
 docker build \
   -f "$ui_dir/docker/codex-runner.Dockerfile" \
@@ -39,5 +39,5 @@ docker build \
   --build-arg "APP_USER=$app_user" \
   --build-arg "RUST_TOOLCHAIN=$rust_toolchain" \
   --build-arg "RUNNER_VERSION=$runner_version" \
-  --build-arg "MLSIM_LOCK_SHA=$lock_sha" \
+  --build-arg "VIBESIM_LOCK_SHA=$lock_sha" \
   "$build_context"

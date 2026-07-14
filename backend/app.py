@@ -66,14 +66,14 @@ from .store import Store
 from .turn_result import collect_turn_event, new_turn_result
 
 configure_logging()
-LOG = logging.getLogger("mlsim_ui.app")
+LOG = logging.getLogger("vibesim_ui.app")
 
 UI_DIR = Path(__file__).resolve().parents[1]
 FRONTEND = UI_DIR / "frontend"
 FRONTEND_DIST = FRONTEND / "dist"
 SKILL_DOC = UI_DIR / "SKILL.md"
 
-app = FastAPI(title="MLSim Chat")
+app = FastAPI(title="VibeSim Chat")
 store = Store()
 
 _conv_locks: dict[str, asyncio.Lock] = {}

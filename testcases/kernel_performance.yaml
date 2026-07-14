@@ -1,5 +1,5 @@
 topic: kernel_performance
-description: Questions about measuring or reporting kernel performance through MLSim profiling.
+description: Questions about measuring or reporting kernel performance through VibeSim profiling.
 defaults:
   sandbox: workspace-write
   autonomous: true

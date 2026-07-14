@@ -59,7 +59,7 @@ def _docker_exec_prefix(container: str) -> list[str]:
         "-e",
         f"UV_CACHE_DIR={CODEX_DOCKER_UV_CACHE_DIR}",
         "-e",
-        f"MLSIM_EXPECTED_LOCK_SHA={MAIN_LOCK_SHA}",
+        f"VIBESIM_EXPECTED_LOCK_SHA={MAIN_LOCK_SHA}",
         "-e",
         f"DG_USE_LOCAL_VERSION={CODEX_DOCKER_DG_USE_LOCAL_VERSION}",
         "-e",

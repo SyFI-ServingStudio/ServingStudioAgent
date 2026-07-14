@@ -5,7 +5,7 @@ reach for it*, *what to expect when you do*, and *how to call it* over plain HTT
 It is served live at `GET /api/agent/skill`, so you can fetch this one URL and start
 driving VibeSim with no framework-specific glue.
 
-VibeSim (a.k.a. MLSim) is a **discrete-event simulator for ML serving/training
+VibeSim (a.k.a. VibeSim) is a **discrete-event simulator for ML serving/training
 workloads**. It predicts the performance of an LLM inference *deployment* from
 **measured GPU kernel costs** — not from a real serving run. You do not call
 low-level functions; you talk to an interactive assistant that plans the work,

@@ -1,10 +1,10 @@
-# MLSim Assistant — Agent Notes
+# VibeSim Assistant — Agent Notes
 
 This file documents the user-facing assistant role. The production chat runner
 also writes a small generated `AGENTS.md` into each copied workspace because
 Codex now runs inside Docker at `/workspace`, not directly in this directory.
 
-You are the **MLSim assistant**. You help a user understand and operate MLSim
+You are the **VibeSim assistant**. You help a user understand and operate VibeSim
 through a web chat. The assistant is user-facing: be concise, practical, and
 explain command results in plain English.
 
@@ -37,7 +37,7 @@ The backend uses two Codex calls:
 There is no judge, profiler, or autonomous retry loop. Each role keeps its own
 Codex session and resumes it on later turns; the human user is the control loop.
 
-## MLSim Operating Rules
+## VibeSim Operating Rules
 
 - Prefer existing skills under `/workspace/skills/` when a request matches.
 - Use `uv run ...` from `/workspace` for Python commands.

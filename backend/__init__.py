@@ -1,1 +1,1 @@
-"""Backend package for the MLSim chat UI (FastAPI over `codex exec`)."""
+"""Backend package for the VibeSim chat UI (FastAPI over `codex exec`)."""

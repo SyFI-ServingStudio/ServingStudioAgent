@@ -32,7 +32,7 @@ const EMPTY_STREAM: StreamState = {
 const SUGGESTIONS = [
   {
     label: "List the L1 profilers",
-    fill: "List the available MLSim L1 profilers.",
+    fill: "List the available VibeSim L1 profilers.",
   },
   {
     label: "Count missing single_gemm rows",
@@ -48,17 +48,17 @@ function App() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [title, setTitle] = useState("MLSim Assistant");
+  const [title, setTitle] = useState("VibeSim Assistant");
   const [sandboxModes, setSandboxModes] = useState<SandboxMode[]>([
     "read-only",
     "workspace-write",
     "danger-full-access",
   ]);
   const [sandbox, setSandbox] = useState<SandboxMode>(
-    (localStorage.getItem("mlsim_sandbox") as SandboxMode | null) || DEFAULT_SANDBOX,
+    (localStorage.getItem("vibesim_sandbox") as SandboxMode | null) || DEFAULT_SANDBOX,
   );
   const [autonomous, setAutonomous] = useState(
-    localStorage.getItem("mlsim_autonomous") === "1",
+    localStorage.getItem("vibesim_autonomous") === "1",
   );
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -76,11 +76,11 @@ function App() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("mlsim_sandbox", sandbox);
+    localStorage.setItem("vibesim_sandbox", sandbox);
   }, [sandbox]);
 
   useEffect(() => {
-    localStorage.setItem("mlsim_autonomous", autonomous ? "1" : "0");
+    localStorage.setItem("vibesim_autonomous", autonomous ? "1" : "0");
   }, [autonomous]);
 
   useEffect(() => {
@@ -122,7 +122,7 @@ function App() {
     setTitle(
       conversation.title && conversation.title !== "New chat"
         ? conversation.title
-        : "MLSim Assistant",
+        : "VibeSim Assistant",
     );
   }
 
@@ -133,7 +133,7 @@ function App() {
     const conversation = await createConversation(sandbox, autonomous);
     setCurrentId(conversation.id);
     setMessages([]);
-    setTitle("MLSim Assistant");
+    setTitle("VibeSim Assistant");
     await refreshSidebar();
     inputRef.current?.focus();
   }
@@ -146,7 +146,7 @@ function App() {
     if (currentId === id) {
       setCurrentId(null);
       setMessages([]);
-      setTitle("MLSim Assistant");
+      setTitle("VibeSim Assistant");
     }
     await refreshSidebar();
   }
@@ -311,7 +311,7 @@ function App() {
               id="input"
               rows={1}
               value={input}
-              placeholder="Message the MLSim assistant..."
+              placeholder="Message the VibeSim assistant..."
               autoComplete="off"
               onChange={(event) => updateInput(event.target.value)}
               onKeyDown={handleTextareaKey}
@@ -375,7 +375,7 @@ function Sidebar({
           <LogoMark />
         </div>
         <div className="brand-text">
-          <h1>MLSim</h1>
+          <h1>VibeSim</h1>
           <p>assistant</p>
         </div>
       </div>
@@ -431,9 +431,9 @@ function Welcome({
 }) {
   return (
     <div className="welcome">
-      <h2>Ask MLSim anything</h2>
+      <h2>Ask VibeSim anything</h2>
       <p>
-        Ask about MLSim or delegate changes. Each conversation edits an isolated copy of{" "}
+        Ask about VibeSim or delegate changes. Each conversation edits an isolated copy of{" "}
         <code>main/</code>, mounted into Docker for Codex.
       </p>
       <div className="chips">
