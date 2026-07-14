@@ -10,9 +10,35 @@ from .commands import run_checked
 from .config import LOG, MAIN_DIR, PROMPTS_DIR, agents_prompt_name, workspace_main_for
 from ..logging_config import log_event
 
-def _git_tracked_files() -> list[Path]:
-    result = run_checked(["git", "-C", str(MAIN_DIR), "ls-files", "-z"], timeout=60)
-    return [Path(raw) for raw in result.stdout.split("\0") if raw]
+def _tracked_entries() -> tuple[list[Path], list[Path]]:
+    """Return (files, gitlinks) tracked in ``main``.
+
+    ``git ls-files`` lists submodule gitlinks (mode ``160000``) as entries, but
+    they are directories on disk and cannot be copied as files, so callers copy
+    only ``files`` and skip ``gitlinks``.
+    """
+    result = run_checked(["git", "-C", str(MAIN_DIR), "ls-files", "-s", "-z"], timeout=60)
+    files: list[Path] = []
+    gitlinks: list[Path] = []
+    for raw in result.stdout.split("\0"):
+        if not raw:
+            continue
+        meta, _, path = raw.partition("\t")
+        mode = meta.split(" ", 1)[0]
+        (gitlinks if mode == "160000" else files).append(Path(path))
+    return files, gitlinks
+
+
+def main_submodule_paths() -> list[Path]:
+    """Relative paths of submodule gitlinks tracked in ``main`` that are checked
+    out on disk.
+
+    The workspace copy skips them (they are directories, not files, and the vLLM
+    checkout alone is ~5 GB); the docker layer instead bind-mounts them read-only
+    at the same path, so they are shared across conversations, not duplicated.
+    """
+    _files, gitlinks = _tracked_entries()
+    return [p for p in gitlinks if (MAIN_DIR / p).is_dir()]
 
 def _copy_tracked_file(rel_path: Path, dst_root: Path) -> None:
     src = MAIN_DIR / rel_path
@@ -110,7 +136,16 @@ def prepare_workspace(conversation_id: str, *, autonomous: bool = False) -> Path
     tmp_main = tmp_root / "main"
     tmp_main.mkdir(parents=True, exist_ok=True)
 
-    for rel_path in _git_tracked_files():
+    files, gitlinks = _tracked_entries()
+    if gitlinks:
+        log_event(
+            LOG,
+            "workspace.skip_submodules",
+            conversation_id=conversation_id,
+            count=len(gitlinks),
+            paths=[str(p) for p in gitlinks],
+        )
+    for rel_path in files:
         _copy_tracked_file(rel_path, tmp_main)
     _refresh_workspace_agent_files(tmp_main, autonomous=autonomous)
     _ensure_workspace_git(tmp_main)

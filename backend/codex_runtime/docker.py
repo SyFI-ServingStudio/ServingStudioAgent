@@ -22,12 +22,37 @@ from .config import (
     CODEX_DOCKER_UV_PROJECT_ENVIRONMENT,
     CONTAINER_RUNTIME_VERSION,
     LOG,
+    MAIN_DIR,
     MAIN_LOCK_SHA,
     WORKSPACES_DIR,
     codex_home_for,
     container_name,
 )
+from .workspace import main_submodule_paths
 from ..logging_config import log_event
+
+
+def _submodule_mount_args(conversation_id: str, container: str) -> list[str]:
+    """Read-only bind-mount main's submodules (vLLM/TraceLab, ~5 GB) at their paths.
+
+    The per-conversation workspace copy skips these gitlinks, so mounting the real
+    checkout read-only makes their content available in-container without a ~5 GB
+    per-conversation copy, while leaving the source tree untouched.
+    """
+    submodules = main_submodule_paths()
+    mounts: list[str] = []
+    for rel in submodules:
+        src = MAIN_DIR / rel
+        mounts.extend(["-v", f"{src}:/workspace/{rel.as_posix()}:ro"])
+    if mounts:
+        log_event(
+            LOG,
+            "container.submodule_mounts",
+            conversation_id=conversation_id,
+            container=container,
+            paths=[str(p) for p in submodules],
+        )
+    return mounts
 
 
 def remove_container(conversation_id: str) -> None:
@@ -266,6 +291,7 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
         f"{workspace_main}:/workspace",
         "-v",
         f"{auth_dir}:{CODEX_DOCKER_AUTH_DIR}",
+        *_submodule_mount_args(conversation_id, container),
         "-w",
         "/workspace",
         "-e",
