@@ -10,7 +10,9 @@ from .codex_events import (
     _codex_stderr_for_error,
     _find_rollout_file,
     _scan_rollout_agent_messages,
+    _scan_rollout_last_token_usage,
     _translate,
+    unwrap_commentary,
 )
 from .config import CODEX_IDLE_TIMEOUT, LOG
 from .exec_types import CodexEvent, CodexExecRequest
@@ -29,6 +31,9 @@ class CodexOutputCollector:
         self.rollout_offset = 0
         self.stderr_chunks: list[str] = []
         self.seen_intermediate_outputs: set[tuple[str, str]] = set()
+        # Cumulative token usage recorded just before this call, so the per-call
+        # delta is `end - baseline` (the Codex session is reused across rounds).
+        self.tokens_baseline: dict[str, int] | None = None
 
     def prime_rollout_offset(self) -> None:
         if not self.current_session_id:
@@ -40,6 +45,7 @@ class CodexOutputCollector:
         if self.rollout_file is not None:
             with contextlib.suppress(OSError):
                 self.rollout_offset = self.rollout_file.stat().st_size
+            self.tokens_baseline = _scan_rollout_last_token_usage(self.rollout_file)
 
     def append_stderr_line(self, line: bytes) -> None:
         self.stderr_chunks.append(line.decode("utf-8", "replace"))
@@ -95,6 +101,56 @@ class CodexOutputCollector:
                 f"{CODEX_IDLE_TIMEOUT:.0f}s without output"
             ),
         }
+
+    def usage_event(self, duration_ms: int) -> CodexEvent:
+        """Per-call wall-clock + token breakdown (prefix read / prefill / output)."""
+        tokens = self._token_delta()
+        log_event(
+            LOG,
+            "codex.usage",
+            conversation_id=self.request.conversation_id,
+            turn_id=self.request.turn_id,
+            role=self.request.label,
+            duration_ms=duration_ms,
+            read_tokens=tokens["read"],
+            prefill_tokens=tokens["prefill"],
+            output_tokens=tokens["output"],
+        )
+        return {
+            "kind": "usage",
+            "role": self.request.label,
+            "duration_ms": duration_ms,
+            "tokens": tokens,
+        }
+
+    def _token_delta(self) -> dict[str, int]:
+        """`end - baseline` cumulative usage, split into UI token buckets.
+
+        prefix read = cached input; prefill (cache write) = fresh input;
+        output = generated tokens. Missing rollout / negative deltas clamp to 0.
+        """
+        if self.rollout_file is None and self.current_session_id:
+            self.rollout_file = _find_rollout_file(
+                self.request.conversation_id,
+                self.current_session_id,
+            )
+        end = (
+            _scan_rollout_last_token_usage(self.rollout_file)
+            if self.rollout_file is not None
+            else None
+        ) or {}
+        base = self.tokens_baseline or {}
+
+        def field(usage: dict[str, int], key: str) -> int:
+            value = usage.get(key)
+            return int(value) if isinstance(value, (int, float)) else 0
+
+        read = field(end, "cached_input_tokens") - field(base, "cached_input_tokens")
+        prefill = (field(end, "input_tokens") - field(end, "cached_input_tokens")) - (
+            field(base, "input_tokens") - field(base, "cached_input_tokens")
+        )
+        output = field(end, "output_tokens") - field(base, "output_tokens")
+        return {"read": max(0, read), "prefill": max(0, prefill), "output": max(0, output)}
 
     def final_event(self, returncode: int | None) -> CodexEvent:
         raw_stderr_text = "".join(self.stderr_chunks).strip()
@@ -153,6 +209,7 @@ class CodexOutputCollector:
         return None
 
     def _intermediate_output_event(self, note_text: str, *, source: str) -> CodexEvent | None:
+        note_text = unwrap_commentary(note_text)
         if not note_text:
             return None
         note_key = (self.request.label, note_text)

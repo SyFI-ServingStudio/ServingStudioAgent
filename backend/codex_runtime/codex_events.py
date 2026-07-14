@@ -100,6 +100,65 @@ def _scan_rollout_agent_messages(
         return [], offset
 
 
+def unwrap_commentary(text: str) -> str:
+    """Clean an orchestrator commentary note for display.
+
+    The orchestrator sometimes narrates by emitting its whole decision envelope
+    (``{"action": ..., "message": ..., "task": ...}``) into the commentary
+    channel instead of plain prose. Show the human ``message`` when present; drop
+    a bare decision envelope (its task/decision is surfaced as its own card);
+    otherwise leave the text untouched.
+    """
+    stripped = text.strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        return text
+    try:
+        payload = json.loads(stripped)
+    except ValueError:
+        return text
+    if not isinstance(payload, dict):
+        return text
+    message = payload.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    if "action" in payload or "task" in payload:
+        return ""
+    return text
+
+
+def _scan_rollout_last_token_usage(rollout_file: Path) -> dict[str, int] | None:
+    """Return the most recent cumulative ``total_token_usage`` in a rollout log.
+
+    Codex writes ``token_count`` events (``event_msg`` payloads) whose
+    ``info.total_token_usage`` is the *session-cumulative* usage. Early events can
+    carry ``info: null`` (rate-limit-only pings) and are skipped. The last usable
+    one before a call is the baseline; the last after is the end — so a per-call
+    delta is ``end - baseline``.
+    """
+    try:
+        with rollout_file.open("rb") as file:
+            latest: dict[str, int] | None = None
+            for raw_line in file:
+                try:
+                    event = json.loads(raw_line.decode("utf-8", "replace"))
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") != "event_msg":
+                    continue
+                payload = event.get("payload")
+                if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                    continue
+                info = payload.get("info")
+                if not isinstance(info, dict):
+                    continue
+                usage = info.get("total_token_usage")
+                if isinstance(usage, dict):
+                    latest = usage
+            return latest
+    except OSError:
+        return None
+
+
 def _translate(ev: dict[str, Any]) -> list[dict[str, str]]:
     etype = ev.get("type")
     if etype == "thread.started" and ev.get("thread_id"):

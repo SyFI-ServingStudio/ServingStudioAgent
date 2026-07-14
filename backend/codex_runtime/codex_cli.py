@@ -49,6 +49,7 @@ class CodexExecCall:
 
     async def run(self) -> AsyncIterator[CodexEvent]:
         self._log_start()
+        started = asyncio.get_event_loop().time()
         process = await self._start_process()
         output = CodexOutputCollector(self.request)
         await self._write_prompt(process)
@@ -67,6 +68,10 @@ class CodexExecCall:
         if output.timed_out:
             yield output.timeout_event()
 
+        # Emit usage before final: the caller attaches it to the phase that is
+        # closing, then the final/implementer event caps the phase.
+        duration_ms = int((asyncio.get_event_loop().time() - started) * 1000)
+        yield output.usage_event(duration_ms)
         yield output.final_event(process.returncode)
 
     def _log_start(self) -> None:

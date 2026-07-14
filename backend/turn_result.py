@@ -2,7 +2,8 @@
 
 `run_turn` (backend/codex_runtime/turn.py) is an async generator that yields
 dict events with a `kind` of session/progress/error/intermediate_output/
-implementer/final. Both JSON entry points — `/api/eval` (backend/eval.py) and the
+decision/usage/implementer/final. Both JSON entry points — `/api/eval`
+(backend/eval.py) and the
 agent conversation turn (backend/app.py) — drain that stream into the same shape
 using `new_turn_result` + `collect_turn_event`. (The browser path streams the
 events as SSE instead and does not collect them here.)
@@ -34,6 +35,8 @@ def new_turn_result(
         "progress": [],
         "intermediate_outputs": [],
         "implementer_summaries": [],
+        "delegated_tasks": [],
+        "usages": [],
         "final": "",
         "ok": False,
         "error": "",
@@ -64,5 +67,17 @@ def collect_turn_event(result: dict[str, Any], event: dict[str, str]) -> None:
         )
     elif kind == "implementer":
         result["implementer_summaries"].append(str(event.get("text") or ""))
+    elif kind == "decision":
+        task = str(event.get("task") or "")
+        if task:
+            result["delegated_tasks"].append(task)
+    elif kind == "usage":
+        result["usages"].append(
+            {
+                "role": str(event.get("role") or ""),
+                "duration_ms": int(event.get("duration_ms") or 0),
+                "tokens": event.get("tokens") or {},
+            }
+        )
     elif kind == "final":
         result["final"] = str(event.get("text") or "")

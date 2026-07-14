@@ -28,10 +28,13 @@ unchanged and not token-gated.
 
 The message endpoint streams Server-Sent Events: `session` (role Codex session id),
 `progress` (transient activity lines), `intermediate_output` (assistant commentary),
-`implementer` (implementer summary), then `done` (stored final answer).
-`implementer` can repeat inside one browser turn when the orchestrator issues
-follow-up tasks. A per-conversation lock prevents two turns racing the same
-copied workspace/container.
+`decision` (orchestrator→implementer delegated task), `usage` (per-call duration +
+token breakdown), `implementer` (implementer summary), then `done` (stored final
+answer). `implementer`/`decision`/`usage` can repeat inside one browser turn when the
+orchestrator issues follow-up tasks. The render-relevant events are also persisted as
+an ordered `activity` list on the assistant message so a reload rebuilds the same role
+timeline. A per-conversation lock prevents two turns racing the same copied
+workspace/container.
 """
 
 from __future__ import annotations
@@ -426,6 +429,10 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
         async with lock:
             final_text: str | None = None
             intermediate_outputs: list[dict[str, str]] = []
+            # Ordered, render-relevant events persisted on the assistant message
+            # so a reload rebuilds the same role timeline. High-frequency,
+            # transient `progress` (tool-call) lines are intentionally excluded.
+            activity: list[dict] = []
             try:
                 async for ev in run_turn(
                     cid,
@@ -452,20 +459,39 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
                             {"role": ev.get("role"), "session_id": ev.get("session_id")},
                         )
                     elif kind == "implementer":
-                        yield _sse("implementer", {"text": ev.get("text", "")})
+                        impl_text = str(ev.get("text") or "")
+                        activity.append({"kind": "implementer", "text": impl_text})
+                        yield _sse("implementer", {"text": impl_text})
                     elif kind == "intermediate_output":
                         intermediate_output = {
                             "role": str(ev.get("role") or ""),
                             "text": str(ev.get("text") or ""),
                         }
                         intermediate_outputs.append(intermediate_output)
+                        activity.append({"kind": "intermediate_output", **intermediate_output})
                         yield _sse("intermediate_output", intermediate_output)
+                    elif kind == "decision":
+                        decision = {
+                            "action": str(ev.get("action") or ""),
+                            "task": str(ev.get("task") or ""),
+                        }
+                        activity.append({"kind": "decision", **decision})
+                        yield _sse("decision", decision)
+                    elif kind == "usage":
+                        usage = {
+                            "role": str(ev.get("role") or ""),
+                            "duration_ms": int(ev.get("duration_ms") or 0),
+                            "tokens": ev.get("tokens") or {},
+                        }
+                        activity.append({"kind": "usage", **usage})
+                        yield _sse("usage", usage)
                     elif kind in ("progress", "error"):
                         yield _sse("progress", {"text": ev.get("text", "")})
                     elif kind == "final":
                         final_text = ev.get("text") or ""
                 if final_text is None:
                     final_text = "(no answer)"
+                activity.append({"kind": "final", "text": final_text})
                 log_event(
                     LOG,
                     "turn.complete",
@@ -479,6 +505,7 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
                     "assistant",
                     final_text,
                     intermediate_outputs=intermediate_outputs or None,
+                    activity=activity or None,
                 )
                 yield _sse("done", {"text": final_text})
             except asyncio.CancelledError:
@@ -502,11 +529,13 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
                         }
                     },
                 )
+                activity.append({"kind": "final", "text": msg})
                 store.add_message(
                     cid,
                     "assistant",
                     msg,
                     intermediate_outputs=intermediate_outputs or None,
+                    activity=activity or None,
                 )
                 yield _sse("done", {"text": msg})
 

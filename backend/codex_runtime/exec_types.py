@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
-CodexEvent = dict[str, str]
+# UI-facing events are plain dicts keyed by ``kind``. Most values are strings,
+# but a few carry richer payloads (e.g. ``usage`` events hold an int duration
+# and a nested token-breakdown dict), so the value type is ``Any``.
+CodexEvent = dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)

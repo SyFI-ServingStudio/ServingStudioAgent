@@ -100,13 +100,11 @@ def compose_final_message(
     message: str,
     implementer_summaries: list[str],
 ) -> str:
-    if not implementer_summaries:
-        return message.strip()
-    sections = []
-    if implementer_summaries:
-        sections.append(
-            "### Implementer Summary\n\n"
-            f"{_format_implementer_summaries(implementer_summaries)}"
-        )
-    sections.append(f"### Message\n\n{message.strip()}")
-    return "\n\n".join(sections)
+    """The orchestrator's final answer, without the implementer summaries.
+
+    Implementer conclusions render as their own timeline cards (and stay
+    available separately as `implementer_summaries` on the JSON turn result), so
+    embedding them here would duplicate the same text inside the answer card.
+    `implementer_summaries` is kept in the signature for call-site compatibility.
+    """
+    return message.strip()

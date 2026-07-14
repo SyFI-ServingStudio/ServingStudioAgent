@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Any
 
 from .codex_cli import run_codex
 from .config import (
@@ -36,7 +37,7 @@ async def run_turn(
     turn_id: str = "",
     prompt_fingerprint: str = "",
     autonomous: bool = False,
-) -> AsyncIterator[dict[str, str]]:
+) -> AsyncIterator[dict[str, Any]]:
     """Run one user turn through orchestrator/implementer handoffs."""
     turn_id = turn_id or "unknown"
     mode = sandbox if sandbox in EXECUTION_MODES else DEFAULT_SANDBOX
@@ -174,7 +175,9 @@ async def run_turn(
             return
 
         task = decision["task"]
-        yield {"kind": "progress", "text": "implementer: starting delegated task..."}
+        # Surface the delegated task itself (the orchestrator→implementer handoff
+        # card) rather than a generic "starting..." progress line.
+        yield {"kind": "decision", "action": "run_implementer", "task": task}
         implementer_text: str | None = None
         async for ev in run_codex(
             container,
