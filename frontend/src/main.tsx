@@ -414,7 +414,7 @@ function Sidebar({
       </nav>
 
       <footer className="side-foot">
-        <span className="dot" /> docker · codex · <code>gpt-5.3-codex-spark</code>
+        <span className="dot" /> docker · codex · <code>gpt-5.5</code>
       </footer>
     </aside>
   );
