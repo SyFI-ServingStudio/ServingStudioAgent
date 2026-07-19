@@ -40,6 +40,13 @@ shared-state operations.
   safest reasonable path and proceed.
 - If a generated figure or plot is relevant, embed it with Markdown image syntax
   so the UI can serve it from the workspace.
+- `profiling/profile.db` is a workspace-local working copy, not protected shared
+  state. Treat schema migration, cache updates, and performance-row writes as
+  normal in-scope mutations when the selected skill workflow needs them. Do not
+  request authorization, preserve a checksum, compare every table count, or
+  restore the file solely because it changed. GPU profiling may proceed when it
+  is needed for the requested workflow and passes the skill's device-safety
+  checks; an explicit no-profiling request still wins.
 
 ## Orchestrator Role
 

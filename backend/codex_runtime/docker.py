@@ -22,6 +22,7 @@ from .config import (
     CODEX_DOCKER_UV_PROJECT_ENVIRONMENT,
     CONTAINER_RUNTIME_VERSION,
     LOG,
+    MAIN_BUILD_SHA,
     MAIN_DIR,
     MAIN_LOCK_SHA,
     WORKSPACES_DIR,
@@ -121,6 +122,7 @@ RUNTIME_VERSION={shlex.quote(CONTAINER_RUNTIME_VERSION)}
 RUNTIME_IMAGE={shlex.quote(CODEX_DOCKER_IMAGE)}
 EXPECTED_DG_USE_LOCAL_VERSION={shlex.quote(CODEX_DOCKER_DG_USE_LOCAL_VERSION)}
 EXPECTED_LOCK_SHA={shlex.quote(MAIN_LOCK_SHA)}
+EXPECTED_BUILD_SHA={shlex.quote(MAIN_BUILD_SHA)}
 GPU_REQUEST={shlex.quote(CODEX_DOCKER_GPUS)}
 
 if [ "$(id -u)" != "$APP_UID" ] || [ "$(id -g)" != "$APP_GID" ]; then
@@ -144,6 +146,21 @@ fi
 if [ "${{VIBESIM_BAKED_LOCK_SHA:-}}" != "$EXPECTED_LOCK_SHA" ]; then
   echo "Docker runner was prewarmed for lock ${{VIBESIM_BAKED_LOCK_SHA:-unset}}, expected $EXPECTED_LOCK_SHA" >&2
   exit 127
+fi
+
+if [ -n "$EXPECTED_BUILD_SHA" ] && [ "${{VIBESIM_BAKED_BUILD_SHA:-}}" != "$EXPECTED_BUILD_SHA" ]; then
+  echo "Docker runner has build seed ${{VIBESIM_BAKED_BUILD_SHA:-unset}}, expected $EXPECTED_BUILD_SHA" >&2
+  exit 127
+fi
+
+if [ ! -d "${{VIBESIM_BAKED_TARGET:-}}/release" ]; then
+  echo "prebuilt Docker image '$RUNTIME_IMAGE' is missing its Cargo target seed" >&2
+  exit 127
+fi
+
+if [ ! -d /workspace/target ]; then
+  mkdir -p /workspace/target
+  cp -a --reflink=auto "${{VIBESIM_BAKED_TARGET}}/." /workspace/target/
 fi
 
 if [ ! -d "${{UV_PROJECT_ENVIRONMENT:-}}" ] || [ ! -w "${{UV_PROJECT_ENVIRONMENT:-}}" ]; then
@@ -174,6 +191,7 @@ echo "$RUNTIME_VERSION" > /tmp/vibesim_ui_runtime_version
 echo "$RUNTIME_IMAGE" > /tmp/vibesim_ui_runtime_image
 echo "$GPU_REQUEST" > /tmp/vibesim_ui_gpu_request
 echo "$EXPECTED_LOCK_SHA" > /tmp/vibesim_ui_main_lock_sha
+echo "$EXPECTED_BUILD_SHA" > /tmp/vibesim_ui_main_build_sha
 touch /tmp/vibesim_ui_codex_ready
 """
 
@@ -201,6 +219,7 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
         runtime_version=CONTAINER_RUNTIME_VERSION,
         image=CODEX_DOCKER_IMAGE,
         main_lock_sha=MAIN_LOCK_SHA,
+        main_build_sha=MAIN_BUILD_SHA,
     )
     if container_running(container):
         gpu_ready_clause = (
@@ -228,8 +247,10 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
                     f"&& test \"$(cat /tmp/vibesim_ui_runtime_image 2>/dev/null)\" = {CODEX_DOCKER_IMAGE!r} "
                     f"&& test \"$(cat /tmp/vibesim_ui_gpu_request 2>/dev/null)\" = {CODEX_DOCKER_GPUS!r} "
                     f"&& test \"$(cat /tmp/vibesim_ui_main_lock_sha 2>/dev/null)\" = {MAIN_LOCK_SHA!r} "
+                    f"&& test \"$(cat /tmp/vibesim_ui_main_build_sha 2>/dev/null)\" = {MAIN_BUILD_SHA!r} "
                     f"&& test \"${{DG_USE_LOCAL_VERSION:-}}\" = {CODEX_DOCKER_DG_USE_LOCAL_VERSION!r} "
                     f"&& test \"${{VIBESIM_BAKED_LOCK_SHA:-}}\" = {MAIN_LOCK_SHA!r} "
+                    f"&& test \"${{VIBESIM_BAKED_BUILD_SHA:-}}\" = {MAIN_BUILD_SHA!r} "
                     f"&& test -d {CODEX_DOCKER_UV_PROJECT_ENVIRONMENT!r} "
                     f"&& test -w {CODEX_DOCKER_UV_PROJECT_ENVIRONMENT!r} "
                     "&& command -v bash >/dev/null 2>&1 "
@@ -337,7 +358,7 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
             "-lc",
             _docker_init_script(),
         ],
-        timeout=120,
+        timeout=300,
     )
     log_event(LOG, "container.ensure.ready", conversation_id=conversation_id, container=container)
     return container

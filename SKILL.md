@@ -19,7 +19,7 @@ and returns a written answer plus any artifacts (logs, JSON, plots) it produced.
 | Capability | What it gives you | Typical ask |
 |---|---|---|
 | **Simulate a deployment** | Throughput, TTFT, TPOT, GPU utilization for a full run from a preset + workload. Covers dense **and** MoE models; TP/EP/PP parallelism; PD (prefill/decode) and AFD (attention/FFN) disaggregation. | "Simulate Llama-3-8B dense on 1×H200 under a Poisson workload at rate 48 and report throughput and TPOT." |
-| **Predict per-iteration cost** | Cost of one explicit batch shape *without* the scheduler/clock (no workload). | "Predict the per-iteration decode cost for Llama-3-8B on H200 at batch=256, kv_len=4096." |
+| **Predict per-iteration cost** | Cost of one explicit batch shape at fixed current KV lengths *without* prefill progression, the scheduler/clock, or a workload. | "Predict the per-iteration decode cost for Llama-3-8B on H200 at batch=256, kv_len=4096." |
 | **Profile a kernel** | Measured latency/throughput of a real kernel on a real GPU, from `profile.db`. | "On H200, bf16 torch GEMM for N=K=4096 across batch [32…8192]?" |
 | **Look up GPU hardware specs** | Catalog-backed mem/BW, dense TFLOPS by dtype, interconnect, price. | "For H200: memory, dense compute per dtype, NVLink BW?" |
 | **Estimate KV-cache capacity** | Bytes/token, max cached tokens, max concurrent requests. | "How many concurrent Llama-3-70B requests fit in 141 GB KV cache at 8k context?" |
@@ -65,17 +65,34 @@ VibeSim is an **interactive assistant**, not a fire-and-forget function. Plan fo
   assumptions without asking.)
 - **Turns are synchronous and can take minutes.** Profiling and full simulations
   are the expensive paths. Each `POST .../messages` blocks until the turn
-  finishes — set a generous client read timeout (≥ 30 min).
+  finishes — set a client read timeout of at least 30 minutes and wait for that
+  same request to return. Do not replace it with manual GET polling, start a
+  duplicate turn, or infer completion from elapsed time.
 - **A conversation has continuity.** Within one conversation the isolated
   workspace and the assistant's sessions persist across turns, so you can "run a
   sim this turn, then analyze its artifacts next turn." Across *different*
   conversations there is no shared state.
-- **It guards expensive/destructive/shared-state actions.** Even in autonomous
-  mode it stops for missing credentials or shared-state authorization. Three
-  sandbox modes gate what it may do: `read-only`, `workspace-write` (default),
-  `danger-full-access`.
+- **The conversation workspace is isolated working state.** Compiling, creating
+  configs and logs, running launchers, and updating the workspace-local
+  `profile.db` are normal in-scope actions. They do not modify the caller's
+  workspace. Three sandbox modes gate execution: `read-only`, `workspace-write`
+  (default), and `danger-full-access`.
+- **Use `workspace-write` for execution.** Any request that may run a simulator,
+  compile code, delegate to an implementer, or generate artifacts must create
+  the conversation in `workspace-write`. Use `read-only` only for a
+  conclusively static catalog or source lookup.
 - **Artifacts land in the workspace** and are fetched by API (§5) using the
   conversation's id — no host filesystem access required.
+- **Treat the workspace-local profile database as mutable.** Schema metadata,
+  cache rows, and performance rows may change when the selected workflow needs
+  them. Do not require authorization, checksum preservation, or before/after
+  row-count proof solely because `profile.db` changes. GPU profiling still
+  follows the applicable skill and idle-device safety checks; an explicit
+  no-profiling request still wins.
+- **Keep the conversation for the human.** Calling agents must never DELETE a
+  conversation. Preserve it on success and failure, and report its id so a
+  human can observe history, progress, and artifacts. Human or service-operator
+  cleanup is outside the calling agent's workflow.
 - **Boundaries.** Costs come from kernels measured on a *specific* GPU in
   `profile.db`; an uncovered kernel/GPU must be profiled or added first. A
   simulation is a **prediction**, not a measurement.
@@ -94,7 +111,8 @@ VibeSim is an **interactive assistant**, not a fire-and-forget function. Plan fo
 ## 5. How to invoke — the conversation interface
 
 This is the **real interactive interface**. Lifecycle: create a conversation,
-send turns, read each `final`, reply/steer as needed, delete when done.
+send turns, wait for each synchronous response, read each `final`, reply/steer
+as needed, and leave the conversation intact for human observation.
 
 ### Create — `POST /api/agent/conversations`
 
@@ -116,7 +134,8 @@ Body: `{"text": "..."}` (`text` required). Optional `sandbox_mode` and
 `autonomous_mode` are **per-turn overrides**; when omitted they inherit the
 conversation's create-time settings, so a `read-only` conversation stays
 read-only unless a turn opts up. **Synchronous** — returns after the turn
-completes.
+completes. Set a read timeout of at least 30 minutes and wait for this request
+itself; do not convert the call into manual GET polling.
 
 ```bash
 curl -sS http://<host>:8765/api/agent/conversations/3f9a1c.../messages \
@@ -142,14 +161,16 @@ Response fields:
 human would: if it asks a question or you want to refine, just POST another
 message to the same `cid`. The workspace and sessions carry over.
 
-### Inspect / clean up
+### Inspect and preserve
 
 ```bash
 curl -sS -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   http://<host>:8765/api/agent/conversations/3f9a1c...        # full history
-curl -sS -X DELETE -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
-  http://<host>:8765/api/agent/conversations/3f9a1c...        # delete + cleanup
 ```
+
+Return the conversation id to the human and leave the conversation intact on
+both success and failure. Do not call DELETE; human or service-operator cleanup
+owns that destructive lifecycle step.
 
 ---
 
@@ -192,7 +213,7 @@ use: there is no conversation, no cross-turn continuity, and it defaults to
 | POST | `/api/agent/conversations` | token | Create an interactive conversation. |
 | POST | `/api/agent/conversations/{cid}/messages` | token | Run one turn; synchronous JSON. |
 | GET | `/api/agent/conversations/{cid}` | token | Full conversation history. |
-| DELETE | `/api/agent/conversations/{cid}` | token | Delete + clean up the conversation. |
+| DELETE | `/api/agent/conversations/{cid}` | token | Human/operator cleanup only; calling agents must not invoke it. |
 | GET | `/api/agent/artifacts` | token | List files in a conversation's workspace. |
 | GET | `/api/agent/artifacts/download` | token | Download one workspace file. |
 

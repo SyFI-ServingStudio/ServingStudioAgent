@@ -16,15 +16,25 @@ app_uid="${CODEX_DOCKER_UID:-$(id -u)}"
 app_gid="${CODEX_DOCKER_GID:-$(id -g)}"
 app_user="${CODEX_DOCKER_USER:-${USER:-kanzhu}}"
 rust_toolchain="${RUST_TOOLCHAIN:-stable}"
-runner_version="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v6}"
+runner_version="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v8}"
 lock_sha="$(sha256sum "$main_dir/uv.lock" | awk '{print $1}')"
+build_sha="$({
+  git -C "$main_dir" rev-parse HEAD
+  git -C "$main_dir" diff --binary HEAD -- Cargo.toml Cargo.lock .cargo simulator analyzer
+} | sha256sum | awk '{print $1}')"
 build_context="$(mktemp -d "${TMPDIR:-/tmp}/vibesim-ui-runner-build.XXXXXX")"
 trap 'rm -rf "$build_context"' EXIT
 
 mkdir -p "$build_context/vibesim"
-cp "$main_dir/pyproject.toml" "$build_context/vibesim/pyproject.toml"
-cp "$main_dir/uv.lock" "$build_context/vibesim/uv.lock"
-cp "$main_dir/justfile" "$build_context/vibesim/justfile"
+# Copy the current contents of tracked files, including intentional working-tree
+# edits, while skipping submodule gitlinks and all untracked build artifacts.
+while IFS= read -r -d '' rel_path; do
+  source_path="$main_dir/$rel_path"
+  if [ -f "$source_path" ] || [ -L "$source_path" ]; then
+    mkdir -p "$build_context/vibesim/$(dirname "$rel_path")"
+    cp -a "$source_path" "$build_context/vibesim/$rel_path"
+  fi
+done < <(git -C "$main_dir" ls-files -z)
 
 docker build \
   -f "$ui_dir/docker/codex-runner.Dockerfile" \
@@ -40,4 +50,9 @@ docker build \
   --build-arg "RUST_TOOLCHAIN=$rust_toolchain" \
   --build-arg "RUNNER_VERSION=$runner_version" \
   --build-arg "VIBESIM_LOCK_SHA=$lock_sha" \
+  --build-arg "VIBESIM_BUILD_SHA=$build_sha" \
   "$build_context"
+
+if [ "${CODEX_SKIP_RUNNER_IMAGE_TEST:-0}" != "1" ]; then
+  "$ui_dir/scripts/test-codex-runner-image.sh" build
+fi

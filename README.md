@@ -27,11 +27,19 @@ does not match the current checkout, `run.sh` builds it once from
 image. The image is based on CUDA 12.8 devel and includes Node/Codex, `uv`, git,
 Rust stable (`cargo`/`rustc`), `just`, `nvcc`, Python 3.12 dev headers, native
 build tools, and a prewarmed VibeSim Python environment at `/opt/vibesim-venv`.
-The prewarmed env is built from `../main/pyproject.toml`, `../main/uv.lock`,
-and `../main/justfile`, so the default profiling stack, including pinned
-DeepGEMM, is already installed before any conversation starts. The Docker
-container and `codex exec` both run as the host UID/GID with `HOME` set to the
-matching `/home/<user>` path.
+The image build copies the tracked `main` tree, prewarms the default profiling
+stack (including pinned DeepGEMM), and compiles the full Cargo release target for
+the simulator and analyzer. That target is stored at
+`/opt/vibesim-cache/target`. A new conversation copies this seed into its empty
+`/workspace/target` before Codex starts, so the launcher's ordinary Cargo build
+still performs its freshness checks while reusing the expensive dependency
+artifacts. The analyzer intentionally tracks the workspace Git HEAD for embedded
+provenance, so a fresh conversation may rerun its build script and final link;
+it should not recompile DataFusion/Arrow from scratch. The source is compiled at
+the runtime path `/workspace`, and the image is invalidated by a fingerprint of
+the tracked Cargo/simulator/analyzer inputs.
+The Docker container and `codex exec` both run as the host UID/GID with `HOME`
+set to the matching `/home/<user>` path.
 
 To rebuild the runner image explicitly:
 
@@ -39,6 +47,36 @@ To rebuild the runner image explicitly:
 cd user-facing-ui
 CODEX_FORCE_IMAGE_BUILD=1 ./run.sh
 ```
+
+### Runner image acceptance test
+
+After building the image, run the non-GPU acceptance test:
+
+```bash
+cd user-facing-ui
+./scripts/test-codex-runner-image.sh build
+```
+
+This creates a temporary copy of the tracked `main` tree and runs the image as
+the same non-root UID/GID used in production. It requires writable Cargo and uv
+caches, verifies the repository-selected mold linker and `protoc`, seeds the
+workspace from the image's complete release `target`, verifies Cargo accepts the
+seed for the simulator and analyzer, and runs the launcher's read-only cache
+report without analyzer output.
+The temporary workspace and container are removed when the test exits; the real
+`main` checkout and its `profile.db` are never mounted into the container.
+
+On a GPU host with a warm tracked kernel catalog, the stronger mode also runs a
+real Llama timing prediction and requires its analyzer artifact:
+
+```bash
+./scripts/test-codex-runner-image.sh timing
+```
+
+The GPU mode is explicit so ordinary image builds remain hardware-independent.
+The image builder runs the `build` gate after `docker build`; set
+`CODEX_SKIP_RUNNER_IMAGE_TEST=1` only for an explicitly incomplete development
+build that must not be treated as ready for agent conversations.
 
 Frontend-only development can run Vite against the same backend:
 
@@ -119,7 +157,7 @@ stateless; for testcases).
 | POST | `/api/agent/conversations` | token | Create an interactive conversation. |
 | POST | `/api/agent/conversations/{cid}/messages` | token | Run one turn; synchronous JSON. |
 | GET | `/api/agent/conversations/{cid}` | token | Full conversation history. |
-| DELETE | `/api/agent/conversations/{cid}` | token | Delete + clean up. |
+| DELETE | `/api/agent/conversations/{cid}` | token | Human/operator cleanup only; calling agents must not invoke it. |
 | GET | `/api/agent/artifacts` | token | List files in a conversation's workspace. |
 | GET | `/api/agent/artifacts/download` | token | Download one workspace file. |
 | POST | `/api/eval` | token | Single-turn evaluation only (not interactive). |
@@ -144,15 +182,20 @@ curl -sS "http://127.0.0.1:8765/api/agent/conversations/$cid/messages" \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"text":"Simulate Llama-3-8B dense on 1xH200 at Poisson rate 48; report throughput and TPOT."}'
 
-# 3. delete when done
-curl -sS -X DELETE -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
-  "http://127.0.0.1:8765/api/agent/conversations/$cid"
+# 3. retain $cid for human observation and artifact retrieval
+echo "VibeSim conversation: $cid"
 ```
 
 A turn is **synchronous** and may take minutes (profiling/sim) — set a generous
-client timeout. The turn response includes `final`, `ok`, `conversation_id`,
+client timeout of at least 30 minutes and wait for the same request to return;
+do not replace it with manual GET polling. The turn response includes `final`,
+`ok`, `conversation_id`,
 `implementer_summaries`, `intermediate_outputs`, `progress`, and `sessions`.
 `scripts/agent_conversation_smoke.sh` exercises this whole path.
+
+Calling agents must leave conversations intact on success and failure so a
+human can inspect progress and artifacts. The DELETE endpoint is reserved for
+explicit human/operator cleanup.
 
 ### Single-turn eval — `POST /api/eval` (evaluation only)
 
@@ -283,8 +326,11 @@ Docker GPU forwarding.
 - `RUST_TOOLCHAIN` — Rust toolchain baked into the image by the build script,
   default `stable`.
 - `CODEX_RUNNER_IMAGE_VERSION` — expected image label, default
-  `prebuilt-codex-runner-v6`. `run.sh` rebuilds when this label differs or
-  when the baked `main/uv.lock` hash label differs from the current checkout.
+  `prebuilt-codex-runner-v8`. `run.sh` rebuilds when this label differs, when
+  the baked `main/uv.lock` hash differs, or when the tracked Cargo workspace,
+  simulator, or analyzer build-input fingerprint differs from the checkout.
+- `CODEX_SKIP_RUNNER_IMAGE_TEST=1` — skip the post-build non-GPU runner
+  acceptance gate for an explicitly incomplete development build.
 - `CODEX_FORCE_IMAGE_BUILD=1` — force `run.sh` to rebuild the runner image.
 - `CODEX_SKIP_IMAGE_BUILD=1` — skip the image existence check/build step.
 - `CODEX_IDLE_TIMEOUT` — per Codex call idle timeout in seconds, default `600`.
