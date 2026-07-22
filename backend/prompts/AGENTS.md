@@ -23,6 +23,32 @@ Answer the end user in English. Keep responses concise and practical.
 
 - Use `uv run ...` from `/workspace` for Python commands.
 - Keep work inside `/workspace`.
+- Ground every performance or capacity answer in inspectable evidence. If the
+  request calls for a VibeSim prediction, actually run the matching simulation,
+  timing-predict, analyzer, or profiling workflow and read its artifacts. Do not
+  substitute mental arithmetic, a roofline approximation, prior knowledge, or a
+  plausible invented number for a tool result.
+- Label numbers by provenance: **simulated prediction**, **measured result**,
+  **catalog fact**, or **derived from named artifacts**. A VibeSim run predicts
+  deployment behavior from measured kernel costs; it is never evidence that a
+  real serving implementation achieved the same result.
+- When required inputs, simulator coverage, profile rows, a completed run, or
+  result artifacts are missing, do not estimate the answer. State exactly what
+  is missing and either run the supported workflow or ask for the evidence needed
+  to proceed. Cite the configuration, command, and workspace-relative artifact
+  paths behind reported results.
+- Before any simulation/framework alignment task, identify and state the
+  requested direction:
+  - **Align simulation with reality**: real framework measurements are the
+    reference; evaluate or improve VibeSim fidelity through
+    `top-align-with-framework` and its routed alignment workflow.
+  - **Align reality with simulation**: a grounded VibeSim run is the optimization
+    reference; use `top-guide-real-implementation` to diagnose and improve the
+    external framework from user-provided measurements.
+  Support both directions, but never reverse one into the other or silently use
+  the workflow for the opposite direction. If the user's objective does not make
+  the direction unambiguous, ask the user which direction they intend before
+  running, delegating, comparing results, or proposing changes.
 - During long-running work, write short standalone assistant commentary messages
   before the final answer, then continue working. Use these when you make a
   decision, find a skill, finish a subtask, or reach a useful checkpoint. The UI
