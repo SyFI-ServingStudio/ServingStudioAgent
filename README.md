@@ -89,6 +89,18 @@ npm run dev
 # then open http://<host>:5173
 ```
 
+When the backend is intentionally bound only to a Docker bridge address, expose
+the same process on loopback without starting a second backend:
+
+```bash
+uv run python scripts/localhost_forward.py \
+  --upstream-host 172.19.0.1 --upstream-port 8765
+# then open http://127.0.0.1:8765
+```
+
+Run the forwarder under the host's process supervisor or a detached tmux
+session when the loopback endpoint must outlive the current shell.
+
 ## Turn Flow
 
 ```text
@@ -99,6 +111,7 @@ browser
      - link /workspace/.codex/skills -> /workspace/skills
   -> seed workspaces/<id>/codex-home from host ~/.codex auth/config
   -> docker run -v workspaces/<id>/main:/workspace -v workspaces/<id>/codex-home:/home/<user>/.codex
+     - when host HF_HOME is set, mount it read-only at /model and set container HF_HOME=/model
      using the prebuilt CODEX_DOCKER_IMAGE
   -> codex exec/resume as orchestrator
        action=user_message   -> return ask/notify text to the user
@@ -106,6 +119,9 @@ browser
   -> explicit handoff of implementer summary back to orchestrator
        action=user_message   -> return reviewed result to the user
        action=run_implementer -> continue with another bounded implementer task
+  -> retain the active turn independently of the browser connection
+       GET .../stream -> replay and continue after refresh
+       POST .../cancel -> send SIGINT to Codex and stop the whole turn
   -> stream progress + final text back to browser
 ```
 
@@ -352,6 +368,9 @@ Docker GPU forwarding.
   are isolated from other conversations.
 - `CODEX_DOCKER_UV_CACHE_DIR` — where `uv` stores cache inside Docker, default
   `/opt/vibesim-uv-cache`, also baked into the runner image.
+- `HF_HOME` — optional host Hugging Face cache directory. When set, every
+  conversation container bind-mounts it read-only at `/model` and receives
+  `HF_HOME=/model`. A configured path must already exist.
 - `FRONTEND_SKIP_BUILD=1` — skip `npm ci` / `npm run build` in `run.sh`, useful
   when `npm run dev` is serving the frontend separately.
 - `PORT`, `HOST` — FastAPI bind settings used by `run.sh`.
