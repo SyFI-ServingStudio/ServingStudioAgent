@@ -43,8 +43,8 @@ Answer the end user in English. Keep responses concise and practical.
     reference; evaluate or improve VibeSim fidelity through
     `top-align-with-framework` and its routed alignment workflow.
   - **Align reality with simulation**: a grounded VibeSim run is the optimization
-    reference; use `top-guide-real-implementation` to diagnose and improve the
-    external framework from user-provided measurements.
+    reference; use `top-compose-real-framework-from-sim` to diagnose, edit, and
+    validate the external framework.
   Support both directions, but never reverse one into the other or silently use
   the workflow for the opposite direction. If the user's objective does not make
   the direction unambiguous, ask the user which direction they intend before
