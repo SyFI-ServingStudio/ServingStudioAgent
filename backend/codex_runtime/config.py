@@ -37,6 +37,9 @@ CODEX_DOCKER_UV_PROJECT_ENVIRONMENT = os.environ.get(
     "/opt/vibesim-venv",
 )
 CODEX_DOCKER_UV_CACHE_DIR = os.environ.get("CODEX_DOCKER_UV_CACHE_DIR", "/opt/vibesim-uv-cache")
+_host_hf_home = os.environ.get("HF_HOME", "").strip()
+HOST_HF_HOME = Path(_host_hf_home).expanduser() if _host_hf_home else None
+CODEX_DOCKER_HF_HOME = "/model"
 CONTAINER_RUNTIME_VERSION = os.environ.get("CODEX_RUNNER_IMAGE_VERSION", "prebuilt-codex-runner-v8")
 ORCHESTRATOR_SCHEMA_IN_CONTAINER = "/workspace/.codex/orchestrator.schema.json"
 AGENTS_PROMPT_DEFAULT = "AGENTS.md"

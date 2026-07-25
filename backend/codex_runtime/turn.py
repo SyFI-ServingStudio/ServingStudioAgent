@@ -37,6 +37,7 @@ async def run_turn(
     turn_id: str = "",
     prompt_fingerprint: str = "",
     autonomous: bool = False,
+    peer_dir: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run one user turn through orchestrator/implementer handoffs."""
     turn_id = turn_id or "unknown"
@@ -77,7 +78,9 @@ async def run_turn(
     else:
         yield {"kind": "progress", "text": "starting Docker Codex container..."}
     container_started = loop.time()
-    container_task = asyncio.create_task(asyncio.to_thread(ensure_container, conversation_id, _workspace_main, mode))
+    container_task = asyncio.create_task(
+        asyncio.to_thread(ensure_container, conversation_id, _workspace_main, mode, peer_dir)
+    )
     while True:
         done, _pending = await asyncio.wait({container_task}, timeout=10)
         if done:

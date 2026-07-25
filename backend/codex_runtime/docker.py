@@ -14,6 +14,7 @@ from .config import (
     CODEX_DOCKER_DG_USE_LOCAL_VERSION,
     CODEX_DOCKER_GID,
     CODEX_DOCKER_GPUS,
+    CODEX_DOCKER_HF_HOME,
     CODEX_DOCKER_HOME,
     CODEX_DOCKER_IMAGE,
     CODEX_DOCKER_UID,
@@ -21,6 +22,7 @@ from .config import (
     CODEX_DOCKER_UV_CACHE_DIR,
     CODEX_DOCKER_UV_PROJECT_ENVIRONMENT,
     CONTAINER_RUNTIME_VERSION,
+    HOST_HF_HOME,
     LOG,
     MAIN_BUILD_SHA,
     MAIN_DIR,
@@ -54,6 +56,60 @@ def _submodule_mount_args(conversation_id: str, container: str) -> list[str]:
             paths=[str(p) for p in submodules],
         )
     return mounts
+
+
+def _candidate_mount_args(conversation_id: str, container: str, peer_dir: str | None) -> list[str]:
+    """Read-only bind-mount THIS conversation's co-evolution peer at /candidate.
+
+    ``peer_dir`` is the vibe-serve candidate workspace that the caller which
+    created this conversation asked to expose (persisted per-conversation at
+    create time — see ``store.create(peer_workspace=...)``). Only the conversation
+    that was created with a peer gets the mount; every other conversation is
+    unaffected. A missing/absent directory -> no mount.
+    """
+    if not peer_dir:
+        return []
+    peer = Path(peer_dir).expanduser()
+    if not peer.is_dir():
+        log_event(
+            LOG,
+            "container.candidate_mount_skipped",
+            conversation_id=conversation_id,
+            container=container,
+            path=str(peer),
+        )
+        return []
+    log_event(
+        LOG,
+        "container.candidate_mount",
+        conversation_id=conversation_id,
+        container=container,
+        path=str(peer),
+    )
+    return ["-v", f"{peer.resolve()}:/candidate:ro"]
+
+
+def _model_mount_args(conversation_id: str, container: str) -> list[str]:
+    """Expose the configured host Hugging Face cache read-only at ``/model``."""
+    if HOST_HF_HOME is None:
+        return []
+    if not HOST_HF_HOME.is_dir():
+        raise RuntimeError(f"configured HF_HOME directory not found: {HOST_HF_HOME}")
+    resolved_hf_home = HOST_HF_HOME.resolve()
+    log_event(
+        LOG,
+        "container.model_mount",
+        conversation_id=conversation_id,
+        container=container,
+        path=str(resolved_hf_home),
+        destination=CODEX_DOCKER_HF_HOME,
+    )
+    return [
+        "-v",
+        f"{resolved_hf_home}:{CODEX_DOCKER_HF_HOME}:ro",
+        "-e",
+        f"HF_HOME={CODEX_DOCKER_HF_HOME}",
+    ]
 
 
 def remove_container(conversation_id: str) -> None:
@@ -124,6 +180,8 @@ EXPECTED_DG_USE_LOCAL_VERSION={shlex.quote(CODEX_DOCKER_DG_USE_LOCAL_VERSION)}
 EXPECTED_LOCK_SHA={shlex.quote(MAIN_LOCK_SHA)}
 EXPECTED_BUILD_SHA={shlex.quote(MAIN_BUILD_SHA)}
 GPU_REQUEST={shlex.quote(CODEX_DOCKER_GPUS)}
+MODEL_HOME={shlex.quote(CODEX_DOCKER_HF_HOME)}
+MODEL_MOUNT_REQUIRED={"1" if HOST_HF_HOME is not None else "0"}
 
 if [ "$(id -u)" != "$APP_UID" ] || [ "$(id -g)" != "$APP_GID" ]; then
   echo "Docker runner is not using the requested UID/GID: got $(id -u):$(id -g), expected $APP_UID:$APP_GID" >&2
@@ -187,6 +245,13 @@ if [ "$GPU_REQUEST" != "" ]; then
   fi
 fi
 
+if [ "$MODEL_MOUNT_REQUIRED" = "1" ]; then
+  if [ "${{HF_HOME:-}}" != "$MODEL_HOME" ] || [ ! -d "$MODEL_HOME" ] || [ ! -r "$MODEL_HOME" ]; then
+    echo "Docker runner is missing the configured Hugging Face cache at $MODEL_HOME" >&2
+    exit 127
+  fi
+fi
+
 echo "$RUNTIME_VERSION" > /tmp/vibesim_ui_runtime_version
 echo "$RUNTIME_IMAGE" > /tmp/vibesim_ui_runtime_image
 echo "$GPU_REQUEST" > /tmp/vibesim_ui_gpu_request
@@ -204,7 +269,9 @@ def container_running(container: str) -> bool:
     )
     return result.returncode == 0 and result.stdout.strip().lower() == "true"
 
-def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> str:
+def ensure_container(
+    conversation_id: str, workspace_main: Path, mode: str, peer_dir: str | None = None
+) -> str:
     container = container_name(conversation_id)
     log_event(
         LOG,
@@ -226,6 +293,13 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
             "&& command -v nvidia-smi >/dev/null 2>&1 "
             "&& nvidia-smi -L >/dev/null 2>&1 "
             if CODEX_DOCKER_GPUS
+            else ""
+        )
+        model_ready_clause = (
+            f"&& test \"${{HF_HOME:-}}\" = {CODEX_DOCKER_HF_HOME!r} "
+            f"&& test -d {CODEX_DOCKER_HF_HOME!r} "
+            f"&& test -r {CODEX_DOCKER_HF_HOME!r} "
+            if HOST_HF_HOME is not None
             else ""
         )
         ready = subprocess.run(
@@ -267,6 +341,7 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
                     "&& command -v codex >/dev/null 2>&1 "
                     f"&& test -d {CODEX_DOCKER_AUTH_DIR!r} "
                     f"{gpu_ready_clause}"
+                    f"{model_ready_clause}"
                 ),
             ],
             capture_output=True,
@@ -313,6 +388,8 @@ def ensure_container(conversation_id: str, workspace_main: Path, mode: str) -> s
         "-v",
         f"{auth_dir}:{CODEX_DOCKER_AUTH_DIR}",
         *_submodule_mount_args(conversation_id, container),
+        *_candidate_mount_args(conversation_id, container, peer_dir),
+        *_model_mount_args(conversation_id, container),
         "-w",
         "/workspace",
         "-e",

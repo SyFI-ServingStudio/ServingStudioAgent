@@ -33,6 +33,7 @@ class Store:
                     conv.setdefault("messages", [])
                     conv.setdefault("codex_sessions", {})
                     conv.setdefault("autonomous", False)
+                    conv.setdefault("peer_workspace", None)
                     self._conversations[conv["id"]] = conv
         except (json.JSONDecodeError, OSError):
             # Corrupt/unreadable store: start empty rather than crash the server.
@@ -68,6 +69,7 @@ class Store:
         prompt_fingerprint: str | None = None,
         *,
         autonomous: bool = False,
+        peer_workspace: str | None = None,
     ) -> dict[str, Any]:
         now = time.time()
         conv = {
@@ -76,6 +78,10 @@ class Store:
             "sandbox": sandbox,
             "autonomous": autonomous,
             "prompt_fingerprint": prompt_fingerprint,
+            # Co-evolution: host path to the caller's (vibe-serve) candidate
+            # workspace to bind read-only at /candidate when this conversation's
+            # container launches. None -> no reverse mount.
+            "peer_workspace": peer_workspace,
             "codex_sessions": {},
             "messages": [],
             "created_at": now,
