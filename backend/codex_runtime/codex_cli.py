@@ -184,10 +184,32 @@ class CodexExecCall:
             role=self.request.label,
             pid=process.pid,
         )
+        # Killing the host-side `docker exec` client does not stop the process it
+        # launched in the container. Interrupt the one Codex call allowed by the
+        # per-conversation lock first, matching terminal Ctrl+C semantics.
+        await self._signal_container_codex("INT")
         if process.returncode is None:
-            process.kill()
-            with contextlib.suppress(Exception):
+            try:
                 await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                await self._signal_container_codex("TERM")
+                process.kill()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(process.wait(), timeout=5)
+
+    async def _signal_container_codex(self, signal_name: str) -> None:
+        signal_process = await asyncio.create_subprocess_exec(
+            "docker",
+            "exec",
+            self.request.container,
+            "sh",
+            "-c",
+            f"pkill -{signal_name} -f '[c]odex exec' || true",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(signal_process.wait(), timeout=5)
 
     async def _finish_stderr_task(self, stderr_task: asyncio.Task[None]) -> None:
         if not stderr_task.done():

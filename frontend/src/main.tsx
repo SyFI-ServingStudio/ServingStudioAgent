@@ -11,10 +11,12 @@ import { Cube, PaperPlaneRight, Plus, Stop, Trash } from "@phosphor-icons/react"
 
 import {
   DEFAULT_SANDBOX,
+  cancelTurn,
   createConversation,
   deleteConversation,
   getConversation,
   listConversations,
+  resumeTurn,
   streamTurn,
 } from "./api";
 import { cn } from "./lib/cn";
@@ -76,6 +78,9 @@ function App() {
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesRef = useRef<HTMLElement | null>(null);
+  // Follow streaming output only while the reader stays near the bottom.
+  // Once they scroll up to inspect history, live events must not steal position.
+  const shouldAutoScrollRef = useRef(true);
 
   useEffect(() => {
     refreshSidebar().then((items) => {
@@ -94,11 +99,27 @@ function App() {
   }, [autonomous]);
 
   useEffect(() => {
-    messagesRef.current?.scrollTo({
-      top: messagesRef.current.scrollHeight,
-      behavior: "smooth",
+    if (!shouldAutoScrollRef.current) {
+      return;
+    }
+    const animationFrame = requestAnimationFrame(() => {
+      const messagesElement = messagesRef.current;
+      if (messagesElement && shouldAutoScrollRef.current) {
+        messagesElement.scrollTop = messagesElement.scrollHeight;
+      }
     });
+    return () => cancelAnimationFrame(animationFrame);
   }, [messages, live]);
+
+  function handleMessagesScroll(): void {
+    const messagesElement = messagesRef.current;
+    if (!messagesElement) {
+      return;
+    }
+    const distanceFromBottom =
+      messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom <= 48;
+  }
 
   async function refreshSidebar(): Promise<ConversationSummary[]> {
     const data = await listConversations();
@@ -114,12 +135,14 @@ function App() {
     if (streaming) {
       return;
     }
+    shouldAutoScrollRef.current = true;
     const conversation = await getConversation(id);
     if (!conversation) {
       await refreshSidebar();
       return;
     }
     loadConversation(conversation);
+    void reconnectTurn(id);
   }
 
   function loadConversation(conversation: Conversation): void {
@@ -141,6 +164,7 @@ function App() {
       return;
     }
     const conversation = await createConversation(sandbox, autonomous);
+    shouldAutoScrollRef.current = true;
     setCurrentId(conversation.id);
     setMessages([]);
     setTitle("VibeSim Assistant");
@@ -177,6 +201,7 @@ function App() {
     }
 
     setInput("");
+    shouldAutoScrollRef.current = true;
     if (inputRef.current) {
       inputRef.current.style.height = "auto";
     }
@@ -194,25 +219,11 @@ function App() {
         text,
         sandbox,
         autonomous,
-        {
-          progress: (line) => {
-            if (!line) {
-              return;
-            }
-            setLive((current) => ({ ...(current || EMPTY_LIVE), progress: line }));
-          },
-          event: (turnEvent) => {
-            setLive((current) => ({
-              ...(current || EMPTY_LIVE),
-              events: [...(current?.events || []), turnEvent],
-            }));
-          },
-        },
+        liveTurnHandlers(),
         controller.signal,
       );
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        localOnlyAssistant = { role: "assistant", content: "Stopped." };
         setLive((current) => ({ ...(current || EMPTY_LIVE), stopped: true }));
       } else {
         localOnlyAssistant = {
@@ -238,9 +249,75 @@ function App() {
     }
   }
 
-  function stopTurn(): void {
-    if (streaming && abortRef.current) {
-      abortRef.current.abort();
+  function liveTurnHandlers() {
+    return {
+      progress: (line: string) => {
+        if (!line) {
+          return;
+        }
+        setLive((current) => ({ ...(current || EMPTY_LIVE), progress: line }));
+      },
+      event: (turnEvent: TurnEvent) => {
+        setLive((current) => ({
+          ...(current || EMPTY_LIVE),
+          events: [...(current?.events || []), turnEvent],
+        }));
+      },
+    };
+  }
+
+  async function reconnectTurn(conversationId: string): Promise<void> {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLive({ ...EMPTY_LIVE });
+    setStreaming(true);
+    try {
+      const attached = await resumeTurn(
+        conversationId,
+        liveTurnHandlers(),
+        controller.signal,
+      );
+      if (!attached) {
+        return;
+      }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setLive((current) => ({
+          ...(current || EMPTY_LIVE),
+          progress: `(error reconnecting to backend: ${String(error)})`,
+        }));
+      }
+    } finally {
+      if (abortRef.current !== controller) {
+        return;
+      }
+      setStreaming(false);
+      abortRef.current = null;
+      const conversation = await getConversation(conversationId);
+      if (conversation) {
+        loadConversation(conversation);
+      }
+      setLive(null);
+      await refreshSidebar();
+      inputRef.current?.focus();
+    }
+  }
+
+  async function stopTurn(): Promise<void> {
+    const conversationId = currentId;
+    const controller = abortRef.current;
+    if (!streaming || !conversationId || !controller) {
+      return;
+    }
+    try {
+      await cancelTurn(conversationId);
+    } catch (error) {
+      setLive((current) => ({
+        ...(current || EMPTY_LIVE),
+        progress: `(error stopping backend turn: ${String(error)})`,
+      }));
+    } finally {
+      controller.abort();
     }
   }
 
@@ -291,7 +368,11 @@ function App() {
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <section ref={messagesRef} className="scroll flex-1 space-y-6 overflow-y-auto px-6 py-7">
+          <section
+            ref={messagesRef}
+            className="scroll flex-1 space-y-6 overflow-y-auto px-6 py-7"
+            onScroll={handleMessagesScroll}
+          >
             {isEmpty ? (
               <Welcome
                 autonomous={autonomous}

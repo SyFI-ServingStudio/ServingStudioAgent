@@ -71,6 +71,39 @@ export async function streamTurn(
     body: JSON.stringify({ text, sandbox_mode: sandbox, autonomous_mode: autonomous }),
     signal,
   });
+  await consumeTurnStream(response, handlers);
+}
+
+export async function resumeTurn(
+  conversationId: string,
+  handlers: StreamHandlers,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const response = await fetch(`/api/conversations/${conversationId}/stream`, {
+    signal,
+  });
+  if (response.status === 409) {
+    return false;
+  }
+  await consumeTurnStream(response, handlers);
+  return true;
+}
+
+export async function cancelTurn(conversationId: string): Promise<boolean> {
+  const response = await fetch(`/api/conversations/${conversationId}/cancel`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(`failed to stop turn: ${response.status}`);
+  }
+  const result = (await response.json()) as { cancelled?: boolean };
+  return Boolean(result.cancelled);
+}
+
+async function consumeTurnStream(
+  response: Response,
+  handlers: StreamHandlers,
+): Promise<void> {
   if (!response.ok || !response.body) {
     handlers.done?.(`(request failed: ${response.status})`);
     return;

@@ -8,6 +8,8 @@ Endpoints:
   GET    /api/conversations/{cid}       -> full conversation (messages, role sessions)
   DELETE /api/conversations/{cid}       -> delete
   POST   /api/conversations/{cid}/messages  -> SSE stream of one turn
+  GET    /api/conversations/{cid}/stream    -> reconnect to the active turn
+  POST   /api/conversations/{cid}/cancel    -> cancel the active turn
   POST   /api/eval                          -> JSON single-turn eval (evaluation only)
   GET    /api/agent/skill                    -> agent skill doc (SKILL.md, public)
   GET    /api/agent/artifacts                -> list files in a run's workspace
@@ -26,7 +28,9 @@ agent can learn the contract before it holds a token. The
 namespace on purpose). The browser SSE endpoints (/api/conversations*) are
 unchanged and not token-gated.
 
-The message endpoint streams Server-Sent Events: `session` (role Codex session id),
+Browser turns run independently of any one HTTP connection, so a refreshed page
+can replay and continue the active SSE stream. The message endpoint streams
+Server-Sent Events: `session` (role Codex session id),
 `progress` (transient activity lines), `intermediate_output` (assistant commentary),
 `decision` (orchestrator→implementer delegated task), `usage` (per-call duration +
 token breakdown), `implementer` (implementer summary), then `done` (stored final
@@ -43,7 +47,9 @@ import asyncio
 import json
 import logging
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import AsyncIterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
@@ -63,6 +69,7 @@ from .codex_runtime.config import (
 )
 from .codex_runtime.docker import cleanup_conversation
 from .codex_runtime.turn import run_turn
+from .codex_runtime.workspace import prepare_workspace
 from .eval import EvalRequest, run_eval
 from .logging_config import compact_text, configure_logging, log_event
 from .store import Store
@@ -84,6 +91,54 @@ _conv_locks: dict[str, asyncio.Lock] = {}
 
 def _lock_for(cid: str) -> asyncio.Lock:
     return _conv_locks.setdefault(cid, asyncio.Lock())
+
+
+@dataclass
+class ActiveBrowserTurn:
+    """A browser turn whose lifetime is independent of any one SSE connection."""
+
+    turn_id: str
+    events: list[str] = field(default_factory=list)
+    condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+    task: asyncio.Task[None] | None = None
+    finished: bool = False
+
+    async def publish(self, event: str) -> None:
+        async with self.condition:
+            self.events.append(event)
+            self.condition.notify_all()
+
+    async def finish(self) -> None:
+        async with self.condition:
+            self.finished = True
+            self.condition.notify_all()
+
+    async def stream(self) -> AsyncIterator[str]:
+        """Replay the turn so a refreshed browser can attach without losing output."""
+        cursor = 0
+        while True:
+            async with self.condition:
+                await self.condition.wait_for(
+                    lambda: cursor < len(self.events) or self.finished
+                )
+                pending_events = self.events[cursor:]
+                cursor = len(self.events)
+                finished = self.finished
+            for event in pending_events:
+                yield event
+            if finished:
+                return
+
+
+_active_browser_turns: dict[str, ActiveBrowserTurn] = {}
+
+
+def _turn_stream_response(active_turn: ActiveBrowserTurn) -> StreamingResponse:
+    return StreamingResponse(
+        active_turn.stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def require_token(authorization: str | None = Header(default=None)) -> None:
@@ -112,6 +167,12 @@ def _autonomous_for_turn(conv: dict, requested_autonomous: bool) -> bool:
 class NewConversation(BaseModel):
     sandbox: str = DEFAULT_SANDBOX
     autonomous: bool = False
+    # Co-evolution (used by vibe-serve): host path to the caller's candidate
+    # workspace to bind read-only at /candidate in this conversation's container.
+    peer_workspace: str | None = None
+    # Materialize workspaces/<cid>/main eagerly at create (instead of lazily on
+    # the first message) so the caller can bind-mount it read-only immediately.
+    eager: bool = False
 
 
 class SendMessage(BaseModel):
@@ -237,8 +298,23 @@ def agent_create_conversation(body: NewConversation, _: None = Depends(require_t
         sandbox=body.sandbox,
         autonomous=body.autonomous,
         prompt_fingerprint=fingerprint,
+        peer_workspace=body.peer_workspace,
+        eager=body.eager,
     )
-    return store.create(cid, body.sandbox, fingerprint, autonomous=body.autonomous)
+    conv = store.create(
+        cid,
+        body.sandbox,
+        fingerprint,
+        autonomous=body.autonomous,
+        peer_workspace=body.peer_workspace,
+    )
+    if body.eager:
+        # Materialize the isolated workspace now so the caller can bind-mount it
+        # read-only before its own container launches (the container itself is
+        # still started lazily on the first message). Return its host path.
+        workspace_main = prepare_workspace(cid, autonomous=body.autonomous)
+        conv["workspace_path"] = str(workspace_main)
+    return conv
 
 
 @app.get("/api/agent/conversations/{cid}")
@@ -314,6 +390,7 @@ async def agent_send_message(
                 turn_id=turn_id,
                 prompt_fingerprint=fingerprint,
                 autonomous=autonomous,
+                peer_dir=conv.get("peer_workspace"),
             ):
                 if ev.get("kind") == "session":
                     store.set_codex_session(cid, ev.get("role", ""), ev.get("session_id"))
@@ -396,6 +473,9 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
     conv = store.get(cid)
     if conv is None:
         raise HTTPException(status_code=404, detail="conversation not found")
+    active_turn = _active_browser_turns.get(cid)
+    if active_turn is not None and not active_turn.finished:
+        raise HTTPException(status_code=409, detail="conversation already has an active turn")
 
     text = body.text.strip()
     if not text:
@@ -424,82 +504,164 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
         sessions_reset=bool(previous_sessions) and not sessions,
     )
 
-    async def event_gen():
-        lock = _lock_for(cid)
-        async with lock:
-            final_text: str | None = None
-            intermediate_outputs: list[dict[str, str]] = []
-            # Ordered, render-relevant events persisted on the assistant message
-            # so a reload rebuilds the same role timeline. High-frequency,
-            # transient `progress` (tool-call) lines are intentionally excluded.
-            activity: list[dict] = []
-            try:
-                async for ev in run_turn(
-                    cid,
-                    text,
-                    sandbox=sandbox,
-                    sessions=sessions,
-                    turn_id=turn_id,
-                    prompt_fingerprint=current_prompt_fingerprint,
-                    autonomous=autonomous,
-                ):
-                    kind = ev.get("kind")
-                    if kind == "session":
-                        store.set_codex_session(cid, ev.get("role", ""), ev.get("session_id"))
-                        log_event(
-                            LOG,
-                            "turn.session",
-                            conversation_id=cid,
-                            turn_id=turn_id,
-                            role=ev.get("role", ""),
-                            codex_session_id=ev.get("session_id"),
-                        )
-                        yield _sse(
+    active_turn = ActiveBrowserTurn(turn_id=turn_id)
+    _active_browser_turns[cid] = active_turn
+    active_turn.task = asyncio.create_task(
+        _run_browser_turn(
+            cid=cid,
+            text=text,
+            sandbox=sandbox,
+            sessions=sessions,
+            turn_id=turn_id,
+            prompt_fingerprint=current_prompt_fingerprint,
+            autonomous=autonomous,
+            active_turn=active_turn,
+        )
+    )
+    return _turn_stream_response(active_turn)
+
+
+@app.get("/api/conversations/{cid}/stream")
+async def resume_message_stream(cid: str) -> StreamingResponse:
+    if store.get(cid) is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    active_turn = _active_browser_turns.get(cid)
+    if active_turn is None or active_turn.finished:
+        raise HTTPException(status_code=409, detail="conversation has no active turn")
+    return _turn_stream_response(active_turn)
+
+
+@app.post("/api/conversations/{cid}/cancel")
+async def cancel_message(cid: str) -> dict:
+    if store.get(cid) is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    active_turn = _active_browser_turns.get(cid)
+    if active_turn is None or active_turn.task is None or active_turn.task.done():
+        return {"cancelled": False}
+    active_turn.task.cancel()
+    try:
+        await active_turn.task
+    except asyncio.CancelledError:
+        pass
+    return {"cancelled": True}
+
+
+async def _run_browser_turn(
+    *,
+    cid: str,
+    text: str,
+    sandbox: str,
+    sessions: dict[str, str],
+    turn_id: str,
+    prompt_fingerprint: str,
+    autonomous: bool,
+    active_turn: ActiveBrowserTurn,
+) -> None:
+    lock = _lock_for(cid)
+    async with lock:
+        final_text: str | None = None
+        intermediate_outputs: list[dict[str, str]] = []
+        # Persist render-relevant events on completion; retain all SSE events in
+        # ActiveBrowserTurn during execution so a refreshed client can replay them.
+        activity: list[dict] = []
+        try:
+            async for ev in run_turn(
+                cid,
+                text,
+                sandbox=sandbox,
+                sessions=sessions,
+                turn_id=turn_id,
+                prompt_fingerprint=prompt_fingerprint,
+                autonomous=autonomous,
+            ):
+                kind = ev.get("kind")
+                if kind == "session":
+                    store.set_codex_session(cid, ev.get("role", ""), ev.get("session_id"))
+                    log_event(
+                        LOG,
+                        "turn.session",
+                        conversation_id=cid,
+                        turn_id=turn_id,
+                        role=ev.get("role", ""),
+                        codex_session_id=ev.get("session_id"),
+                    )
+                    await active_turn.publish(
+                        _sse(
                             "session",
                             {"role": ev.get("role"), "session_id": ev.get("session_id")},
                         )
-                    elif kind == "implementer":
-                        impl_text = str(ev.get("text") or "")
-                        activity.append({"kind": "implementer", "text": impl_text})
-                        yield _sse("implementer", {"text": impl_text})
-                    elif kind == "intermediate_output":
-                        intermediate_output = {
-                            "role": str(ev.get("role") or ""),
-                            "text": str(ev.get("text") or ""),
-                        }
-                        intermediate_outputs.append(intermediate_output)
-                        activity.append({"kind": "intermediate_output", **intermediate_output})
-                        yield _sse("intermediate_output", intermediate_output)
-                    elif kind == "decision":
-                        decision = {
-                            "action": str(ev.get("action") or ""),
-                            "task": str(ev.get("task") or ""),
-                        }
-                        activity.append({"kind": "decision", **decision})
-                        yield _sse("decision", decision)
-                    elif kind == "usage":
-                        usage = {
-                            "role": str(ev.get("role") or ""),
-                            "duration_ms": int(ev.get("duration_ms") or 0),
-                            "tokens": ev.get("tokens") or {},
-                        }
-                        activity.append({"kind": "usage", **usage})
-                        yield _sse("usage", usage)
-                    elif kind in ("progress", "error"):
-                        yield _sse("progress", {"text": ev.get("text", "")})
-                    elif kind == "final":
-                        final_text = ev.get("text") or ""
-                if final_text is None:
-                    final_text = "(no answer)"
+                    )
+                elif kind == "implementer":
+                    implementer_text = str(ev.get("text") or "")
+                    activity.append({"kind": "implementer", "text": implementer_text})
+                    await active_turn.publish(
+                        _sse("implementer", {"text": implementer_text})
+                    )
+                elif kind == "intermediate_output":
+                    intermediate_output = {
+                        "role": str(ev.get("role") or ""),
+                        "text": str(ev.get("text") or ""),
+                    }
+                    intermediate_outputs.append(intermediate_output)
+                    activity.append({"kind": "intermediate_output", **intermediate_output})
+                    await active_turn.publish(
+                        _sse("intermediate_output", intermediate_output)
+                    )
+                elif kind == "decision":
+                    decision = {
+                        "action": str(ev.get("action") or ""),
+                        "task": str(ev.get("task") or ""),
+                    }
+                    activity.append({"kind": "decision", **decision})
+                    await active_turn.publish(_sse("decision", decision))
+                elif kind == "usage":
+                    usage = {
+                        "role": str(ev.get("role") or ""),
+                        "duration_ms": int(ev.get("duration_ms") or 0),
+                        "tokens": ev.get("tokens") or {},
+                    }
+                    activity.append({"kind": "usage", **usage})
+                    await active_turn.publish(_sse("usage", usage))
+                elif kind in ("progress", "error"):
+                    await active_turn.publish(
+                        _sse("progress", {"text": ev.get("text", "")})
+                    )
+                elif kind == "final":
+                    final_text = ev.get("text") or ""
+            if final_text is None:
+                final_text = "(no answer)"
+            log_event(
+                LOG,
+                "turn.complete",
+                conversation_id=cid,
+                turn_id=turn_id,
+                final_len=len(final_text),
+                final_preview=compact_text(final_text),
+            )
+        except asyncio.CancelledError:
+            final_text = "Stopped."
+            log_event(
+                LOG,
+                "turn.cancelled",
+                conversation_id=cid,
+                turn_id=turn_id,
+            )
+        except Exception as exc:  # surface backend failures to the UI
+            final_text = f"(backend error: {exc})"
+            LOG.exception(
+                "turn.error",
+                extra={
+                    "event_fields": {
+                        "event": "turn.error",
+                        "conversation_id": cid,
+                        "turn_id": turn_id,
+                        "error": str(exc),
+                    }
+                },
+            )
+        finally:
+            if final_text is not None:
                 activity.append({"kind": "final", "text": final_text})
-                log_event(
-                    LOG,
-                    "turn.complete",
-                    conversation_id=cid,
-                    turn_id=turn_id,
-                    final_len=len(final_text),
-                    final_preview=compact_text(final_text),
-                )
                 store.add_message(
                     cid,
                     "assistant",
@@ -507,43 +669,10 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
                     intermediate_outputs=intermediate_outputs or None,
                     activity=activity or None,
                 )
-                yield _sse("done", {"text": final_text})
-            except asyncio.CancelledError:
-                log_event(
-                    LOG,
-                    "turn.cancelled",
-                    conversation_id=cid,
-                    turn_id=turn_id,
-                )
-                raise
-            except Exception as exc:  # surface backend failures to the UI
-                msg = f"(backend error: {exc})"
-                LOG.exception(
-                    "turn.error",
-                    extra={
-                        "event_fields": {
-                            "event": "turn.error",
-                            "conversation_id": cid,
-                            "turn_id": turn_id,
-                            "error": str(exc),
-                        }
-                    },
-                )
-                activity.append({"kind": "final", "text": msg})
-                store.add_message(
-                    cid,
-                    "assistant",
-                    msg,
-                    intermediate_outputs=intermediate_outputs or None,
-                    activity=activity or None,
-                )
-                yield _sse("done", {"text": msg})
-
-    return StreamingResponse(
-        event_gen(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+                await active_turn.publish(_sse("done", {"text": final_text}))
+            await active_turn.finish()
+            if _active_browser_turns.get(cid) is active_turn:
+                _active_browser_turns.pop(cid, None)
 
 
 # Mounted last so it doesn't shadow the API routes above. The directory may not
