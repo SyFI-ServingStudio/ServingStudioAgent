@@ -38,12 +38,20 @@ export interface ChatMessage {
   activity?: TurnEvent[] | null;
 }
 
+export interface MessagePage {
+  start_index: number;
+  end_index: number;
+  total_messages: number;
+  has_more: boolean;
+}
+
 export interface Conversation {
   id: string;
   title: string;
   sandbox?: SandboxMode | string;
   autonomous?: boolean;
   messages: ChatMessage[];
+  message_page?: MessagePage;
   codex_sessions?: Record<string, string>;
 }
 

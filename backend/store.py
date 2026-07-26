@@ -7,6 +7,7 @@ next to the backend package, written atomically so a restart reloads prior chats
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import time
@@ -61,6 +62,46 @@ class Store:
         with self._lock:
             conv = self._conversations.get(cid)
             return json.loads(json.dumps(conv)) if conv else None
+
+    def get_message_page(
+        self,
+        cid: str,
+        *,
+        before: int | None,
+        limit: int,
+    ) -> dict[str, Any] | None:
+        """Return conversation metadata plus one non-mutating message-history page.
+
+        ``before`` is an absolute position in the append-only message list. The
+        returned half-open range ends there, or at the current end when omitted.
+        Old conversations need no migration because the cursor is derived solely
+        from their existing message order.
+        """
+        with self._lock:
+            conv = self._conversations.get(cid)
+            if conv is None:
+                return None
+
+            all_messages = conv.get("messages") or []
+            total_messages = len(all_messages)
+            end_index = total_messages if before is None else min(before, total_messages)
+            start_index = max(0, end_index - limit)
+
+            # Copy only the selected messages: browser pagination must also avoid
+            # cloning a potentially multi-megabyte history on every page request.
+            page = {
+                key: copy.deepcopy(value)
+                for key, value in conv.items()
+                if key != "messages"
+            }
+            page["messages"] = copy.deepcopy(all_messages[start_index:end_index])
+            page["message_page"] = {
+                "start_index": start_index,
+                "end_index": end_index,
+                "total_messages": total_messages,
+                "has_more": start_index > 0,
+            }
+            return page
 
     def create(
         self,

@@ -2,6 +2,7 @@ import React, {
   FormEvent,
   KeyboardEvent,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -37,6 +38,11 @@ interface LiveTurn {
   events: TurnEvent[];
   progress: string;
   stopped: boolean;
+}
+
+interface PendingScrollRestore {
+  scrollHeight: number;
+  scrollTop: number;
 }
 
 const EMPTY_LIVE: LiveTurn = { events: [], progress: "", stopped: false };
@@ -75,9 +81,18 @@ function App() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [live, setLive] = useState<LiveTurn | null>(null);
+  const [messageStartIndex, setMessageStartIndex] = useState(0);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [olderMessagesError, setOlderMessagesError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesRef = useRef<HTMLElement | null>(null);
+  const olderMessagesSentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadingOlderMessagesRef = useRef(false);
+  const olderMessagesRequestSequenceRef = useRef(0);
+  const selectedConversationIdRef = useRef<string | null>(null);
+  const pendingScrollRestoreRef = useRef<PendingScrollRestore | null>(null);
   // Follow streaming output only while the reader stays near the bottom.
   // Once they scroll up to inspect history, live events must not steal position.
   const shouldAutoScrollRef = useRef(true);
@@ -111,6 +126,47 @@ function App() {
     return () => cancelAnimationFrame(animationFrame);
   }, [messages, live]);
 
+  useLayoutEffect(() => {
+    const restore = pendingScrollRestoreRef.current;
+    const messagesElement = messagesRef.current;
+    if (!restore || !messagesElement) {
+      return;
+    }
+    messagesElement.scrollTop =
+      restore.scrollTop + (messagesElement.scrollHeight - restore.scrollHeight);
+    pendingScrollRestoreRef.current = null;
+  }, [messages]);
+
+  useEffect(() => {
+    const messagesElement = messagesRef.current;
+    const sentinelElement = olderMessagesSentinelRef.current;
+    if (
+      !messagesElement ||
+      !sentinelElement ||
+      !currentId ||
+      !hasOlderMessages ||
+      streaming ||
+      olderMessagesError
+    ) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadOlderMessages();
+        }
+      },
+      {
+        root: messagesElement,
+        // Start fetching shortly before the reader reaches the exact top.
+        rootMargin: "160px 0px 0px",
+      },
+    );
+    observer.observe(sentinelElement);
+    return () => observer.disconnect();
+  }, [currentId, hasOlderMessages, messageStartIndex, olderMessagesError, streaming]);
+
   function handleMessagesScroll(): void {
     const messagesElement = messagesRef.current;
     if (!messagesElement) {
@@ -136,6 +192,7 @@ function App() {
       return;
     }
     shouldAutoScrollRef.current = true;
+    selectedConversationIdRef.current = id;
     const conversation = await getConversation(id);
     if (!conversation) {
       await refreshSidebar();
@@ -146,8 +203,16 @@ function App() {
   }
 
   function loadConversation(conversation: Conversation): void {
+    olderMessagesRequestSequenceRef.current += 1;
+    loadingOlderMessagesRef.current = false;
+    pendingScrollRestoreRef.current = null;
+    selectedConversationIdRef.current = conversation.id;
     setCurrentId(conversation.id);
     setMessages(conversation.messages || []);
+    setMessageStartIndex(conversation.message_page?.start_index || 0);
+    setHasOlderMessages(Boolean(conversation.message_page?.has_more));
+    setLoadingOlderMessages(false);
+    setOlderMessagesError("");
     if (conversation.sandbox) {
       setSandbox(conversation.sandbox as SandboxMode);
     }
@@ -159,14 +224,77 @@ function App() {
     );
   }
 
+  async function loadOlderMessages(): Promise<void> {
+    const conversationId = currentId;
+    if (
+      !conversationId ||
+      !hasOlderMessages ||
+      streaming ||
+      loadingOlderMessagesRef.current
+    ) {
+      return;
+    }
+
+    loadingOlderMessagesRef.current = true;
+    const requestSequence = ++olderMessagesRequestSequenceRef.current;
+    setLoadingOlderMessages(true);
+    setOlderMessagesError("");
+    try {
+      const olderConversation = await getConversation(conversationId, messageStartIndex);
+      if (
+        !olderConversation ||
+        selectedConversationIdRef.current !== conversationId ||
+        olderMessagesRequestSequenceRef.current !== requestSequence
+      ) {
+        return;
+      }
+      const olderPage = olderConversation.message_page;
+      if (!olderPage || olderPage.end_index !== messageStartIndex) {
+        throw new Error("backend returned a non-contiguous history page");
+      }
+
+      const messagesElement = messagesRef.current;
+      if (messagesElement) {
+        pendingScrollRestoreRef.current = {
+          scrollHeight: messagesElement.scrollHeight,
+          scrollTop: messagesElement.scrollTop,
+        };
+      }
+      shouldAutoScrollRef.current = false;
+      setMessages((currentMessages) => [
+        ...(olderConversation.messages || []),
+        ...currentMessages,
+      ]);
+      setMessageStartIndex(olderPage.start_index);
+      setHasOlderMessages(olderPage.has_more);
+    } catch (error) {
+      if (olderMessagesRequestSequenceRef.current === requestSequence) {
+        setOlderMessagesError(`Could not load older messages: ${String(error)}`);
+      }
+    } finally {
+      if (olderMessagesRequestSequenceRef.current === requestSequence) {
+        loadingOlderMessagesRef.current = false;
+        setLoadingOlderMessages(false);
+      }
+    }
+  }
+
   async function newConversation(): Promise<void> {
     if (streaming) {
       return;
     }
     const conversation = await createConversation(sandbox, autonomous);
     shouldAutoScrollRef.current = true;
+    olderMessagesRequestSequenceRef.current += 1;
+    loadingOlderMessagesRef.current = false;
+    pendingScrollRestoreRef.current = null;
+    selectedConversationIdRef.current = conversation.id;
     setCurrentId(conversation.id);
     setMessages([]);
+    setMessageStartIndex(0);
+    setHasOlderMessages(false);
+    setLoadingOlderMessages(false);
+    setOlderMessagesError("");
     setTitle("VibeSim Assistant");
     await refreshSidebar();
     inputRef.current?.focus();
@@ -178,8 +306,16 @@ function App() {
     }
     await deleteConversation(id);
     if (currentId === id) {
+      olderMessagesRequestSequenceRef.current += 1;
+      loadingOlderMessagesRef.current = false;
+      pendingScrollRestoreRef.current = null;
+      selectedConversationIdRef.current = null;
       setCurrentId(null);
       setMessages([]);
+      setMessageStartIndex(0);
+      setHasOlderMessages(false);
+      setLoadingOlderMessages(false);
+      setOlderMessagesError("");
       setTitle("VibeSim Assistant");
     }
     await refreshSidebar();
@@ -381,11 +517,35 @@ function App() {
               />
             ) : (
               <>
+                <div className="relative h-5 text-center font-mono text-[10.5px] text-zinc-600">
+                  <div ref={olderMessagesSentinelRef} className="absolute inset-x-0 top-0 h-px" />
+                  {loadingOlderMessages ? (
+                    <span>loading earlier messages…</span>
+                  ) : olderMessagesError ? (
+                    <button
+                      type="button"
+                      className="text-orch-soft hover:underline"
+                      onClick={() => void loadOlderMessages()}
+                    >
+                      retry loading earlier messages
+                    </button>
+                  ) : !hasOlderMessages ? (
+                    <span>beginning of conversation</span>
+                  ) : null}
+                </div>
                 {messages.map((message, index) =>
                   message.role === "user" ? (
-                    <UserBubble key={index} content={message.content} conversationId={currentId} />
+                    <UserBubble
+                      key={`${currentId}:${messageStartIndex + index}`}
+                      content={message.content}
+                      conversationId={currentId}
+                    />
                   ) : (
-                    <AssistantTurn key={index} message={message} conversationId={currentId} />
+                    <AssistantTurn
+                      key={`${currentId}:${messageStartIndex + index}`}
+                      message={message}
+                      conversationId={currentId}
+                    />
                   ),
                 )}
                 {live ? (

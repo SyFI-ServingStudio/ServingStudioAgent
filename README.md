@@ -153,6 +153,16 @@ implementer summary. If the orchestrator delegates multiple follow-ups in one
 browser turn, the final assistant message includes the implementer summaries and
 the orchestrator's final user-facing message.
 
+Long browser conversations load backwards in fixed-size message pages. The
+browser requests the newest page with
+`GET /api/conversations/{cid}?limit=<n>` and requests an older page with
+`?limit=<n>&before=<start_index>`, where `start_index` comes from the current
+response's `message_page`. Reaching the top of the message viewport triggers the
+older request and preserves the visible scroll position while prepending it.
+Calling the same endpoint without query parameters retains the original
+full-history response. Pagination never trims stored messages or changes role
+session continuity.
+
 ## Agent API
 
 Besides the browser UI, VibeSim exposes a small **HTTP surface for other agents**

@@ -7,6 +7,7 @@ import type {
 } from "./types";
 
 export const DEFAULT_SANDBOX: SandboxMode = "workspace-write";
+export const MESSAGE_PAGE_SIZE = 20;
 
 export async function listConversations(): Promise<ConversationListResponse> {
   const response = await fetch("/api/conversations");
@@ -31,8 +32,15 @@ export async function createConversation(
   return response.json();
 }
 
-export async function getConversation(id: string): Promise<Conversation | null> {
-  const response = await fetch(`/api/conversations/${id}`);
+export async function getConversation(
+  id: string,
+  before?: number,
+): Promise<Conversation | null> {
+  const query = new URLSearchParams({ limit: String(MESSAGE_PAGE_SIZE) });
+  if (before !== undefined) {
+    query.set("before", String(before));
+  }
+  const response = await fetch(`/api/conversations/${id}?${query}`);
   if (response.status === 404) {
     return null;
   }

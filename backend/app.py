@@ -5,7 +5,7 @@ Endpoints:
   GET    /assets/*                      -> Vite frontend assets
   GET    /api/conversations             -> list (id, title, updated_at)
   POST   /api/conversations             -> create empty conversation
-  GET    /api/conversations/{cid}       -> full conversation (messages, role sessions)
+  GET    /api/conversations/{cid}       -> full or cursor-paged conversation
   DELETE /api/conversations/{cid}       -> delete
   POST   /api/conversations/{cid}/messages  -> SSE stream of one turn
   GET    /api/conversations/{cid}/stream    -> reconnect to the active turn
@@ -423,8 +423,25 @@ async def agent_send_message(
 
 
 @app.get("/api/conversations/{cid}")
-def get_conversation(cid: str) -> dict:
-    conv = store.get(cid)
+def get_conversation(
+    cid: str,
+    limit: int | None = Query(default=None, ge=1, le=100),
+    before: int | None = Query(default=None, ge=0),
+) -> dict:
+    """Return a full conversation or a backwards page for the browser UI.
+
+    The parameterless response remains the original full-history contract.
+    Supplying ``limit`` opts into pagination; ``before`` is the exclusive
+    absolute message position returned as ``message_page.start_index`` by the
+    newer page. The store remains append-only and is never trimmed by reads.
+    """
+    if limit is None and before is not None:
+        raise HTTPException(status_code=422, detail="before requires limit")
+    conv = (
+        store.get_message_page(cid, before=before, limit=limit)
+        if limit is not None
+        else store.get(cid)
+    )
     if conv is None:
         raise HTTPException(status_code=404, detail="conversation not found")
     return conv
