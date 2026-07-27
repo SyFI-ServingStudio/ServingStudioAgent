@@ -10,6 +10,10 @@ from pathlib import Path
 
 from .commands import run_checked
 from .config import (
+    ANALYZER_MCP_BASE_URL,
+    ANALYZER_MCP_CONTAINER_DIR,
+    ANALYZER_MCP_DIR,
+    ANALYZER_MCP_SOURCE,
     CODEX_DOCKER_AUTH_DIR,
     CODEX_DOCKER_DG_USE_LOCAL_VERSION,
     CODEX_DOCKER_GID,
@@ -58,7 +62,9 @@ def _submodule_mount_args(conversation_id: str, container: str) -> list[str]:
     return mounts
 
 
-def _candidate_mount_args(conversation_id: str, container: str, peer_dir: str | None) -> list[str]:
+def _candidate_mount_args(
+    conversation_id: str, container: str, peer_dir: str | None
+) -> list[str]:
     """Read-only bind-mount THIS conversation's co-evolution peer at /candidate.
 
     ``peer_dir`` is the vibe-serve candidate workspace that the caller which
@@ -115,7 +121,9 @@ def _model_mount_args(conversation_id: str, container: str) -> list[str]:
 def remove_container(conversation_id: str) -> None:
     """Best-effort removal of the Docker container for a conversation/eval id."""
     container = container_name(conversation_id)
-    log_event(LOG, "container.remove", conversation_id=conversation_id, container=container)
+    log_event(
+        LOG, "container.remove", conversation_id=conversation_id, container=container
+    )
     subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
 
 
@@ -138,6 +146,7 @@ def _copy_codex_auth_entry(src: Path, dst: Path) -> None:
         shutil.copytree(src, dst, symlinks=True)
     else:
         shutil.copy2(src, dst)
+
 
 def _prepare_codex_home(conversation_id: str) -> Path:
     """Create a clean per-conversation Codex home seeded with host auth.
@@ -166,6 +175,7 @@ def _prepare_codex_home(conversation_id: str) -> Path:
     for runtime_dir in ("sessions", "tmp", "shell_snapshots", "log", "cache"):
         (codex_home / runtime_dir).mkdir(parents=True, exist_ok=True)
     return codex_home
+
 
 def _docker_init_script() -> str:
     return f"""
@@ -260,6 +270,7 @@ echo "$EXPECTED_BUILD_SHA" > /tmp/vibesim_ui_main_build_sha
 touch /tmp/vibesim_ui_codex_ready
 """
 
+
 def container_running(container: str) -> bool:
     result = subprocess.run(
         ["docker", "inspect", "-f", "{{.State.Running}}", container],
@@ -268,6 +279,7 @@ def container_running(container: str) -> bool:
         check=False,
     )
     return result.returncode == 0 and result.stdout.strip().lower() == "true"
+
 
 def ensure_container(
     conversation_id: str, workspace_main: Path, mode: str, peer_dir: str | None = None
@@ -290,13 +302,12 @@ def ensure_container(
     )
     if container_running(container):
         gpu_ready_clause = (
-            "&& command -v nvidia-smi >/dev/null 2>&1 "
-            "&& nvidia-smi -L >/dev/null 2>&1 "
+            "&& command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1 "
             if CODEX_DOCKER_GPUS
             else ""
         )
         model_ready_clause = (
-            f"&& test \"${{HF_HOME:-}}\" = {CODEX_DOCKER_HF_HOME!r} "
+            f'&& test "${{HF_HOME:-}}" = {CODEX_DOCKER_HF_HOME!r} '
             f"&& test -d {CODEX_DOCKER_HF_HOME!r} "
             f"&& test -r {CODEX_DOCKER_HF_HOME!r} "
             if HOST_HF_HOME is not None
@@ -317,14 +328,14 @@ def ensure_container(
                 "-lc",
                 (
                     "test -f /tmp/vibesim_ui_codex_ready "
-                    f"&& test \"$(cat /tmp/vibesim_ui_runtime_version 2>/dev/null)\" = {CONTAINER_RUNTIME_VERSION!r} "
-                    f"&& test \"$(cat /tmp/vibesim_ui_runtime_image 2>/dev/null)\" = {CODEX_DOCKER_IMAGE!r} "
-                    f"&& test \"$(cat /tmp/vibesim_ui_gpu_request 2>/dev/null)\" = {CODEX_DOCKER_GPUS!r} "
-                    f"&& test \"$(cat /tmp/vibesim_ui_main_lock_sha 2>/dev/null)\" = {MAIN_LOCK_SHA!r} "
-                    f"&& test \"$(cat /tmp/vibesim_ui_main_build_sha 2>/dev/null)\" = {MAIN_BUILD_SHA!r} "
-                    f"&& test \"${{DG_USE_LOCAL_VERSION:-}}\" = {CODEX_DOCKER_DG_USE_LOCAL_VERSION!r} "
-                    f"&& test \"${{VIBESIM_BAKED_LOCK_SHA:-}}\" = {MAIN_LOCK_SHA!r} "
-                    f"&& test \"${{VIBESIM_BAKED_BUILD_SHA:-}}\" = {MAIN_BUILD_SHA!r} "
+                    f'&& test "$(cat /tmp/vibesim_ui_runtime_version 2>/dev/null)" = {CONTAINER_RUNTIME_VERSION!r} '
+                    f'&& test "$(cat /tmp/vibesim_ui_runtime_image 2>/dev/null)" = {CODEX_DOCKER_IMAGE!r} '
+                    f'&& test "$(cat /tmp/vibesim_ui_gpu_request 2>/dev/null)" = {CODEX_DOCKER_GPUS!r} '
+                    f'&& test "$(cat /tmp/vibesim_ui_main_lock_sha 2>/dev/null)" = {MAIN_LOCK_SHA!r} '
+                    f'&& test "$(cat /tmp/vibesim_ui_main_build_sha 2>/dev/null)" = {MAIN_BUILD_SHA!r} '
+                    f'&& test "${{DG_USE_LOCAL_VERSION:-}}" = {CODEX_DOCKER_DG_USE_LOCAL_VERSION!r} '
+                    f'&& test "${{VIBESIM_BAKED_LOCK_SHA:-}}" = {MAIN_LOCK_SHA!r} '
+                    f'&& test "${{VIBESIM_BAKED_BUILD_SHA:-}}" = {MAIN_BUILD_SHA!r} '
                     f"&& test -d {CODEX_DOCKER_UV_PROJECT_ENVIRONMENT!r} "
                     f"&& test -w {CODEX_DOCKER_UV_PROJECT_ENVIRONMENT!r} "
                     "&& command -v bash >/dev/null 2>&1 "
@@ -340,6 +351,7 @@ def ensure_container(
                     "&& command -v uv >/dev/null 2>&1 "
                     "&& command -v codex >/dev/null 2>&1 "
                     f"&& test -d {CODEX_DOCKER_AUTH_DIR!r} "
+                    f"&& test -r {ANALYZER_MCP_CONTAINER_DIR + '/server.py'!r} "
                     f"{gpu_ready_clause}"
                     f"{model_ready_clause}"
                 ),
@@ -361,9 +373,16 @@ def ensure_container(
             conversation_id=conversation_id,
             container=container,
         )
-        subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
+        subprocess.run(
+            ["docker", "rm", "-f", container], capture_output=True, check=False
+        )
 
-    log_event(LOG, "container.ensure.recreate", conversation_id=conversation_id, container=container)
+    log_event(
+        LOG,
+        "container.ensure.recreate",
+        conversation_id=conversation_id,
+        container=container,
+    )
     subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
 
     auth_dir = _prepare_codex_home(conversation_id)
@@ -381,12 +400,16 @@ def ensure_container(
         "-d",
         "--name",
         container,
+        "--add-host",
+        "host.docker.internal:host-gateway",
         "--user",
         f"{CODEX_DOCKER_UID}:{CODEX_DOCKER_GID}",
         "-v",
         f"{workspace_main}:/workspace",
         "-v",
         f"{auth_dir}:{CODEX_DOCKER_AUTH_DIR}",
+        "-v",
+        f"{ANALYZER_MCP_DIR}:{ANALYZER_MCP_CONTAINER_DIR}:ro",
         *_submodule_mount_args(conversation_id, container),
         *_candidate_mount_args(conversation_id, container, peer_dir),
         *_model_mount_args(conversation_id, container),
@@ -410,6 +433,10 @@ def ensure_container(
         f"DG_USE_LOCAL_VERSION={CODEX_DOCKER_DG_USE_LOCAL_VERSION}",
         "-e",
         f"CODEX_DOCKER_GPUS={CODEX_DOCKER_GPUS}",
+        "-e",
+        f"ANALYZER_MCP_SOURCE={ANALYZER_MCP_SOURCE}",
+        "-e",
+        f"ANALYZER_MCP_BASE_URL={ANALYZER_MCP_BASE_URL}",
         "-e",
         "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
     ]
@@ -437,5 +464,10 @@ def ensure_container(
         ],
         timeout=300,
     )
-    log_event(LOG, "container.ensure.ready", conversation_id=conversation_id, container=container)
+    log_event(
+        LOG,
+        "container.ensure.ready",
+        conversation_id=conversation_id,
+        container=container,
+    )
     return container

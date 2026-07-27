@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 from .config import (
+    ANALYZER_MCP_BASE_URL,
     CODEX_DOCKER_DG_USE_LOCAL_VERSION,
     CODEX_DOCKER_GID,
     CODEX_DOCKER_GPUS,
@@ -13,6 +16,9 @@ from .config import (
     CODEX_DOCKER_UV_PROJECT_ENVIRONMENT,
     CODEX_MODEL,
     CODEX_REASONING_EFFORT,
+    ANALYZER_MCP_CONTAINER_DIR,
+    ANALYZER_MCP_PYTHON,
+    ANALYZER_MCP_SOURCE,
     MAIN_LOCK_SHA,
 )
 from .exec_types import CodexExecRequest
@@ -27,6 +33,14 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
         CODEX_MODEL,
         "-c",
         f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"',
+        "-c",
+        f'mcp_servers.analyzer.command="{ANALYZER_MCP_PYTHON}"',
+        "-c",
+        f'mcp_servers.analyzer.args=["{ANALYZER_MCP_CONTAINER_DIR}/server.py"]',
+        "-c",
+        f"mcp_servers.analyzer.env.ANALYZER_MCP_SOURCE={json.dumps(ANALYZER_MCP_SOURCE)}",
+        "-c",
+        f"mcp_servers.analyzer.env.ANALYZER_MCP_BASE_URL={json.dumps(ANALYZER_MCP_BASE_URL)}",
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",
@@ -67,6 +81,10 @@ def _docker_exec_prefix(container: str) -> list[str]:
         f"DG_USE_LOCAL_VERSION={CODEX_DOCKER_DG_USE_LOCAL_VERSION}",
         "-e",
         f"CODEX_DOCKER_GPUS={CODEX_DOCKER_GPUS}",
+        "-e",
+        f"ANALYZER_MCP_SOURCE={ANALYZER_MCP_SOURCE}",
+        "-e",
+        f"ANALYZER_MCP_BASE_URL={ANALYZER_MCP_BASE_URL}",
         "-e",
         "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
         "-w",

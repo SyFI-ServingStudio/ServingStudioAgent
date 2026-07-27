@@ -54,8 +54,14 @@ from typing import AsyncIterator
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
+from .analyzer_context import (
+    AnalyzerTurnContext,
+    freeze_citations,
+    persisted_context,
+    prompt_with_analyzer_context,
+)
 from .artifacts import list_artifacts, resolve_artifact
 from .codex_runtime.config import (
     DEFAULT_SANDBOX,
@@ -176,9 +182,14 @@ class NewConversation(BaseModel):
 
 
 class SendMessage(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     text: str
     sandbox_mode: str = DEFAULT_SANDBOX
     autonomous_mode: bool = False
+    analyzer_context: AnalyzerTurnContext | None = Field(
+        default=None, alias="analyzerContext"
+    )
 
 
 class AgentSendMessage(BaseModel):
@@ -186,9 +197,14 @@ class AgentSendMessage(BaseModel):
     overrides; when omitted they inherit the conversation's create-time settings
     (so a read-only conversation stays read-only unless a turn opts up)."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     text: str
     sandbox_mode: str | None = None
     autonomous_mode: bool | None = None
+    analyzer_context: AnalyzerTurnContext | None = Field(
+        default=None, alias="analyzerContext"
+    )
 
 
 @app.get("/")
@@ -288,7 +304,9 @@ def download_workspace_artifact(
 
 
 @app.post("/api/agent/conversations")
-def agent_create_conversation(body: NewConversation, _: None = Depends(require_token)) -> dict:
+def agent_create_conversation(
+    body: NewConversation, _: None = Depends(require_token)
+) -> dict:
     cid = uuid.uuid4().hex[:12]
     fingerprint = prompt_fingerprint(autonomous=body.autonomous)
     log_event(
@@ -357,7 +375,12 @@ async def agent_send_message(
     fingerprint = prompt_fingerprint(autonomous=autonomous)
     turn_id = uuid.uuid4().hex[:10]
     store.update_runtime_settings(cid, sandbox=sandbox, autonomous=autonomous)
-    store.add_message(cid, "user", text)
+    store.add_message(
+        cid,
+        "user",
+        text,
+        analyzer_context=persisted_context(body.analyzer_context),
+    )
     sessions = store.sessions_for_prompt(cid, fingerprint)
     log_event(
         LOG,
@@ -384,7 +407,7 @@ async def agent_send_message(
         try:
             async for ev in run_turn(
                 cid,
-                text,
+                prompt_with_analyzer_context(text, body.analyzer_context),
                 sandbox=sandbox,
                 sessions=sessions,
                 turn_id=turn_id,
@@ -393,22 +416,50 @@ async def agent_send_message(
                 peer_dir=conv.get("peer_workspace"),
             ):
                 if ev.get("kind") == "session":
-                    store.set_codex_session(cid, ev.get("role", ""), ev.get("session_id"))
+                    store.set_codex_session(
+                        cid, ev.get("role", ""), ev.get("session_id")
+                    )
                 collect_turn_event(result, ev)
             result["ok"] = bool(result["final"]) and not bool(result["error"])
         except Exception as exc:  # surface backend failures in-band, like /api/eval
             result["error"] = str(exc)
             LOG.exception(
                 "agent.turn.error",
-                extra={"event_fields": {"event": "agent.turn.error", "conversation_id": cid, "turn_id": turn_id, "error": str(exc)}},
+                extra={
+                    "event_fields": {
+                        "event": "agent.turn.error",
+                        "conversation_id": cid,
+                        "turn_id": turn_id,
+                        "error": str(exc),
+                    }
+                },
             )
         if not result["final"]:
-            result["final"] = f"(backend error: {result['error']})" if result["error"] else "(no answer)"
+            result["final"] = (
+                f"(backend error: {result['error']})"
+                if result["error"]
+                else "(no answer)"
+            )
+        frozen_citations = freeze_citations(
+            result["final"],
+            body.analyzer_context.citation_dictionary
+            if body.analyzer_context
+            else None,
+        )
+        result["citations"] = frozen_citations
+        result["citation_dictionary_id"] = (
+            body.analyzer_context.citation_dictionary.identity
+            if body.analyzer_context
+            else None
+        )
         store.add_message(
             cid,
             "assistant",
             result["final"],
             intermediate_outputs=result["intermediate_outputs"] or None,
+            citations=frozen_citations or None,
+            citation_dictionary_id=result["citation_dictionary_id"],
+            citation_dsl_version="v1" if body.analyzer_context else None,
         )
     log_event(
         LOG,
@@ -463,7 +514,9 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"}
 
 
 @app.get("/api/file")
-def serve_file(path: str = Query(...), cid: str | None = Query(default=None)) -> FileResponse:
+def serve_file(
+    path: str = Query(...), cid: str | None = Query(default=None)
+) -> FileResponse:
     requested = Path(path)
     root = workspace_main_for(cid) if cid else MAIN_DIR
     if requested == Path("/workspace") or Path("/workspace") in requested.parents:
@@ -492,7 +545,9 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
         raise HTTPException(status_code=404, detail="conversation not found")
     active_turn = _active_browser_turns.get(cid)
     if active_turn is not None and not active_turn.finished:
-        raise HTTPException(status_code=409, detail="conversation already has an active turn")
+        raise HTTPException(
+            status_code=409, detail="conversation already has an active turn"
+        )
 
     text = body.text.strip()
     if not text:
@@ -504,7 +559,12 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
     turn_id = uuid.uuid4().hex[:10]
     previous_sessions = dict(conv.get("codex_sessions") or {})
     store.update_runtime_settings(cid, sandbox=sandbox, autonomous=autonomous)
-    store.add_message(cid, "user", text)
+    store.add_message(
+        cid,
+        "user",
+        text,
+        analyzer_context=persisted_context(body.analyzer_context),
+    )
     sessions = store.sessions_for_prompt(cid, current_prompt_fingerprint)
     log_event(
         LOG,
@@ -532,6 +592,7 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
             turn_id=turn_id,
             prompt_fingerprint=current_prompt_fingerprint,
             autonomous=autonomous,
+            analyzer_context=body.analyzer_context,
             active_turn=active_turn,
         )
     )
@@ -572,6 +633,7 @@ async def _run_browser_turn(
     turn_id: str,
     prompt_fingerprint: str,
     autonomous: bool,
+    analyzer_context: AnalyzerTurnContext | None,
     active_turn: ActiveBrowserTurn,
 ) -> None:
     lock = _lock_for(cid)
@@ -584,7 +646,7 @@ async def _run_browser_turn(
         try:
             async for ev in run_turn(
                 cid,
-                text,
+                prompt_with_analyzer_context(text, analyzer_context),
                 sandbox=sandbox,
                 sessions=sessions,
                 turn_id=turn_id,
@@ -593,7 +655,9 @@ async def _run_browser_turn(
             ):
                 kind = ev.get("kind")
                 if kind == "session":
-                    store.set_codex_session(cid, ev.get("role", ""), ev.get("session_id"))
+                    store.set_codex_session(
+                        cid, ev.get("role", ""), ev.get("session_id")
+                    )
                     log_event(
                         LOG,
                         "turn.session",
@@ -605,7 +669,10 @@ async def _run_browser_turn(
                     await active_turn.publish(
                         _sse(
                             "session",
-                            {"role": ev.get("role"), "session_id": ev.get("session_id")},
+                            {
+                                "role": ev.get("role"),
+                                "session_id": ev.get("session_id"),
+                            },
                         )
                     )
                 elif kind == "implementer":
@@ -620,7 +687,9 @@ async def _run_browser_turn(
                         "text": str(ev.get("text") or ""),
                     }
                     intermediate_outputs.append(intermediate_output)
-                    activity.append({"kind": "intermediate_output", **intermediate_output})
+                    activity.append(
+                        {"kind": "intermediate_output", **intermediate_output}
+                    )
                     await active_turn.publish(
                         _sse("intermediate_output", intermediate_output)
                     )
@@ -678,6 +747,15 @@ async def _run_browser_turn(
             )
         finally:
             if final_text is not None:
+                frozen_citations = freeze_citations(
+                    final_text,
+                    analyzer_context.citation_dictionary if analyzer_context else None,
+                )
+                citation_dictionary_id = (
+                    analyzer_context.citation_dictionary.identity
+                    if analyzer_context
+                    else None
+                )
                 activity.append({"kind": "final", "text": final_text})
                 store.add_message(
                     cid,
@@ -685,8 +763,21 @@ async def _run_browser_turn(
                     final_text,
                     intermediate_outputs=intermediate_outputs or None,
                     activity=activity or None,
+                    citations=frozen_citations or None,
+                    citation_dictionary_id=citation_dictionary_id,
+                    citation_dsl_version="v1" if analyzer_context else None,
                 )
-                await active_turn.publish(_sse("done", {"text": final_text}))
+                await active_turn.publish(
+                    _sse(
+                        "done",
+                        {
+                            "text": final_text,
+                            "citations": frozen_citations,
+                            "citation_dictionary_id": citation_dictionary_id,
+                            "citation_dsl_version": "v1" if analyzer_context else None,
+                        },
+                    )
+                )
             await active_turn.finish()
             if _active_browser_turns.get(cid) is active_turn:
                 _active_browser_turns.pop(cid, None)

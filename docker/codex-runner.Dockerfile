@@ -12,7 +12,7 @@ ARG APP_UID=1001
 ARG APP_GID=1001
 ARG APP_USER=kanzhu
 ARG RUST_TOOLCHAIN=stable
-ARG RUNNER_VERSION=prebuilt-codex-runner-v8
+ARG RUNNER_VERSION=prebuilt-codex-runner-v9
 ARG VIBESIM_LOCK_SHA=unknown
 ARG VIBESIM_BUILD_SHA=unknown
 ARG DEBIAN_FRONTEND=noninteractive
@@ -29,6 +29,7 @@ ENV VIBESIM_BAKED_TARGET=/opt/vibesim-cache/target
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV UV_PROJECT_ENVIRONMENT=/opt/vibesim-venv
 ENV UV_CACHE_DIR=/opt/vibesim-uv-cache
+ENV ANALYZER_MCP_VENV=/opt/vibesim-analyzer-mcp-venv
 ENV PATH=/opt/cargo-tools/bin:/opt/node/bin:${PATH}
 
 RUN apt-get update -qq \
@@ -111,6 +112,7 @@ RUN if ! getent group "${APP_GID}" >/dev/null 2>&1; then \
     "${CARGO_HOME}" \
     "/opt/vibesim-cache" \
     "${VIBESIM_BAKED_PROJECT}" \
+    "${ANALYZER_MCP_VENV}" \
     "/workspace" \
     "${UV_PROJECT_ENVIRONMENT}" \
     "${UV_CACHE_DIR}" \
@@ -119,6 +121,7 @@ RUN if ! getent group "${APP_GID}" >/dev/null 2>&1; then \
     "${CARGO_HOME}" \
     "/opt/vibesim-cache" \
     "${VIBESIM_BAKED_PROJECT}" \
+    "${ANALYZER_MCP_VENV}" \
     "/workspace" \
     "${UV_PROJECT_ENVIRONMENT}" \
     "${UV_CACHE_DIR}"
@@ -136,6 +139,9 @@ USER ${APP_UID}:${APP_GID}
 RUN cd "${VIBESIM_BAKED_PROJECT}" \
   && DG_USE_LOCAL_VERSION=0 just sync \
   && uv run python -c "import torch, triton, deep_gemm; print('prewarmed', torch.__version__)"
+
+RUN uv venv "${ANALYZER_MCP_VENV}" \
+  && uv pip install --python "${ANALYZER_MCP_VENV}/bin/python" "mcp==1.28.1"
 
 # Keep the multi-GB Python/CUDA dependency layer stable when only VibeSim source
 # changes. Build at /workspace so Cargo dep-info matches the runtime mount path.

@@ -1,0 +1,148 @@
+topic: analyzer_evidence
+description: >
+  Read-only Analyzer MCP coverage over the 20260727_0_llama3_8b_tp_rate
+  two-axis sweep, from aggregate discovery through one exact kernel leaf.
+defaults:
+  sandbox: read-only
+  autonomous: true
+  experiment: 20260727_0_llama3_8b_tp_rate
+cases:
+  - id: sweep_shape
+    level: catalog
+    question: "What are this experiment's sweep axes, their declaration order, domains, and number of runs?"
+    answer_description: >
+      request_rate then tensor_parallel; domains [10,30,50,70,90] and
+      [1,2,4,8]; 20 runs.
+
+  - id: available_aggregate_metrics
+    level: aggregate-schema
+    question: "Which aggregate metrics are available, including unit and optimization direction?"
+    answer_description: >
+      Report all ten metric descriptors from the sweep payload: mean/p99 TPOT,
+      mean/p99 TTFT, total/decode/per-GPU throughput, GPU utilization,
+      completed requests/s, and requests finished, with their declared units
+      and minimize/maximize objectives.
+
+  - id: ttft_across_tp
+    level: aggregate-cell
+    question: "At request_rate=50, what is mean TTFT for TP=1,2,4,8?"
+    answer_description: >
+      Approximately 18.720, 13.689, 12.895, and 11.162 ms.
+
+  - id: best_tpot_at_rate_30
+    level: aggregate-comparison
+    question: "At request_rate=30, which TP has the lowest mean TPOT, and what are all four values?"
+    answer_description: >
+      TP8 is best. TP1/2/4/8 are approximately 7.374, 6.950, 5.541,
+      and 5.303 ms/token.
+
+  - id: throughput_at_rate_90
+    level: aggregate-comparison
+    question: "At request_rate=90, compare total throughput across TP=1,2,4,8."
+    answer_description: >
+      Approximately 36,881.37, 54,413.4, 54,511.6, and 54,543.3 tok/s.
+
+  - id: per_gpu_efficiency
+    level: aggregate-derived
+    question: "At request_rate=50, which TP maximizes total throughput per GPU, and how does that metric change across TP?"
+    answer_description: >
+      TP1 maximizes it. TP1/2/4/8 are approximately 30,422.27,
+      15,223.45, 7,613.59, and 3,808.04 tok/s/GPU.
+
+  - id: overload_boundary
+    level: aggregate-diagnosis
+    question: "At request_rate=70, is TP1 overloaded relative to TP2? Support the answer with completed requests/s, mean TTFT, and mean TPOT."
+    answer_description: >
+      Yes. TP1 vs TP2: completed req/s 50.667 vs 67.933, mean TTFT
+      1309.287 vs 14.257 ms, mean TPOT 51.301 vs 9.518 ms/token.
+
+  - id: completion_shortfall
+    level: aggregate-diagnosis
+    question: "At request_rate=90, how many requests finish for each TP, and which TP finishes the most?"
+    answer_description: >
+      TP1/2/4/8 finish 1522, 2553, 2600, and 2623 requests; TP8 is highest.
+
+  - id: invalid_coordinate
+    level: aggregate-error
+    question: "What is mean TTFT for TP=1 at request_rate=20?"
+    answer_description: >
+      Refuse to invent or interpolate: request_rate=20 is absent from the
+      declared domain, whose neighboring values are 10 and 30.
+
+  - id: run_summary
+    level: run-summary
+    question: "For request_rate=10, TP=1, summarize termination cause, simulated duration, total requests, finished requests, and total tokens."
+    answer_description: >
+      DurationReached, 30000 ms, 301 total, 295 finished, 184247 tokens.
+
+  - id: run_topology
+    level: run-topology
+    question: "For request_rate=10, TP=1, describe the GPU/worker topology and KV capacity."
+    answer_description: >
+      One NVIDIA H200, pool main, worker 0, one GPU id 0, and KV capacity
+      610351 tokens.
+
+  - id: run_slo_distribution
+    level: run-subject
+    question: "For request_rate=10, TP=1, report TTFT, TPOT, and E2E p99, plus the completed/excluded request counts."
+    answer_description: >
+      TTFT p99 21.100 ms, TPOT p99 5.653 ms/token, E2E p99
+      715.978 ms; 295 completed and 6 excluded.
+
+  - id: utilization_hierarchy
+    level: pool-worker
+    question: "For request_rate=10, TP=1, what are overall, main-pool, and worker-0 average utilization?"
+    answer_description: >
+      All three are 0.9423458254 (94.2346%) because this run has one worker.
+
+  - id: throughput_segments
+    level: run-timeseries-summary
+    question: "For request_rate=10, TP=1, how many throughput segments are there and what are the first segment's time range and total/decode/prefill throughput?"
+    answer_description: >
+      Three segments. First is 0-10000 ms with total 6265.5, decode 975.9,
+      and prefill 5289.6 tok/s.
+
+  - id: run_optimality
+    level: run-optimality
+    question: "For request_rate=10, TP=1, what are the unlocked optimality and necessary ratios, and which loss bucket dominates?"
+    answer_description: >
+      Optimality 0.0907385, necessary 0.0884934; batching dominates at
+      fraction 0.8223581 (24.67095 GPU-s).
+
+  - id: worst_batching_kernels
+    level: per-kernel-aggregate
+    question: "For request_rate=10, TP=1, list the three worst batching-loss kernels and their batching GPU-seconds."
+    answer_description: >
+      unified.mlp_block.up_gate_proj 9.23312, down_proj 5.32596,
+      qkv_proj 2.57245 GPU-s.
+
+  - id: batch_locked_variant
+    level: optimality-variant
+    question: "For request_rate=10, TP=1, compare unlocked and batch-locked optimality ratios and explain the batching bucket change."
+    answer_description: >
+      Unlocked 0.0907385 versus batch-locked 0.6351397. The batch-locked
+      report sets batching to zero by construction; it is a different
+      counterfactual and includes a per-location caveat.
+
+  - id: worker_operation_index
+    level: worker-operation
+    question: "For request_rate=10, TP=1, how many operations does main/0 have, and what are the identity and interval of the first operation?"
+    answer_description: >
+      5441 operations. First is iter 1, batch 0, operation 0, section iter,
+      interval 0 to 10.7248945 ms.
+
+  - id: iteration_optimality
+    level: iteration
+    question: "For request_rate=10, TP=1, what are iteration 1's optimality/necessary ratios and real, per-config-best, and hardware-limit rungs?"
+    answer_description: >
+      Ratios 0.6346002 and 0.5980457. Rungs are real 0.0107248945,
+      per-config-best 0.0093529394, hardware-limit 0.0068060200 GPU-s.
+
+  - id: cost_tree_and_kernel
+    level: cost-tree-kernel
+    question: "For request_rate=10, TP=1, inspect operation iter=1,batch=0,operation=0: what input size does the embedding leaf receive, what is its cost-tree base time, and what does its kernel-throughput drill-down report at grid num_tokens=512?"
+    answer_description: >
+      The operation has 451 prefill/batch tokens. Preorder leaf 1 is
+      unified.embedding with base 0.0034409196 ms. Its drill-down exact input
+      is num_tokens=451; at grid num_tokens=512 it reports time_ms 0.00368955,
+      bytes 8388608, and energy_j 0.0031796736.

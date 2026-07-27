@@ -16,7 +16,7 @@ app_uid="${CODEX_DOCKER_UID:-$(id -u)}"
 app_gid="${CODEX_DOCKER_GID:-$(id -g)}"
 app_user="${CODEX_DOCKER_USER:-${USER:-kanzhu}}"
 rust_toolchain="${RUST_TOOLCHAIN:-stable}"
-runner_version="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v8}"
+runner_version="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v9}"
 lock_sha="$(sha256sum "$main_dir/uv.lock" | awk '{print $1}')"
 build_sha="$({
   git -C "$main_dir" rev-parse HEAD

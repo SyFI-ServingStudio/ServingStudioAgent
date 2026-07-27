@@ -321,6 +321,7 @@ Docker GPU forwarding.
 | `backend/codex_runtime/codex_events.py` | Codex JSON/rollout event translation |
 | `backend/codex_runtime/prompts.py` | role prompts and orchestrator JSON parsing |
 | `backend/codex_runtime/turn.py` | high-level orchestrator/implementer turn loop |
+| `backend/analyzer_evidence_mcp/server.py` | bounded read-only MCP bridge to the Analyzer `/api/v1/*` resources |
 | `backend/eval.py` | JSON `/api/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`) |
 | `backend/artifacts.py` | list/resolve files in a run workspace for the agent artifact endpoints |
 | `SKILL.md` | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/skill` |
@@ -352,7 +353,7 @@ Docker GPU forwarding.
 - `RUST_TOOLCHAIN` — Rust toolchain baked into the image by the build script,
   default `stable`.
 - `CODEX_RUNNER_IMAGE_VERSION` — expected image label, default
-  `prebuilt-codex-runner-v8`. `run.sh` rebuilds when this label differs, when
+  `prebuilt-codex-runner-v9`. `run.sh` rebuilds when this label differs, when
   the baked `main/uv.lock` hash differs, or when the tracked Cargo workspace,
   simulator, or analyzer build-input fingerprint differs from the checkout.
 - `CODEX_SKIP_RUNNER_IMAGE_TEST=1` — skip the post-build non-GPU runner
@@ -378,6 +379,16 @@ Docker GPU forwarding.
   are isolated from other conversations.
 - `CODEX_DOCKER_UV_CACHE_DIR` — where `uv` stores cache inside Docker, default
   `/opt/vibesim-uv-cache`, also baked into the runner image.
+- `ANALYZER_MCP_SOURCE` — default evidence ownership mode, `external`. The MCP
+  tool exposes the clearer per-call names `source="host"` for a pre-existing
+  experiment selected in the Analyzer UI and `source="workspace"` for a
+  simulation created inside the isolated conversation workspace.
+- `ANALYZER_MCP_BASE_URL` — host Analyzer origin, default
+  `http://host.docker.internal:8787`. Bind the host Analyzer only to the Docker
+  bridge address rather than all interfaces. The container receives an
+  explicit `host.docker.internal:host-gateway` mapping.
+- `ANALYZER_MCP_LOGS_ROOT` and `ANALYZER_MCP_REPO_ROOT` — local-mode paths,
+  default `/workspace/logs` and `/workspace`.
 - `HF_HOME` — optional host Hugging Face cache directory. When set, every
   conversation container bind-mounts it read-only at `/model` and receives
   `HF_HOME=/model`. A configured path must already exist.
