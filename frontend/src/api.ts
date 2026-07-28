@@ -90,7 +90,9 @@ export async function resumeTurn(
   const response = await fetch(`/api/conversations/${conversationId}/stream`, {
     signal,
   });
-  if (response.status === 409) {
+  // 204 is the normal idle response; 409 is accepted for compatibility with
+  // an older backend during a rolling restart.
+  if (response.status === 204 || response.status === 409) {
     return false;
   }
   await consumeTurnStream(response, handlers);

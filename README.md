@@ -121,6 +121,7 @@ browser
        action=run_implementer -> continue with another bounded implementer task
   -> retain the active turn independently of the browser connection
        GET .../stream -> replay and continue after refresh
+       GET .../stream -> 204 when the conversation is idle
        POST .../cancel -> send SIGINT to Codex and stop the whole turn
   -> stream progress + final text back to browser
 ```
@@ -152,6 +153,11 @@ The UI shows assistant intermediate output and, when work is delegated, the
 implementer summary. If the orchestrator delegates multiple follow-ups in one
 browser turn, the final assistant message includes the implementer summaries and
 the orchestrator's final user-facing message.
+
+Runtime startup failures are persisted and emitted as a bounded
+`failure: {code,message}` object. The user-facing message is safe and retryable;
+the complete subprocess or Docker diagnostic remains in the structured backend
+log instead of being rendered as an assistant answer.
 
 Long browser conversations load backwards in fixed-size message pages. The
 browser requests the newest page with

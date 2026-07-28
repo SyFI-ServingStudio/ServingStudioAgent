@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -161,6 +161,32 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
 
 def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _turn_failure(exc: Exception) -> dict[str, str]:
+    """Map internal runtime exceptions to stable, user-safe failure details.
+
+    The full exception remains in the structured backend log. Browser and agent
+    clients receive only this bounded contract so subprocess commands, mounts,
+    and other host implementation details never become an apparent answer.
+    """
+
+    detail = str(exc).lower()
+    if "no space left on device" in detail:
+        return {
+            "code": "runtime_storage_full",
+            "message": (
+                "The Agent runtime could not start because the host disk is full. "
+                "Free space, then retry this question."
+            ),
+        }
+    return {
+        "code": "agent_runtime_failure",
+        "message": (
+            "The Agent runtime failed before producing an answer. "
+            "Retry the question; the full diagnostic is available in the backend log."
+        ),
+    }
 
 
 def _autonomous_for_turn(conv: dict, requested_autonomous: bool) -> bool:
@@ -434,12 +460,12 @@ async def agent_send_message(
                     }
                 },
             )
+        failure = (
+            _turn_failure(RuntimeError(result["error"])) if result["error"] else None
+        )
+        result["failure"] = failure
         if not result["final"]:
-            result["final"] = (
-                f"(backend error: {result['error']})"
-                if result["error"]
-                else "(no answer)"
-            )
+            result["final"] = failure["message"] if failure else "(no answer)"
         frozen_citations = freeze_citations(
             result["final"],
             body.analyzer_context.citation_dictionary
@@ -460,6 +486,7 @@ async def agent_send_message(
             citations=frozen_citations or None,
             citation_dictionary_id=result["citation_dictionary_id"],
             citation_dsl_version="v1" if body.analyzer_context else None,
+            failure=failure,
         )
     log_event(
         LOG,
@@ -600,12 +627,14 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
 
 
 @app.get("/api/conversations/{cid}/stream")
-async def resume_message_stream(cid: str) -> StreamingResponse:
+async def resume_message_stream(cid: str) -> Response:
     if store.get(cid) is None:
         raise HTTPException(status_code=404, detail="conversation not found")
     active_turn = _active_browser_turns.get(cid)
     if active_turn is None or active_turn.finished:
-        raise HTTPException(status_code=409, detail="conversation has no active turn")
+        # Reopening an idle conversation is a normal state, not a request
+        # conflict. A body-less response also avoids a noisy console error.
+        return Response(status_code=204)
     return _turn_stream_response(active_turn)
 
 
@@ -639,6 +668,7 @@ async def _run_browser_turn(
     lock = _lock_for(cid)
     async with lock:
         final_text: str | None = None
+        failure: dict[str, str] | None = None
         intermediate_outputs: list[dict[str, str]] = []
         # Persist render-relevant events on completion; retain all SSE events in
         # ActiveBrowserTurn during execution so a refreshed client can replay them.
@@ -733,7 +763,8 @@ async def _run_browser_turn(
                 turn_id=turn_id,
             )
         except Exception as exc:  # surface backend failures to the UI
-            final_text = f"(backend error: {exc})"
+            failure = _turn_failure(exc)
+            final_text = failure["message"]
             LOG.exception(
                 "turn.error",
                 extra={
@@ -756,7 +787,12 @@ async def _run_browser_turn(
                     if analyzer_context
                     else None
                 )
-                activity.append({"kind": "final", "text": final_text})
+                activity.append(
+                    {
+                        "kind": "error" if failure else "final",
+                        "text": final_text,
+                    }
+                )
                 store.add_message(
                     cid,
                     "assistant",
@@ -766,6 +802,7 @@ async def _run_browser_turn(
                     citations=frozen_citations or None,
                     citation_dictionary_id=citation_dictionary_id,
                     citation_dsl_version="v1" if analyzer_context else None,
+                    failure=failure,
                 )
                 await active_turn.publish(
                     _sse(
@@ -775,6 +812,7 @@ async def _run_browser_turn(
                             "citations": frozen_citations,
                             "citation_dictionary_id": citation_dictionary_id,
                             "citation_dsl_version": "v1" if analyzer_context else None,
+                            "failure": failure,
                         },
                     )
                 )
