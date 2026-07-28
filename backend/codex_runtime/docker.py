@@ -31,7 +31,8 @@ from .config import (
     MAIN_BUILD_SHA,
     MAIN_DIR,
     MAIN_LOCK_SHA,
-    WORKSPACES_DIR,
+    PROMPTS_CONTAINER_DIR,
+    PROMPTS_DIR,
     codex_home_for,
     container_name,
 )
@@ -42,9 +43,9 @@ from ..logging_config import log_event
 def _submodule_mount_args(conversation_id: str, container: str) -> list[str]:
     """Read-only bind-mount main's submodules (vLLM/TraceLab, ~5 GB) at their paths.
 
-    The per-conversation workspace copy skips these gitlinks, so mounting the real
+    The managed workspace copy skips these gitlinks, so mounting the real
     checkout read-only makes their content available in-container without a ~5 GB
-    per-conversation copy, while leaving the source tree untouched.
+    copy per workspace, while leaving the source tree untouched.
     """
     submodules = main_submodule_paths()
     mounts: list[str] = []
@@ -118,19 +119,23 @@ def _model_mount_args(conversation_id: str, container: str) -> list[str]:
     ]
 
 
-def remove_container(conversation_id: str) -> None:
+def remove_container(workspace_id: str, conversation_id: str) -> None:
     """Best-effort removal of the Docker container for a conversation/eval id."""
-    container = container_name(conversation_id)
+    container = container_name(workspace_id, conversation_id)
     log_event(
-        LOG, "container.remove", conversation_id=conversation_id, container=container
+        LOG,
+        "container.remove",
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+        container=container,
     )
     subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
 
 
-def cleanup_conversation(conversation_id: str) -> None:
-    """Best-effort cleanup for a deleted conversation."""
-    remove_container(conversation_id)
-    shutil.rmtree(WORKSPACES_DIR / conversation_id, ignore_errors=True)
+def cleanup_conversation(workspace_id: str, conversation_id: str) -> None:
+    """Remove ephemeral runtime state without touching the shared workspace."""
+    remove_container(workspace_id, conversation_id)
+    shutil.rmtree(codex_home_for(workspace_id, conversation_id), ignore_errors=True)
 
 
 def _copy_codex_auth_entry(src: Path, dst: Path) -> None:
@@ -148,7 +153,7 @@ def _copy_codex_auth_entry(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
-def _prepare_codex_home(conversation_id: str) -> Path:
+def _prepare_codex_home(workspace_id: str, conversation_id: str) -> Path:
     """Create a clean per-conversation Codex home seeded with host auth.
 
     Mounting the host ``~/.codex`` directly leaks stale ``tmp`` / ``sessions`` /
@@ -159,7 +164,7 @@ def _prepare_codex_home(conversation_id: str) -> Path:
     if not host_codex_home.exists():
         raise RuntimeError(f"Codex auth directory not found: {host_codex_home}")
 
-    codex_home = codex_home_for(conversation_id)
+    codex_home = codex_home_for(workspace_id, conversation_id)
     codex_home.mkdir(parents=True, exist_ok=True)
     for name in (
         "auth.json",
@@ -282,12 +287,17 @@ def container_running(container: str) -> bool:
 
 
 def ensure_container(
-    conversation_id: str, workspace_main: Path, mode: str, peer_dir: str | None = None
+    workspace_id: str,
+    conversation_id: str,
+    workspace_main: Path,
+    mode: str,
+    peer_dir: str | None = None,
 ) -> str:
-    container = container_name(conversation_id)
+    container = container_name(workspace_id, conversation_id)
     log_event(
         LOG,
         "container.ensure.start",
+        workspace_id=workspace_id,
         conversation_id=conversation_id,
         container=container,
         workspace=str(workspace_main),
@@ -385,7 +395,7 @@ def ensure_container(
     )
     subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
 
-    auth_dir = _prepare_codex_home(conversation_id)
+    auth_dir = _prepare_codex_home(workspace_id, conversation_id)
     log_event(
         LOG,
         "container.codex_home.ready",
@@ -410,6 +420,8 @@ def ensure_container(
         f"{auth_dir}:{CODEX_DOCKER_AUTH_DIR}",
         "-v",
         f"{ANALYZER_MCP_DIR}:{ANALYZER_MCP_CONTAINER_DIR}:ro",
+        "-v",
+        f"{PROMPTS_DIR}:{PROMPTS_CONTAINER_DIR}:ro",
         *_submodule_mount_args(conversation_id, container),
         *_candidate_mount_args(conversation_id, container, peer_dir),
         *_model_mount_args(conversation_id, container),
@@ -467,6 +479,7 @@ def ensure_container(
     log_event(
         LOG,
         "container.ensure.ready",
+        workspace_id=workspace_id,
         conversation_id=conversation_id,
         container=container,
     )

@@ -22,6 +22,7 @@ from .config import (
     MAIN_LOCK_SHA,
 )
 from .exec_types import CodexExecRequest
+from ..managed_context import MANAGED_CONTEXT_CONTAINER_PATH
 
 
 def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
@@ -85,6 +86,8 @@ def _docker_exec_prefix(container: str) -> list[str]:
         f"ANALYZER_MCP_SOURCE={ANALYZER_MCP_SOURCE}",
         "-e",
         f"ANALYZER_MCP_BASE_URL={ANALYZER_MCP_BASE_URL}",
+        "-e",
+        f"VIBESIM_MANAGED_RUN_CONTEXT={MANAGED_CONTEXT_CONTAINER_PATH}",
         "-e",
         "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
         "-w",

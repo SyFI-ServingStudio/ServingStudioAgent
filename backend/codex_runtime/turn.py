@@ -27,8 +27,10 @@ from .prompts import (
 )
 from .workspace import prepare_workspace
 from ..logging_config import compact_text, log_event
+from ..managed_context import write_managed_context
 
 async def run_turn(
+    workspace_id: str,
     conversation_id: str,
     prompt: str,
     *,
@@ -46,6 +48,7 @@ async def run_turn(
     log_event(
         LOG,
         "turn.run.start",
+        workspace_id=workspace_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
         mode=mode,
@@ -54,7 +57,7 @@ async def run_turn(
         session_roles=sorted(sessions),
     )
 
-    workspace_main_path = workspace_main_for(conversation_id)
+    workspace_main_path = workspace_main_for(workspace_id)
     if workspace_main_path.exists():
         yield {"kind": "progress", "text": "checking isolated VibeSim workspace..."}
     else:
@@ -62,7 +65,7 @@ async def run_turn(
     loop = asyncio.get_event_loop()
     workspace_started = loop.time()
     workspace_task = asyncio.create_task(
-        asyncio.to_thread(prepare_workspace, conversation_id, autonomous=autonomous),
+        asyncio.to_thread(prepare_workspace, workspace_id),
     )
     while True:
         done, _pending = await asyncio.wait({workspace_task}, timeout=5)
@@ -72,14 +75,21 @@ async def run_turn(
         elapsed = loop.time() - workspace_started
         yield {"kind": "progress", "text": f"workspace check still running ({elapsed:.0f}s)..."}
 
-    runtime_container_name = container_name_for(conversation_id)
+    runtime_container_name = container_name_for(workspace_id, conversation_id)
     if await asyncio.to_thread(container_running, runtime_container_name):
         yield {"kind": "progress", "text": "checking Docker Codex container..."}
     else:
         yield {"kind": "progress", "text": "starting Docker Codex container..."}
     container_started = loop.time()
     container_task = asyncio.create_task(
-        asyncio.to_thread(ensure_container, conversation_id, _workspace_main, mode, peer_dir)
+        asyncio.to_thread(
+            ensure_container,
+            workspace_id,
+            conversation_id,
+            _workspace_main,
+            mode,
+            peer_dir,
+        )
     )
     while True:
         done, _pending = await asyncio.wait({container_task}, timeout=10)
@@ -95,6 +105,7 @@ async def run_turn(
     log_event(
         LOG,
         "turn.runtime.ready",
+        workspace_id=workspace_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
         workspace=str(_workspace_main),
@@ -108,10 +119,17 @@ async def run_turn(
 
     while True:
         orchestrator_text: str | None = None
+        write_managed_context(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            role="orchestrator",
+        )
         async for ev in run_codex(
             container,
             next_orchestrator_prompt,
             label="orchestrator",
+            workspace_id=workspace_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
             session_id=orchestrator_session,
@@ -182,10 +200,17 @@ async def run_turn(
         # card) rather than a generic "starting..." progress line.
         yield {"kind": "decision", "action": "run_implementer", "task": task}
         implementer_text: str | None = None
+        write_managed_context(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            role="implementer",
+        )
         async for ev in run_codex(
             container,
             _implementer_prompt(task, is_resume=bool(implementer_session)),
             label="implementer",
+            workspace_id=workspace_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
             session_id=implementer_session,

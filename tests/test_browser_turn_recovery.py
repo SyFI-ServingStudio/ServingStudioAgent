@@ -28,18 +28,56 @@ class TurnFailureTests(unittest.TestCase):
         self.assertEqual(failure["code"], "agent_runtime_failure")
         self.assertNotIn("secret", failure["message"])
 
+    @patch.object(app_module.store, "list_turn_events")
+    def test_managed_run_callbacks_project_to_reloadable_job_cards(
+        self,
+        list_turn_events,
+    ) -> None:
+        list_turn_events.return_value = [
+            {
+                "sequence": 4,
+                "kind": "experiment.ready",
+                "payload": {
+                    "workspaceId": "w_test",
+                    "experimentId": "e_test",
+                    "experimentPath": "20260728_test",
+                    "jobId": "j_test",
+                    "status": "ready",
+                },
+            }
+        ]
+
+        activity = app_module._managed_turn_activity("w_test", "turn")
+
+        self.assertEqual(
+            activity,
+            [
+                {
+                    "kind": "job",
+                    "workspaceId": "w_test",
+                    "experimentId": "e_test",
+                    "experimentPath": "20260728_test",
+                    "jobId": "j_test",
+                    "status": "ready",
+                }
+            ],
+        )
+
 
 class ResumeTurnTests(unittest.IsolatedAsyncioTestCase):
     async def test_idle_conversation_returns_no_content(self) -> None:
         conversation_id = "idle-conversation"
-        app_module._active_browser_turns.pop(conversation_id, None)
+        app_module._active_browser_turns.pop(("w_main", conversation_id), None)
 
         with patch.object(
             app_module.store,
             "get",
             return_value={"id": conversation_id},
         ):
-            response = await app_module.resume_message_stream(conversation_id)
+            response = await app_module.resume_message_stream(
+                "w_main",
+                conversation_id,
+            )
 
         self.assertEqual(response.status_code, 204)
         self.assertEqual(response.body, b"")

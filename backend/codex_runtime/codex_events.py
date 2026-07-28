@@ -52,8 +52,10 @@ def _assistant_message_from_payload(payload: dict[str, Any]) -> tuple[str, str] 
     return "".join(parts), str(payload.get("phase") or "")
 
 
-def _find_rollout_file(conversation_id: str, session_id: str) -> Path | None:
-    sessions_dir = codex_home_for(conversation_id) / "sessions"
+def _find_rollout_file(
+    workspace_id: str, conversation_id: str, session_id: str
+) -> Path | None:
+    sessions_dir = codex_home_for(workspace_id, conversation_id) / "sessions"
     if not sessions_dir.exists():
         return None
     candidates = []

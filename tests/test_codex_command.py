@@ -9,6 +9,7 @@ def _request(*, session_id: str | None = None) -> CodexExecRequest:
         container="test-container",
         prompt="question",
         label="orchestrator",
+        workspace_id="w_main",
         conversation_id="conversation",
         turn_id="turn",
         session_id=session_id,

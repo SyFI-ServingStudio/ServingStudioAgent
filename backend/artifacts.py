@@ -1,8 +1,8 @@
-"""List and resolve artifact files inside a per-eval isolated workspace.
+"""List and resolve artifact files inside one durable workspace.
 
-An agent runs a prompt through `POST /api/eval`, gets back a `conversation_id`,
-then uses that id as `cid` to list and download artifacts (logs, JSON, parquet,
-plots) the run produced under `workspaces/<cid>/main`.
+Browser, interactive Agent, and eval responses expose a stable ``workspace_id``.
+Artifact routes use that id to list and download logs, JSON, parquet and plots
+from the workspace repo; conversation ids are not filesystem identities.
 
 Framework-agnostic on purpose: functions raise plain builtins so the FastAPI
 layer can map them to HTTP status codes (mirrors how `eval.run_eval` stays free
@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .codex_runtime.config import workspace_main_for
+from .store import WorkspaceRegistry
 
 # Build/cache/VCS trees that are never useful as run artifacts and would blow up
 # a listing. Skipped while walking; a caller can still download a specific file
@@ -26,13 +26,14 @@ _SKIP_DIRS = {".git", "target", "node_modules", "__pycache__", ".venv", ".uv-cac
 _DEFAULT_LIMIT = 2000
 
 
-def _workspace_root(cid: str) -> Path:
-    """Resolve and validate the workspace main tree for one eval conversation."""
-    if not cid or "/" in cid or "\\" in cid or cid in (".", ".."):
-        raise ValueError("invalid cid")
-    base = workspace_main_for(cid)
+def _workspace_root(workspace_id: str) -> Path:
+    """Resolve and validate the repo tree for one registered workspace."""
+    try:
+        base = WorkspaceRegistry().repo_path(workspace_id)
+    except KeyError as exc:
+        raise FileNotFoundError(f"unknown workspace {workspace_id!r}") from exc
     if not base.is_dir():
-        raise FileNotFoundError(f"no workspace for cid {cid!r}")
+        raise FileNotFoundError(f"workspace repo is missing for {workspace_id!r}")
     return base.resolve()
 
 
@@ -57,13 +58,13 @@ def _guard_inside(base: Path, rel_or_abs: str) -> Path:
 
 
 def list_artifacts(
-    cid: str,
+    workspace_id: str,
     *,
     subdir: str | None = None,
     limit: int = _DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    """List files under the eval workspace (optionally a subdir), path-guarded."""
-    base = _workspace_root(cid)
+    """List files under a workspace repo (optionally a subdir), path-guarded."""
+    base = _workspace_root(workspace_id)
     start = _guard_inside(base, subdir) if subdir else base
     if not start.is_dir():
         raise FileNotFoundError(f"not a directory: {subdir!r}")
@@ -93,7 +94,7 @@ def list_artifacts(
             break
     files.sort(key=lambda f: f["path"])
     return {
-        "cid": cid,
+        "workspace_id": workspace_id,
         "root": str(base),
         "count": len(files),
         "truncated": truncated,
@@ -101,9 +102,9 @@ def list_artifacts(
     }
 
 
-def resolve_artifact(cid: str, rel_path: str) -> Path:
+def resolve_artifact(workspace_id: str, rel_path: str) -> Path:
     """Resolve one artifact file for download, guarded to stay inside the workspace."""
-    base = _workspace_root(cid)
+    base = _workspace_root(workspace_id)
     resolved = _guard_inside(base, rel_path)
     if not resolved.is_file():
         raise FileNotFoundError(str(rel_path))

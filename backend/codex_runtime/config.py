@@ -11,8 +11,14 @@ from pathlib import Path
 WORKSPACE = Path(__file__).resolve().parents[3]
 UI_DIR = Path(__file__).resolve().parents[2]
 MAIN_DIR = WORKSPACE / "main"
-WORKSPACES_DIR = UI_DIR / "workspaces"
+AGENT_WORKSPACES_ROOT = Path(
+    os.environ.get("VIBESIM_WORKSPACES_ROOT", WORKSPACE / "agent-workspaces")
+).expanduser()
+# Legacy state is migration input only. New runtime code must not create data
+# below user-facing-ui/workspaces.
+LEGACY_WORKSPACES_DIR = UI_DIR / "workspaces"
 PROMPTS_DIR = UI_DIR / "backend" / "prompts"
+PROMPTS_CONTAINER_DIR = "/opt/vibesim/prompts"
 ANALYZER_MCP_DIR = UI_DIR / "backend" / "analyzer_evidence_mcp"
 ANALYZER_MCP_CONTAINER_DIR = "/opt/vibesim/analyzer-evidence-mcp"
 ANALYZER_MCP_PYTHON = "/opt/vibesim-analyzer-mcp-venv/bin/python"
@@ -59,7 +65,7 @@ CODEX_DOCKER_HF_HOME = "/model"
 CONTAINER_RUNTIME_VERSION = os.environ.get(
     "CODEX_RUNNER_IMAGE_VERSION", "prebuilt-codex-runner-v9"
 )
-ORCHESTRATOR_SCHEMA_IN_CONTAINER = "/workspace/.codex/orchestrator.schema.json"
+ORCHESTRATOR_SCHEMA_IN_CONTAINER = f"{PROMPTS_CONTAINER_DIR}/orchestrator.schema.json"
 AGENTS_PROMPT_DEFAULT = "AGENTS.md"
 AGENTS_PROMPT_AUTONOMOUS = "AGENTS.autonomous.md"
 
@@ -107,14 +113,24 @@ def prompt_fingerprint(*, autonomous: bool = False) -> str:
     return digest.hexdigest()[:16]
 
 
-def workspace_main_for(conversation_id: str) -> Path:
-    return WORKSPACES_DIR / conversation_id / "main"
+def workspace_main_for(workspace_id: str) -> Path:
+    """Return the conventional repo path for one workspace.
+
+    Descriptors are authoritative at the API boundary. Runtime workspace
+    creation uses the same fixed layout, so lower-level Docker helpers do not
+    need to parse mutable JSON on every call.
+    """
+    if workspace_id == "w_main":
+        return MAIN_DIR
+    return AGENT_WORKSPACES_ROOT / workspace_id / "repo"
 
 
-def codex_home_for(conversation_id: str) -> Path:
-    return WORKSPACES_DIR / conversation_id / "codex-home"
+def codex_home_for(workspace_id: str, conversation_id: str) -> Path:
+    return AGENT_WORKSPACES_ROOT / workspace_id / "codex" / conversation_id
 
 
-def container_name(conversation_id: str) -> str:
-    safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", conversation_id)[:48]
+def container_name(workspace_id: str, conversation_id: str) -> str:
+    safe = re.sub(
+        r"[^a-zA-Z0-9_.-]", "-", f"{workspace_id}-{conversation_id}"
+    )[:48]
     return f"vibesim-ui-{safe}"

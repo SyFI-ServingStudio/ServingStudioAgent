@@ -1,9 +1,10 @@
-"""Strict turn-time Analyzer context and Citation DSL v1 freezing.
+"""Strict turn-time Analyzer context and Citation DSL v2 freezing.
 
 The browser owns dictionary construction because it knows the active launcher
 axes and registered evidence panels. The conversation host only validates the
 bounded snapshot, exposes it to Codex, and freezes exact inline-code references
-against that immutable allowlist.
+against that immutable allowlist. V2 makes the workspace identity mandatory so
+an opaque Analyzer resource can never be resolved in the wrong workspace.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ class AggregateSelection(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     kind: Literal["aggregate"]
+    workspace_id: str = Field(alias="workspaceId", min_length=1)
     experiment_id: str = Field(alias="experimentId", min_length=1)
     panel_id: str | None = Field(default=None, alias="panelId", min_length=1)
     metric_key: str | None = Field(default=None, alias="metricKey", min_length=1)
@@ -44,6 +46,7 @@ class RunSelection(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     kind: Literal["run"]
+    workspace_id: str = Field(alias="workspaceId", min_length=1)
     run_id: str = Field(alias="runId", min_length=1)
     panel_id: str | None = Field(alias="panelId")
     scope: Literal["cluster", "pool", "worker", "kernel", "parallel"]
@@ -66,11 +69,11 @@ AnalyzerSelection = Annotated[
 
 
 class AggregateEvidenceRef(AggregateSelection):
-    protocol: Literal["vibesim.analyzer/v1"]
+    protocol: Literal["vibesim.analyzer/v2"]
 
 
 class RunEvidenceRef(RunSelection):
-    protocol: Literal["vibesim.analyzer/v1"]
+    protocol: Literal["vibesim.analyzer/v2"]
 
 
 EvidenceRef = Annotated[
@@ -89,14 +92,14 @@ class CitationDictionaryEntry(BaseModel):
     @model_validator(mode="after")
     def validate_token_and_target(self) -> "CitationDictionaryEntry":
         if _CITATION_TOKEN.fullmatch(self.token) is None:
-            raise ValueError("citation token does not match VibeSim Citation DSL v1")
+            raise ValueError("citation token does not match VibeSim Citation DSL v2")
         return self
 
 
 class CitationDictionarySnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    protocol: Literal["vibesim.citation-dictionary/v1"]
+    protocol: Literal["vibesim.citation-dictionary/v2"]
     identity: str = Field(min_length=1, max_length=160)
     document: str = Field(min_length=1, max_length=64_000)
     entries: list[CitationDictionaryEntry] = Field(max_length=2_000)
@@ -112,7 +115,7 @@ class CitationDictionarySnapshot(BaseModel):
 class AnalyzerTurnContext(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    protocol: Literal["vibesim.conversation-context/v1"]
+    protocol: Literal["vibesim.conversation-context/v2"]
     selection: AnalyzerSelection | None = None
     citation_dictionary: CitationDictionarySnapshot = Field(alias="citationDictionary")
 
@@ -120,7 +123,7 @@ class AnalyzerTurnContext(BaseModel):
 class FrozenCitation(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    protocol: Literal["vibesim.citation/v1"] = "vibesim.citation/v1"
+    protocol: Literal["vibesim.citation/v2"] = "vibesim.citation/v2"
     token: str
     source_start: int = Field(alias="sourceStart", ge=0)
     source_end: int = Field(alias="sourceEnd", ge=0)

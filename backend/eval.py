@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from .codex_runtime.config import DEFAULT_SANDBOX, prompt_fingerprint, workspace_main_for
 from .codex_runtime.docker import remove_container
 from .codex_runtime.turn import run_turn
+from .store import WorkspaceRegistry
 from .turn_result import collect_turn_event, new_turn_result
 
 
@@ -34,6 +35,11 @@ async def run_eval(
         raise ValueError("empty prompt")
 
     conversation_id = f"eval-{uuid.uuid4().hex[:12]}"
+    workspace_id = f"w_{conversation_id}"
+    WorkspaceRegistry().create(
+        f"Evaluation {conversation_id[-6:]}",
+        workspace_id=workspace_id,
+    )
     turn_id = uuid.uuid4().hex[:10]
     fingerprint = prompt_fingerprint(autonomous=autonomous)
     result = new_turn_result(
@@ -41,13 +47,15 @@ async def run_eval(
         turn_id=turn_id,
         sandbox=sandbox,
         autonomous=autonomous,
+        workspace_id=workspace_id,
         kept_workspace=True,
         kept_container=keep_container,
-        workspace=str(workspace_main_for(conversation_id)),
+        workspace=str(workspace_main_for(workspace_id)),
     )
 
     try:
         async for event in run_turn(
+            workspace_id,
             conversation_id,
             text,
             sandbox=sandbox,
@@ -62,6 +70,10 @@ async def run_eval(
         result["error"] = str(exc)
     finally:
         if not keep_container:
-            await asyncio.to_thread(remove_container, conversation_id)
+            await asyncio.to_thread(
+                remove_container,
+                workspace_id,
+                conversation_id,
+            )
 
     return result

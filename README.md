@@ -1,11 +1,72 @@
 # user-facing-ui
 
-A small web chat UI for VibeSim. The browser talks to a FastAPI backend, which
-drives **`codex exec` inside Docker**.
+A shared workspace/conversation backend for VibeSim. The browser talks to a
+FastAPI backend, which drives **`codex exec` inside Docker** and records the
+experiments produced by managed Launcher turns.
 
-Each conversation gets an isolated copy of git-tracked files from `../main`.
-That copy is mounted read/write into Docker at `/workspace`, while the real
-`../main` tree is left untouched.
+A workspace owns one repo/logs root and may contain many conversations. A
+managed workspace gets one isolated copy of git-tracked files from `../main`;
+all conversations in that workspace reuse it. `w_main` points at the real
+development checkout and is never copied or rewritten by workspace creation.
+Each conversation still gets its own Codex home and Docker container.
+
+## Workspace model
+
+Runtime state lives under `../agent-workspaces/`:
+
+```text
+agent-workspaces/
+├── registry.json
+├── w_main/
+│   ├── workspace.json
+│   └── workspace.sqlite
+└── w_<id>/
+    ├── workspace.json
+    ├── workspace.sqlite
+    ├── repo/
+    ├── codex/<conversation-id>/
+    └── jobs/
+```
+
+`workspace.json` is the human-readable identity/location descriptor.
+Conversations, messages, sessions, turns, jobs, experiments and
+conversation-to-experiment relationships live in that workspace's SQLite.
+`registry.json` is the bounded discovery surface consumed by the read-only
+Analyzer. Archiving a workspace removes its logs from active discovery;
+removing a conversation container does not remove the workspace repo or logs.
+
+The normal browser API is workspace-scoped:
+
+```text
+GET/POST /api/workspaces
+GET/PATCH /api/workspaces/{workspace_id}
+GET/POST /api/workspaces/{workspace_id}/conversations
+GET/DELETE /api/workspaces/{workspace_id}/conversations/{conversation_id}
+POST /api/workspaces/{workspace_id}/conversations/{conversation_id}/messages
+GET  /api/workspaces/{workspace_id}/conversations/{conversation_id}/stream
+POST /api/workspaces/{workspace_id}/conversations/{conversation_id}/cancel
+GET  /api/workspaces/{workspace_id}/conversations/{conversation_id}/experiments
+```
+
+Opening a workspace or Analyzer panel only lists/restores history. An empty
+conversation is materialized on the first actual send, not on page mount.
+
+Legacy `conversations.json` plus `workspaces/<conversation-id>/` data can be
+audited and migrated with:
+
+```bash
+UV_CACHE_DIR="$TMPDIR/uv-cache-user-facing-ui" \
+uv run python -m backend.migrate_workspaces --dry-run
+
+# Execute only after reviewing the exact plan and storage impact:
+UV_CACHE_DIR="$TMPDIR/uv-cache-user-facing-ui" \
+uv run python -m backend.migrate_workspaces --execute
+```
+
+Execution uses same-filesystem atomic renames, validates source/destination tree
+hashes and imported message counts, then archives only the now-empty legacy
+container plus JSON. It does not duplicate the legacy repo trees before moving
+them.
 
 ## Run
 
@@ -106,11 +167,11 @@ session when the loopback endpoint must outlive the current shell.
 ```text
 browser
   -> FastAPI
-  -> prepare workspaces/<conversation-id>/main from git-tracked ../main files
-     - copy backend/prompts/AGENTS.md or AGENTS.autonomous.md to /workspace/AGENTS.md
-     - link /workspace/.codex/skills -> /workspace/skills
-  -> seed workspaces/<id>/codex-home from host ~/.codex auth/config
-  -> docker run -v workspaces/<id>/main:/workspace -v workspaces/<id>/codex-home:/home/<user>/.codex
+  -> select agent-workspaces/<workspace-id>/repo (or the external w_main checkout)
+  -> seed agent-workspaces/<workspace-id>/codex/<conversation-id> from host ~/.codex auth/config
+  -> docker run -v <workspace-repo>:/workspace -v <conversation-codex-home>:/home/<user>/.codex
+     - mount backend/prompts read-only; role startup points Codex at the selected prompt
+     - repo-local skills remain in /workspace/skills
      - when host HF_HOME is set, mount it read-only at /model and set container HF_HOME=/model
      using the prebuilt CODEX_DOCKER_IMAGE
   -> codex exec/resume as orchestrator
@@ -124,6 +185,10 @@ browser
        GET .../stream -> 204 when the conversation is idle
        POST .../cancel -> send SIGINT to Codex and stop the whole turn
   -> stream progress + final text back to browser
+  -> when Launcher sees VIBESIM_MANAGED_RUN_CONTEXT:
+       register the bounded experiment root before artifacts are created
+       stream requested/running/analysis/ready lifecycle as job events
+       persist the stable experiment id and conversation relationship
 ```
 
 The orchestrator is normally an active human-in-the-loop coordinator. It reads
@@ -161,7 +226,7 @@ log instead of being rendered as an assistant answer.
 
 Long browser conversations load backwards in fixed-size message pages. The
 browser requests the newest page with
-`GET /api/conversations/{cid}?limit=<n>` and requests an older page with
+`GET /api/workspaces/{wid}/conversations/{cid}?limit=<n>` and requests an older page with
 `?limit=<n>&before=<start_index>`, where `start_index` comes from the current
 response's `message_page`. Reaching the top of the message viewport triggers the
 older request and preserves the visible scroll position while prepending it.
@@ -186,36 +251,42 @@ stateless; for testcases).
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
 | GET | `/api/agent/skill` | public | Agent skill doc (`SKILL.md`, `text/markdown`). |
-| POST | `/api/agent/conversations` | token | Create an interactive conversation. |
-| POST | `/api/agent/conversations/{cid}/messages` | token | Run one turn; synchronous JSON. |
-| GET | `/api/agent/conversations/{cid}` | token | Full conversation history. |
-| DELETE | `/api/agent/conversations/{cid}` | token | Human/operator cleanup only; calling agents must not invoke it. |
-| GET | `/api/agent/artifacts` | token | List files in a conversation's workspace. |
-| GET | `/api/agent/artifacts/download` | token | Download one workspace file. |
+| GET/POST | `/api/agent/workspaces` | token | List or create durable workspaces. |
+| POST | `/api/agent/workspaces/{wid}/conversations` | token | Create an interactive conversation. |
+| POST | `/api/agent/workspaces/{wid}/conversations/{cid}/messages` | token | Run one turn; synchronous JSON. |
+| GET | `/api/agent/workspaces/{wid}/conversations/{cid}` | token | Full conversation history. |
+| DELETE | `/api/agent/workspaces/{wid}/conversations/{cid}` | token | Human/operator cleanup only; calling agents must not invoke it. |
+| GET | `/api/agent/workspaces/{wid}/artifacts` | token | List workspace files. |
+| GET | `/api/agent/workspaces/{wid}/artifacts/download` | token | Download one workspace file. |
 | POST | `/api/eval` | token | Single-turn evaluation only (not interactive). |
 
 **Auth** is gated by `VIBESIM_API_TOKEN`. When it is set, agent endpoints require
 `Authorization: Bearer <token>` (missing/wrong → `401`); `/api/agent/skill` stays
 public. When it is unset (local dev / same-host eval harness), no header is
-needed. The browser UI routes (`/api/conversations*`, image `/api/file`) are
+needed. The browser UI routes (`/api/workspaces*`, image `/api/file`) are
 **not** token-gated in v1 — if you expose this backend cross-machine, bind the UI
 to localhost or add auth there (follow-up).
 
-### Interactive conversation — `/api/agent/conversations*`
+### Interactive conversation — `/api/agent/workspaces*`
 
 ```bash
-# 1. create (autonomous defaults false, so VibeSim will ask clarifying questions)
-cid=$(curl -sS http://127.0.0.1:8765/api/agent/conversations \
+# 1. create a durable workspace, then a conversation inside it
+workspace_id=$(curl -sS http://127.0.0.1:8765/api/agent/workspaces \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
-  -d '{"sandbox":"workspace-write"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+  -d '{"displayName":"Llama 3 H200 study"}' \
+  | uv run python -c 'import sys,json;print(json.load(sys.stdin)["workspace_id"])')
+cid=$(curl -sS "http://127.0.0.1:8765/api/agent/workspaces/$workspace_id/conversations" \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  -d '{"sandbox":"workspace-write"}' \
+  | uv run python -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 
 # 2. send a turn; read `final`. If it is a question or you want to steer, send another.
-curl -sS "http://127.0.0.1:8765/api/agent/conversations/$cid/messages" \
+curl -sS "http://127.0.0.1:8765/api/agent/workspaces/$workspace_id/conversations/$cid/messages" \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"text":"Simulate Llama-3-8B dense on 1xH200 at Poisson rate 48; report throughput and TPOT."}'
 
 # 3. retain $cid for human observation and artifact retrieval
-echo "VibeSim conversation: $cid"
+echo "VibeSim workspace/conversation: $workspace_id / $cid"
 ```
 
 A turn is **synchronous** and may take minutes (profiling/sim) — set a generous
@@ -232,7 +303,7 @@ explicit human/operator cleanup.
 ### Single-turn eval — `POST /api/eval` (evaluation only)
 
 For capability checks / testcases that do not need a conversation. **Not the
-interactive interface** — prefer `/api/agent/conversations*` for real agent work.
+interactive interface** — prefer `/api/agent/workspaces*` for real agent work.
 
 ```bash
 curl -sS http://127.0.0.1:8765/api/eval \
@@ -246,7 +317,7 @@ not write to the UI conversation list, does not use SSE, and defaults to
 `autonomous: true`. It is **synchronous** — the response returns only after the
 task finishes, so set a generous client timeout for profiling/sim runs. By
 default it keeps the eval workspace so code, logs, plots, and artifacts can be
-fetched afterwards (via `/api/agent/artifacts*` using the returned `conversation_id`),
+fetched afterwards (via `/api/agent/workspaces/{workspace_id}/artifacts*`),
 but removes the Docker container after the run. Batch execution is intentionally
 outside the backend: run multiple `/api/eval` calls from the harness with the
 concurrency you want.
@@ -259,21 +330,20 @@ Useful request fields:
 - `keep_container`: optional, default `false`; normally leave this off so evals
   do not accumulate Docker containers.
 
-The response includes `conversation_id` (use as `cid` for artifact retrieval),
-`final`, `ok`, `implementer_summaries`, `progress`, and `workspace`.
+The response includes `workspace_id`, `conversation_id`, `final`, `ok`,
+`implementer_summaries`, `progress`, and `workspace`.
 
 ### Artifact retrieval
 
 ```bash
 # list files the run produced
-curl -sS -G http://127.0.0.1:8765/api/agent/artifacts \
+curl -sS -G http://127.0.0.1:8765/api/agent/workspaces/w_eval-1a2b3c4d5e6f/artifacts \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
-  --data-urlencode "cid=eval-1a2b3c4d5e6f" --data-urlencode "subdir=logs"
+  --data-urlencode "subdir=logs"
 
 # download one of them
-curl -sS -OJ -G http://127.0.0.1:8765/api/agent/artifacts/download \
+curl -sS -OJ -G http://127.0.0.1:8765/api/agent/workspaces/w_eval-1a2b3c4d5e6f/artifacts/download \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
-  --data-urlencode "cid=eval-1a2b3c4d5e6f" \
   --data-urlencode "path=logs/<run>/summary.json"
 ```
 
@@ -318,7 +388,7 @@ Docker GPU forwarding.
 |------|---------|
 | `backend/app.py` | FastAPI routes + SSE streaming + Vite static serving |
 | `backend/codex_runtime/config.py` | environment, path, mode, prompt-fingerprint settings |
-| `backend/codex_runtime/workspace.py` | per-conversation `main/` copy and local git bootstrap |
+| `backend/codex_runtime/workspace.py` | per-workspace `main/` copy and local git bootstrap |
 | `backend/codex_runtime/docker.py` | Docker container lifecycle and isolated Codex home setup |
 | `backend/codex_runtime/exec_types.py` | shared Codex execution request/event types |
 | `backend/codex_runtime/codex_command.py` | Docker + `codex exec` command construction |
@@ -334,16 +404,16 @@ Docker GPU forwarding.
 | `backend/prompts/AGENTS.md` | detailed instructions copied into each `/workspace` |
 | `backend/prompts/AGENTS.autonomous.md` | autonomous-mode instructions copied as `/workspace/AGENTS.md` |
 | `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
-| `backend/store.py` | in-memory + JSON-file conversation store |
+| `backend/store.py` | workspace registry plus per-workspace SQLite conversation/event store |
 | `docker/codex-runner.Dockerfile` | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked VibeSim deps |
 | `scripts/build-codex-runner-image.sh` | one-shot image builder used by `run.sh` when needed |
 | `frontend/` | React + TypeScript + Vite chat UI |
-| `workspaces/` | generated per-conversation copies of `../main` |
+| `../agent-workspaces/` | generated workspace envelopes, shared repos, Codex homes, and SQLite state |
 
 ## Environment
 
 - `VIBESIM_API_TOKEN` — bearer token gating the agent endpoints (`/api/eval`,
-  `/api/agent/artifacts`, `/api/agent/artifacts/download`). Unset → those endpoints are open
+  `/api/agent/workspaces*`). Unset → those endpoints are open
   (local dev). Set → they require `Authorization: Bearer <token>`. `/api/agent/skill`
   is public regardless.
 - `CODEX_MODEL` — Codex model, default `gpt-5.6-sol`.
@@ -385,10 +455,15 @@ Docker GPU forwarding.
   are isolated from other conversations.
 - `CODEX_DOCKER_UV_CACHE_DIR` — where `uv` stores cache inside Docker, default
   `/opt/vibesim-uv-cache`, also baked into the runner image.
+- `VIBESIM_WORKSPACES_ROOT` — shared workspace registry/state root, default
+  `../agent-workspaces`.
+- `VIBESIM_MANAGED_BACKEND_URL` — callback origin written into short-lived
+  managed Launcher capabilities, default
+  `http://host.docker.internal:8765`. It must resolve from the Codex container.
 - `ANALYZER_MCP_SOURCE` — default evidence ownership mode, `external`. The MCP
   tool exposes the clearer per-call names `source="host"` for a pre-existing
   experiment selected in the Analyzer UI and `source="workspace"` for a
-  simulation created inside the isolated conversation workspace.
+  simulation created inside the managed workspace.
 - `ANALYZER_MCP_BASE_URL` — host Analyzer origin, default
   `http://host.docker.internal:8787`. Bind the host Analyzer only to the Docker
   bridge address rather than all interfaces. The container receives an
@@ -403,6 +478,7 @@ Docker GPU forwarding.
 - `PORT`, `HOST` — FastAPI bind settings used by `run.sh`.
 
 This is a local development tool. It copies host `~/.codex` authentication and
-configuration into an isolated per-conversation `codex-home`, then bind-mounts
-that clean home into Docker as `/home/<user>/.codex`. Runtime state such as
-`tmp`, `sessions`, and rollout logs stays isolated per conversation.
+configuration into a conversation-specific `codex-home` inside the selected
+workspace, then bind-mounts that clean home into Docker as
+`/home/<user>/.codex`. Conversations share the workspace repo and experiments,
+while `tmp`, sessions, and rollout logs stay isolated per conversation.

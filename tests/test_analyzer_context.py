@@ -14,7 +14,7 @@ from backend.analyzer_context import (
 def dictionary() -> CitationDictionarySnapshot:
     return CitationDictionarySnapshot.model_validate(
         {
-            "protocol": "vibesim.citation-dictionary/v1",
+            "protocol": "vibesim.citation-dictionary/v2",
             "identity": "s_test:1",
             "document": "Use `exp.tp2.rate20.throughput`.",
             "entries": [
@@ -22,8 +22,9 @@ def dictionary() -> CitationDictionarySnapshot:
                     "token": "exp.tp2.rate20.throughput",
                     "displayLabel": "TP=2 · rate=20 · Total throughput",
                     "target": {
-                        "protocol": "vibesim.analyzer/v1",
+                        "protocol": "vibesim.analyzer/v2",
                         "kind": "aggregate",
+                        "workspaceId": "w_test",
                         "experimentId": "s_test",
                         "panelId": "total_tps",
                         "metricKey": "total_tps",
@@ -76,8 +77,9 @@ class AnalyzerContextTests(unittest.TestCase):
 
         payload = dictionary().model_dump(by_alias=True)
         payload["entries"][0]["target"] = {
-            "protocol": "vibesim.analyzer/v1",
+            "protocol": "vibesim.analyzer/v2",
             "kind": "run",
+            "workspaceId": "w_test",
             "runId": "r_test",
             "scope": "worker",
         }
@@ -87,9 +89,10 @@ class AnalyzerContextTests(unittest.TestCase):
     def test_prompt_exposes_literal_selection_and_bounded_dictionary(self) -> None:
         context = AnalyzerTurnContext.model_validate(
             {
-                "protocol": "vibesim.conversation-context/v1",
+                "protocol": "vibesim.conversation-context/v2",
                 "selection": {
                     "kind": "aggregate",
+                    "workspaceId": "w_test",
                     "experimentId": "s_test",
                     "panelId": "total_tps",
                 },

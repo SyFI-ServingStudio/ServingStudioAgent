@@ -16,6 +16,7 @@ class CodexExecRequest:
     container: str
     prompt: str
     label: str
+    workspace_id: str
     conversation_id: str
     turn_id: str
     session_id: str | None = None

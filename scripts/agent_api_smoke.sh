@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # End-to-end smoke for the VibeSim agent HTTP API.
 #
-# Exercises: GET /api/agent/skill, POST /api/eval (read-only prompt), GET /api/agent/artifacts,
-# GET /api/agent/artifacts/download. When VIBESIM_API_TOKEN is set it also asserts that a
+# Exercises: GET /api/agent/skill, POST /api/eval (read-only prompt), and workspace-scoped
+# artifact list/download. When VIBESIM_API_TOKEN is set it also asserts that a
 # tokenless /api/eval is rejected with 401.
 #
 # Requires the backend to be running (./run.sh) and, for the eval step, Docker +
-# Codex auth (the eval spins up the isolated container). Needs curl + python3.
+# Codex auth (the eval spins up the isolated container). Needs curl + uv.
 #
 # Usage:
 #   scripts/agent_api_smoke.sh [BASE_URL]
@@ -23,7 +23,7 @@ if [ -n "$TOKEN" ]; then
 fi
 
 # Extract one field from a JSON blob on stdin.
-json_get() { python3 -c 'import sys,json; d=json.load(sys.stdin); print(d'"$1"')'; }
+json_get() { uv run python -c 'import sys,json; d=json.load(sys.stdin); print(d'"$1"')'; }
 
 echo "== 1. GET /api/agent/skill (public) =="
 skill="$(curl -fsS "$BASE/api/agent/skill")"
@@ -37,25 +37,27 @@ if [ -n "$TOKEN" ]; then
 fi
 
 echo "== 2. POST /api/eval (sandbox=read-only) — may take minutes =="
-body="$(python3 -c 'import json,sys; print(json.dumps({"prompt":sys.argv[1],"sandbox":"read-only"}))' "$PROMPT")"
+body="$(uv run python -c 'import json,sys; print(json.dumps({"prompt":sys.argv[1],"sandbox":"read-only"}))' "$PROMPT")"
 resp="$(curl -fsS -X POST "$BASE/api/eval" "${AUTH[@]}" \
   -H 'Content-Type: application/json' -d "$body")"
 cid="$(echo "$resp" | json_get '["conversation_id"]')"
+workspace_id="$(echo "$resp" | json_get '["workspace_id"]')"
 ok="$(echo "$resp" | json_get '["ok"]')"
-echo "  conversation_id=$cid ok=$ok"
+echo "  workspace_id=$workspace_id conversation_id=$cid ok=$ok"
 [ -n "$cid" ] || { echo "  FAIL: no conversation_id"; exit 1; }
+[ -n "$workspace_id" ] || { echo "  FAIL: no workspace_id"; exit 1; }
 
-echo "== 3. GET /api/agent/artifacts?cid=$cid =="
-listing="$(curl -fsS -G "$BASE/api/agent/artifacts" "${AUTH[@]}" --data-urlencode "cid=$cid")"
+echo "== 3. GET workspace artifacts =="
+listing="$(curl -fsS -G "$BASE/api/agent/workspaces/$workspace_id/artifacts" "${AUTH[@]}")"
 count="$(echo "$listing" | json_get '["count"]')"
 echo "  artifact count=$count"
-first="$(echo "$listing" | python3 -c 'import sys,json; f=json.load(sys.stdin)["files"]; print(f[0]["path"] if f else "")')"
+first="$(echo "$listing" | uv run python -c 'import sys,json; f=json.load(sys.stdin)["files"]; print(f[0]["path"] if f else "")')"
 
 if [ -n "$first" ]; then
-  echo "== 4. GET /api/agent/artifacts/download path=$first =="
-  out="$(mktemp)"
-  curl -fsS -G "$BASE/api/agent/artifacts/download" "${AUTH[@]}" \
-    --data-urlencode "cid=$cid" --data-urlencode "path=$first" -o "$out"
+  echo "== 4. GET workspace artifact download path=$first =="
+  out="$(mktemp "$TMPDIR/vibesim-agent-artifact.XXXXXX")"
+  curl -fsS -G "$BASE/api/agent/workspaces/$workspace_id/artifacts/download" "${AUTH[@]}" \
+    --data-urlencode "path=$first" -o "$out"
   echo "  downloaded $(wc -c <"$out") bytes -> $out"
 else
   echo "  (no files listed; skipping download)"

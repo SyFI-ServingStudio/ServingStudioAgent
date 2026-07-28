@@ -39,6 +39,7 @@ class CodexOutputCollector:
         if not self.current_session_id:
             return
         self.rollout_file = _find_rollout_file(
+            self.request.workspace_id,
             self.request.conversation_id,
             self.current_session_id,
         )
@@ -66,6 +67,7 @@ class CodexOutputCollector:
             return []
         if self.rollout_file is None:
             self.rollout_file = _find_rollout_file(
+                self.request.workspace_id,
                 self.request.conversation_id,
                 self.current_session_id,
             )
@@ -131,6 +133,7 @@ class CodexOutputCollector:
         """
         if self.rollout_file is None and self.current_session_id:
             self.rollout_file = _find_rollout_file(
+                self.request.workspace_id,
                 self.request.conversation_id,
                 self.current_session_id,
             )

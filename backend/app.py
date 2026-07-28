@@ -3,29 +3,28 @@
 Endpoints:
   GET    /                              -> Vite frontend index
   GET    /assets/*                      -> Vite frontend assets
-  GET    /api/conversations             -> list (id, title, updated_at)
-  POST   /api/conversations             -> create empty conversation
-  GET    /api/conversations/{cid}       -> full or cursor-paged conversation
-  DELETE /api/conversations/{cid}       -> delete
-  POST   /api/conversations/{cid}/messages  -> SSE stream of one turn
-  GET    /api/conversations/{cid}/stream    -> reconnect to the active turn
-  POST   /api/conversations/{cid}/cancel    -> cancel the active turn
+  GET/POST /api/workspaces              -> list/create durable workspaces
+  GET/PATCH /api/workspaces/{wid}       -> workspace descriptor
+  GET/POST /api/workspaces/{wid}/conversations -> list/create conversations
+  GET/DELETE /api/workspaces/{wid}/conversations/{cid} -> history/delete
+  POST   /api/workspaces/{wid}/conversations/{cid}/messages -> SSE turn
+  GET    /api/workspaces/{wid}/conversations/{cid}/stream -> reconnect
+  POST   /api/workspaces/{wid}/conversations/{cid}/cancel -> cancel
+  GET    /api/workspaces/{wid}/conversations/{cid}/experiments -> linked results
+  POST   /api/internal/managed-runs/*   -> capability-gated Launcher callbacks
   POST   /api/eval                          -> JSON single-turn eval (evaluation only)
   GET    /api/agent/skill                    -> agent skill doc (SKILL.md, public)
-  GET    /api/agent/artifacts                -> list files in a run's workspace
-  GET    /api/agent/artifacts/download       -> download one workspace file
-  POST   /api/agent/conversations            -> create an agent conversation
-  GET    /api/agent/conversations/{cid}      -> full agent conversation history
-  DELETE /api/agent/conversations/{cid}      -> delete an agent conversation
-  POST   /api/agent/conversations/{cid}/messages -> run one turn, synchronous JSON
+  GET    /api/agent/workspaces/{wid}/artifacts -> list workspace artifacts
+  POST   /api/agent/workspaces/{wid}/conversations -> create agent conversation
+  POST   /api/agent/workspaces/{wid}/conversations/{cid}/messages -> sync turn
 
 All agent-facing endpoints share the /api/agent/* prefix and are gated by
 `require_token` when VIBESIM_API_TOKEN is set; /api/agent/skill stays public so an
 agent can learn the contract before it holds a token. The
-`/api/agent/conversations*` endpoints are the real interactive interface
+`/api/agent/workspaces/*/conversations*` endpoints are the real interactive interface
 (multi-turn, session + workspace continuity, reusing `store` and `run_turn`);
 `/api/eval` is single-turn and evaluation-only (kept outside the /api/agent/*
-namespace on purpose). The browser SSE endpoints (/api/conversations*) are
+namespace on purpose). The browser SSE endpoints (/api/workspaces/*/conversations*) are
 unchanged and not token-gated.
 
 Browser turns run independently of any one HTTP connection, so a refreshed page
@@ -37,8 +36,9 @@ token breakdown), `implementer` (implementer summary), then `done` (stored final
 answer). `implementer`/`decision`/`usage` can repeat inside one browser turn when the
 orchestrator issues follow-up tasks. The render-relevant events are also persisted as
 an ordered `activity` list on the assistant message so a reload rebuilds the same role
-timeline. A per-conversation lock prevents two turns racing the same copied
-workspace/container.
+timeline. A per-conversation lock prevents two turns racing the same Codex
+session/container; conversations in one workspace intentionally share its repo
+and experiment state.
 """
 
 from __future__ import annotations
@@ -68,8 +68,6 @@ from .codex_runtime.config import (
     MAIN_DIR,
     SANDBOX_MODES,
     VIBESIM_API_TOKEN,
-    WORKSPACE,
-    WORKSPACES_DIR,
     prompt_fingerprint,
     workspace_main_for,
 )
@@ -78,6 +76,12 @@ from .codex_runtime.turn import run_turn
 from .codex_runtime.workspace import prepare_workspace
 from .eval import EvalRequest, run_eval
 from .logging_config import compact_text, configure_logging, log_event
+from .managed_context import (
+    Capability,
+    bearer_token,
+    capabilities,
+    remove_managed_context,
+)
 from .store import Store
 from .turn_result import collect_turn_event, new_turn_result
 
@@ -92,11 +96,17 @@ SKILL_DOC = UI_DIR / "SKILL.md"
 app = FastAPI(title="VibeSim Chat")
 store = Store()
 
-_conv_locks: dict[str, asyncio.Lock] = {}
+_workspace_locks: dict[str, asyncio.Lock] = {}
 
 
-def _lock_for(cid: str) -> asyncio.Lock:
-    return _conv_locks.setdefault(cid, asyncio.Lock())
+def _lock_for(workspace_id: str) -> asyncio.Lock:
+    """Managed Agent turns are serialized at workspace scope.
+
+    Analyzer reads do not use this lease. Treating every Codex turn as
+    potentially mutating is conservative and prevents two conversations from
+    racing the same repo before command-level intent is known.
+    """
+    return _workspace_locks.setdefault(workspace_id, asyncio.Lock())
 
 
 @dataclass
@@ -136,7 +146,7 @@ class ActiveBrowserTurn:
                 return
 
 
-_active_browser_turns: dict[str, ActiveBrowserTurn] = {}
+_active_browser_turns: dict[tuple[str, str], ActiveBrowserTurn] = {}
 
 
 def _turn_stream_response(active_turn: ActiveBrowserTurn) -> StreamingResponse:
@@ -189,6 +199,38 @@ def _turn_failure(exc: Exception) -> dict[str, str]:
     }
 
 
+_MANAGED_ACTIVITY_KINDS = {
+    "simulation.requested",
+    "simulation.running",
+    "analysis.running",
+    "experiment.ready",
+    "experiment.failed",
+    "experiment.interrupted",
+}
+
+
+def _managed_turn_activity(workspace_id: str, turn_id: str) -> list[dict]:
+    """Project durable managed-run events into the chat timeline contract."""
+    activity: list[dict] = []
+    for event in store.list_turn_events(
+        workspace_id,
+        turn_id,
+        kinds=_MANAGED_ACTIVITY_KINDS,
+    ):
+        payload = event["payload"]
+        activity.append(
+            {
+                "kind": "job",
+                "workspaceId": str(payload.get("workspaceId") or workspace_id),
+                "status": str(payload.get("status") or event["kind"]),
+                "experimentId": str(payload.get("experimentId") or ""),
+                "experimentPath": str(payload.get("experimentPath") or ""),
+                "jobId": str(payload.get("jobId") or ""),
+            }
+        )
+    return activity
+
+
 def _autonomous_for_turn(conv: dict, requested_autonomous: bool) -> bool:
     """Lock autonomous mode once the conversation has a user-visible history."""
     if conv.get("messages"):
@@ -205,6 +247,29 @@ class NewConversation(BaseModel):
     # Materialize workspaces/<cid>/main eagerly at create (instead of lazily on
     # the first message) so the caller can bind-mount it read-only immediately.
     eager: bool = False
+
+
+class NewWorkspace(BaseModel):
+    display_name: str = Field(alias="displayName")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class UpdateWorkspace(BaseModel):
+    display_name: str | None = Field(default=None, alias="displayName")
+    state: str | None = None
+
+
+class RegisterManagedRun(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    experiment_root: str = Field(alias="experimentRoot")
+    run_count: int = Field(default=1, ge=1, alias="runCount")
+    axes: list[str] = Field(default_factory=list)
+
+
+class UpdateManagedRun(BaseModel):
+    status: str
 
 
 class SendMessage(BaseModel):
@@ -241,24 +306,321 @@ def index() -> FileResponse:
     return FileResponse(FRONTEND / "index.html")
 
 
-@app.get("/api/conversations")
-def list_conversations() -> dict:
-    return {"conversations": store.list(), "sandbox_modes": list(SANDBOX_MODES)}
+@app.get("/api/workspaces")
+def list_workspaces() -> dict:
+    return {"workspaces": store.registry.list()}
 
 
-@app.post("/api/conversations")
-def create_conversation(body: NewConversation) -> dict:
+def _create_workspace(body: NewWorkspace) -> dict:
+    try:
+        descriptor = store.registry.create(body.display_name)
+        prepare_workspace(descriptor["workspace_id"])
+        return descriptor
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/workspaces")
+def create_workspace(body: NewWorkspace) -> dict:
+    return _create_workspace(body)
+
+
+@app.get("/api/workspaces/{workspace_id}")
+def get_workspace(workspace_id: str) -> dict:
+    try:
+        return store.registry.get(workspace_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="workspace not found") from exc
+
+
+@app.patch("/api/workspaces/{workspace_id}")
+def update_workspace(workspace_id: str, body: UpdateWorkspace) -> dict:
+    try:
+        return store.registry.update(
+            workspace_id,
+            display_name=body.display_name,
+            state=body.state,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="workspace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/workspaces/{workspace_id}/conversations")
+def list_conversations(workspace_id: str) -> dict:
+    try:
+        conversations = store.list(workspace_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="workspace not found") from exc
+    return {
+        "workspace_id": workspace_id,
+        "conversations": conversations,
+        "sandbox_modes": list(SANDBOX_MODES),
+    }
+
+
+@app.post("/api/workspaces/{workspace_id}/conversations")
+def create_conversation(workspace_id: str, body: NewConversation) -> dict:
+    try:
+        store.registry.get(workspace_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="workspace not found") from exc
     cid = uuid.uuid4().hex[:12]
     fingerprint = prompt_fingerprint(autonomous=body.autonomous)
     log_event(
         LOG,
         "conversation.create",
+        workspace_id=workspace_id,
         conversation_id=cid,
         sandbox=body.sandbox,
         autonomous=body.autonomous,
         prompt_fingerprint=fingerprint,
     )
-    return store.create(cid, body.sandbox, fingerprint, autonomous=body.autonomous)
+    conversation = store.create(
+        workspace_id,
+        cid,
+        body.sandbox,
+        fingerprint,
+        autonomous=body.autonomous,
+        peer_workspace=body.peer_workspace,
+    )
+    if body.eager:
+        conversation["workspace_path"] = str(prepare_workspace(workspace_id))
+    return conversation
+
+
+def require_managed_capability(
+    authorization: str | None = Header(default=None),
+) -> Capability:
+    capability = capabilities.authorize(bearer_token(authorization))
+    if capability is None:
+        raise HTTPException(
+            status_code=401,
+            detail="missing, expired, or invalid managed-run capability",
+        )
+    return capability
+
+
+def _managed_experiment_root(
+    capability: Capability,
+    requested_root: str,
+) -> tuple[Path, str, str]:
+    """Resolve a Launcher path into the capability's registered logs root."""
+    if not requested_root.strip():
+        raise HTTPException(status_code=400, detail="experimentRoot must not be empty")
+    repo_root = store.registry.repo_path(capability.workspace_id).resolve()
+    logs_root = store.registry.logs_path(capability.workspace_id).resolve()
+    requested = Path(requested_root)
+    if requested == Path("/workspace") or Path("/workspace") in requested.parents:
+        host_path = repo_root / requested.relative_to("/workspace")
+        approved_root = requested.as_posix()
+    elif requested.is_absolute():
+        host_path = requested
+        approved_root = requested.as_posix()
+    else:
+        host_path = repo_root / requested
+        approved_root = requested.as_posix()
+    resolved = host_path.resolve(strict=False)
+    if resolved == logs_root:
+        raise HTTPException(
+            status_code=400,
+            detail="experimentRoot must name a folder below the workspace logs root",
+        )
+    if logs_root not in resolved.parents:
+        raise HTTPException(
+            status_code=403,
+            detail="experimentRoot is outside the workspace logs root",
+        )
+    relative_path = resolved.relative_to(logs_root).as_posix()
+    return resolved, relative_path, approved_root
+
+
+@app.post("/api/internal/managed-runs/register")
+async def register_managed_run(
+    body: RegisterManagedRun,
+    capability: Capability = Depends(require_managed_capability),
+) -> dict:
+    if store.get(capability.workspace_id, capability.conversation_id) is None:
+        raise HTTPException(status_code=404, detail="managed conversation not found")
+    host_root, relative_path, approved_root = _managed_experiment_root(
+        capability,
+        body.experiment_root,
+    )
+    metadata_path = host_root / "experiment.meta.json"
+    metadata: dict | None = None
+    if metadata_path.is_file():
+        try:
+            metadata = json.loads(metadata_path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="existing experiment metadata could not be read",
+            ) from exc
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("schema_version") != 1
+            or not isinstance(metadata.get("experiment_id"), str)
+            or not metadata["experiment_id"]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="existing experiment metadata is incompatible",
+            )
+    database_experiment = store.experiment_by_path(
+        capability.workspace_id,
+        relative_path,
+    )
+    metadata_experiment_id = (
+        str(metadata["experiment_id"]) if metadata is not None else None
+    )
+    database_experiment_id = (
+        str(database_experiment["id"]) if database_experiment is not None else None
+    )
+    if (
+        metadata_experiment_id is not None
+        and database_experiment_id is not None
+        and metadata_experiment_id != database_experiment_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="filesystem and workspace database disagree on experiment identity",
+        )
+    experiment_id = (
+        metadata_experiment_id
+        or database_experiment_id
+        or f"e_{uuid.uuid4().hex}"
+    )
+    job = store.create_job(
+        capability.workspace_id,
+        conversation_id=capability.conversation_id,
+        turn_id=capability.turn_id,
+        role=capability.role,
+        experiment_id=experiment_id,
+        experiment_path=relative_path,
+    )
+    host_root.mkdir(parents=True, exist_ok=True)
+    if metadata is None:
+        metadata = {
+            "schema_version": 1,
+            "experiment_id": job["experiment_id"],
+            "origin": {
+                "kind": "managed",
+                "workspace_id": capability.workspace_id,
+                "conversation_id": capability.conversation_id,
+                "turn_id": capability.turn_id,
+                "job_id": job["job_id"],
+                "role": capability.role,
+            },
+        }
+        metadata_temporary = metadata_path.with_suffix(".json.tmp")
+        metadata_temporary.write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+            "utf-8",
+        )
+        metadata_temporary.replace(metadata_path)
+    event = {
+        "kind": "simulation.requested",
+        "workspaceId": capability.workspace_id,
+        "conversationId": capability.conversation_id,
+        "turnId": capability.turn_id,
+        "jobId": job["job_id"],
+        "experimentId": job["experiment_id"],
+        "experimentPath": relative_path,
+        "runCount": body.run_count,
+        "axes": body.axes,
+    }
+    store.append_turn_event(
+        capability.workspace_id,
+        capability.turn_id,
+        "simulation.requested",
+        event,
+    )
+    active_turn = _active_browser_turns.get(
+        (capability.workspace_id, capability.conversation_id)
+    )
+    if active_turn is not None and not active_turn.finished:
+        await active_turn.publish(_sse("job", event))
+    return {
+        "schemaVersion": 1,
+        "workspaceId": capability.workspace_id,
+        "conversationId": capability.conversation_id,
+        "turnId": capability.turn_id,
+        "jobId": job["job_id"],
+        "experimentId": job["experiment_id"],
+        "approvedRoot": approved_root,
+    }
+
+
+@app.post("/api/internal/managed-runs/{job_id}/status")
+async def update_managed_run(
+    job_id: str,
+    body: UpdateManagedRun,
+    capability: Capability = Depends(require_managed_capability),
+) -> dict:
+    allowed_statuses = {
+        "running",
+        "analysis_running",
+        "ready",
+        "failed",
+        "interrupted",
+    }
+    if body.status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="unsupported managed-run status")
+    job = store.update_job(
+        capability.workspace_id,
+        job_id,
+        status=body.status,
+        conversation_id=capability.conversation_id,
+        turn_id=capability.turn_id,
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="managed job not found")
+    event_kind = {
+        "running": "simulation.running",
+        "analysis_running": "analysis.running",
+        "ready": "experiment.ready",
+        "failed": "experiment.failed",
+        "interrupted": "experiment.interrupted",
+    }[body.status]
+    event = {
+        "kind": event_kind,
+        "workspaceId": capability.workspace_id,
+        "conversationId": capability.conversation_id,
+        "turnId": capability.turn_id,
+        "jobId": job_id,
+        "experimentId": job["experiment_id"],
+        "experimentPath": job["experiment_path"],
+        "status": body.status,
+    }
+    store.append_turn_event(
+        capability.workspace_id,
+        capability.turn_id,
+        event_kind,
+        event,
+    )
+    active_turn = _active_browser_turns.get(
+        (capability.workspace_id, capability.conversation_id)
+    )
+    if active_turn is not None and not active_turn.finished:
+        await active_turn.publish(_sse("job", event))
+    return event
+
+
+@app.get(
+    "/api/workspaces/{workspace_id}/conversations/{cid}/experiments"
+)
+def list_conversation_experiments(workspace_id: str, cid: str) -> dict:
+    if store.get(workspace_id, cid) is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {
+        "workspace_id": workspace_id,
+        "conversation_id": cid,
+        "experiments": store.list_experiments(
+            workspace_id,
+            conversation_id=cid,
+        ),
+    }
 
 
 @app.post("/api/eval")
@@ -283,6 +645,19 @@ def serve_skill() -> FileResponse:
     return FileResponse(str(SKILL_DOC), media_type="text/markdown")
 
 
+@app.get("/api/agent/workspaces")
+def agent_list_workspaces(_: None = Depends(require_token)) -> dict:
+    return {"workspaces": store.registry.list()}
+
+
+@app.post("/api/agent/workspaces")
+def agent_create_workspace(
+    body: NewWorkspace,
+    _: None = Depends(require_token),
+) -> dict:
+    return _create_workspace(body)
+
+
 # FileNotFoundError/PermissionError/ValueError raised by artifacts.py map to
 # 404/403/400 so the agent gets an actionable status without HTTP leaking into
 # that module.
@@ -294,27 +669,27 @@ def _artifact_http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
-@app.get("/api/agent/artifacts")
+@app.get("/api/agent/workspaces/{workspace_id}/artifacts")
 def list_workspace_artifacts(
-    cid: str = Query(...),
+    workspace_id: str,
     subdir: str | None = Query(default=None),
     limit: int = Query(default=2000, ge=1, le=20000),
     _: None = Depends(require_token),
 ) -> dict:
     try:
-        return list_artifacts(cid, subdir=subdir, limit=limit)
+        return list_artifacts(workspace_id, subdir=subdir, limit=limit)
     except (ValueError, FileNotFoundError, PermissionError) as exc:
         raise _artifact_http_error(exc) from exc
 
 
-@app.get("/api/agent/artifacts/download")
+@app.get("/api/agent/workspaces/{workspace_id}/artifacts/download")
 def download_workspace_artifact(
-    cid: str = Query(...),
+    workspace_id: str,
     path: str = Query(...),
     _: None = Depends(require_token),
 ) -> FileResponse:
     try:
-        resolved = resolve_artifact(cid, path)
+        resolved = resolve_artifact(workspace_id, path)
     except (ValueError, FileNotFoundError, PermissionError) as exc:
         raise _artifact_http_error(exc) from exc
     return FileResponse(str(resolved), filename=resolved.name)
@@ -325,19 +700,26 @@ def download_workspace_artifact(
 # `run_turn` as the browser SSE path, so a conversation keeps its isolated
 # workspace and resumes its orchestrator/implementer Codex sessions across turns.
 # The calling agent reads `final` and, like a human, decides whether to answer a
-# clarifying question or steer with another turn. Artifacts are fetched via
-# /api/agent/artifacts* using the returned `conversation_id` as `cid`.
+# clarifying question or steer with another turn. Artifacts are fetched through
+# the workspace-scoped /api/agent/workspaces/{workspace_id}/artifacts* routes.
 
 
-@app.post("/api/agent/conversations")
+@app.post("/api/agent/workspaces/{workspace_id}/conversations")
 def agent_create_conversation(
-    body: NewConversation, _: None = Depends(require_token)
+    workspace_id: str,
+    body: NewConversation,
+    _: None = Depends(require_token),
 ) -> dict:
+    try:
+        store.registry.get(workspace_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="workspace not found") from exc
     cid = uuid.uuid4().hex[:12]
     fingerprint = prompt_fingerprint(autonomous=body.autonomous)
     log_event(
         LOG,
         "agent.conversation.create",
+        workspace_id=workspace_id,
         conversation_id=cid,
         sandbox=body.sandbox,
         autonomous=body.autonomous,
@@ -346,6 +728,7 @@ def agent_create_conversation(
         eager=body.eager,
     )
     conv = store.create(
+        workspace_id,
         cid,
         body.sandbox,
         fingerprint,
@@ -356,33 +739,44 @@ def agent_create_conversation(
         # Materialize the isolated workspace now so the caller can bind-mount it
         # read-only before its own container launches (the container itself is
         # still started lazily on the first message). Return its host path.
-        workspace_main = prepare_workspace(cid, autonomous=body.autonomous)
-        conv["workspace_path"] = str(workspace_main)
+        workspace_repo = prepare_workspace(workspace_id)
+        conv["workspace_path"] = str(workspace_repo)
     return conv
 
 
-@app.get("/api/agent/conversations/{cid}")
-def agent_get_conversation(cid: str, _: None = Depends(require_token)) -> dict:
-    conv = store.get(cid)
+@app.get("/api/agent/workspaces/{workspace_id}/conversations/{cid}")
+def agent_get_conversation(
+    workspace_id: str, cid: str, _: None = Depends(require_token)
+) -> dict:
+    conv = store.get(workspace_id, cid)
     if conv is None:
         raise HTTPException(status_code=404, detail="conversation not found")
     return conv
 
 
-@app.delete("/api/agent/conversations/{cid}")
-def agent_delete_conversation(cid: str, _: None = Depends(require_token)) -> dict:
-    log_event(LOG, "agent.conversation.delete", conversation_id=cid)
-    store.delete(cid)
-    _conv_locks.pop(cid, None)
-    cleanup_conversation(cid)
+@app.delete("/api/agent/workspaces/{workspace_id}/conversations/{cid}")
+def agent_delete_conversation(
+    workspace_id: str, cid: str, _: None = Depends(require_token)
+) -> dict:
+    log_event(
+        LOG,
+        "agent.conversation.delete",
+        workspace_id=workspace_id,
+        conversation_id=cid,
+    )
+    store.delete(workspace_id, cid)
+    cleanup_conversation(workspace_id, cid)
     return {"ok": True}
 
 
-@app.post("/api/agent/conversations/{cid}/messages")
+@app.post("/api/agent/workspaces/{workspace_id}/conversations/{cid}/messages")
 async def agent_send_message(
-    cid: str, body: AgentSendMessage, _: None = Depends(require_token)
+    workspace_id: str,
+    cid: str,
+    body: AgentSendMessage,
+    _: None = Depends(require_token),
 ) -> dict:
-    conv = store.get(cid)
+    conv = store.get(workspace_id, cid)
     if conv is None:
         raise HTTPException(status_code=404, detail="conversation not found")
 
@@ -400,17 +794,25 @@ async def agent_send_message(
     autonomous = _autonomous_for_turn(conv, requested_autonomous)
     fingerprint = prompt_fingerprint(autonomous=autonomous)
     turn_id = uuid.uuid4().hex[:10]
-    store.update_runtime_settings(cid, sandbox=sandbox, autonomous=autonomous)
+    store.update_runtime_settings(
+        workspace_id,
+        cid,
+        sandbox=sandbox,
+        autonomous=autonomous,
+    )
     store.add_message(
+        workspace_id,
         cid,
         "user",
         text,
         analyzer_context=persisted_context(body.analyzer_context),
     )
-    sessions = store.sessions_for_prompt(cid, fingerprint)
+    sessions = store.sessions_for_prompt(workspace_id, cid, fingerprint)
+    store.start_turn(workspace_id, cid, turn_id)
     log_event(
         LOG,
         "agent.turn.received",
+        workspace_id=workspace_id,
         conversation_id=cid,
         turn_id=turn_id,
         sandbox=sandbox,
@@ -428,10 +830,11 @@ async def agent_send_message(
         autonomous=autonomous,
     )
 
-    lock = _lock_for(cid)
+    lock = _lock_for(workspace_id)
     async with lock:
         try:
             async for ev in run_turn(
+                workspace_id,
                 cid,
                 prompt_with_analyzer_context(text, body.analyzer_context),
                 sandbox=sandbox,
@@ -443,8 +846,17 @@ async def agent_send_message(
             ):
                 if ev.get("kind") == "session":
                     store.set_codex_session(
-                        cid, ev.get("role", ""), ev.get("session_id")
+                        workspace_id,
+                        cid,
+                        ev.get("role", ""),
+                        ev.get("session_id"),
                     )
+                store.append_turn_event(
+                    workspace_id,
+                    turn_id,
+                    str(ev.get("kind") or "event"),
+                    ev,
+                )
                 collect_turn_event(result, ev)
             result["ok"] = bool(result["final"]) and not bool(result["error"])
         except Exception as exc:  # surface backend failures in-band, like /api/eval
@@ -479,18 +891,28 @@ async def agent_send_message(
             else None
         )
         store.add_message(
+            workspace_id,
             cid,
             "assistant",
             result["final"],
             intermediate_outputs=result["intermediate_outputs"] or None,
+            activity=_managed_turn_activity(workspace_id, turn_id) or None,
             citations=frozen_citations or None,
             citation_dictionary_id=result["citation_dictionary_id"],
-            citation_dsl_version="v1" if body.analyzer_context else None,
+            citation_dsl_version="v2" if body.analyzer_context else None,
             failure=failure,
         )
+        store.finish_turn(
+            workspace_id,
+            turn_id,
+            "complete" if result["ok"] else "failed",
+        )
+        capabilities.revoke_turn(workspace_id, turn_id)
+        remove_managed_context(workspace_id, cid)
     log_event(
         LOG,
         "agent.turn.complete",
+        workspace_id=workspace_id,
         conversation_id=cid,
         turn_id=turn_id,
         ok=result["ok"],
@@ -500,8 +922,9 @@ async def agent_send_message(
     return result
 
 
-@app.get("/api/conversations/{cid}")
+@app.get("/api/workspaces/{workspace_id}/conversations/{cid}")
 def get_conversation(
+    workspace_id: str,
     cid: str,
     limit: int | None = Query(default=None, ge=1, le=100),
     before: int | None = Query(default=None, ge=0),
@@ -516,21 +939,30 @@ def get_conversation(
     if limit is None and before is not None:
         raise HTTPException(status_code=422, detail="before requires limit")
     conv = (
-        store.get_message_page(cid, before=before, limit=limit)
+        store.get_message_page(
+            workspace_id,
+            cid,
+            before=before,
+            limit=limit,
+        )
         if limit is not None
-        else store.get(cid)
+        else store.get(workspace_id, cid)
     )
     if conv is None:
         raise HTTPException(status_code=404, detail="conversation not found")
     return conv
 
 
-@app.delete("/api/conversations/{cid}")
-def delete_conversation(cid: str) -> dict:
-    log_event(LOG, "conversation.delete", conversation_id=cid)
-    store.delete(cid)
-    _conv_locks.pop(cid, None)
-    cleanup_conversation(cid)
+@app.delete("/api/workspaces/{workspace_id}/conversations/{cid}")
+def delete_conversation(workspace_id: str, cid: str) -> dict:
+    log_event(
+        LOG,
+        "conversation.delete",
+        workspace_id=workspace_id,
+        conversation_id=cid,
+    )
+    store.delete(workspace_id, cid)
+    cleanup_conversation(workspace_id, cid)
     return {"ok": True}
 
 
@@ -542,10 +974,13 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"}
 
 @app.get("/api/file")
 def serve_file(
-    path: str = Query(...), cid: str | None = Query(default=None)
+    path: str = Query(...), workspace_id: str = Query(default="w_main")
 ) -> FileResponse:
     requested = Path(path)
-    root = workspace_main_for(cid) if cid else MAIN_DIR
+    try:
+        root = store.registry.repo_path(workspace_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="workspace not found") from exc
     if requested == Path("/workspace") or Path("/workspace") in requested.parents:
         requested = root / requested.relative_to("/workspace")
     elif not requested.is_absolute():
@@ -555,7 +990,7 @@ def serve_file(
     except (OSError, RuntimeError):
         raise HTTPException(status_code=404, detail="not found")
 
-    allowed_root = (WORKSPACES_DIR if cid else WORKSPACE).resolve()
+    allowed_root = root.resolve()
     if resolved != allowed_root and allowed_root not in resolved.parents:
         raise HTTPException(status_code=403, detail="outside workspace")
     if resolved.suffix.lower() not in _IMAGE_EXTS:
@@ -565,12 +1000,15 @@ def serve_file(
     return FileResponse(str(resolved))
 
 
-@app.post("/api/conversations/{cid}/messages")
-async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
-    conv = store.get(cid)
+@app.post("/api/workspaces/{workspace_id}/conversations/{cid}/messages")
+async def send_message(
+    workspace_id: str, cid: str, body: SendMessage
+) -> StreamingResponse:
+    conv = store.get(workspace_id, cid)
     if conv is None:
         raise HTTPException(status_code=404, detail="conversation not found")
-    active_turn = _active_browser_turns.get(cid)
+    active_key = (workspace_id, cid)
+    active_turn = _active_browser_turns.get(active_key)
     if active_turn is not None and not active_turn.finished:
         raise HTTPException(
             status_code=409, detail="conversation already has an active turn"
@@ -585,17 +1023,29 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
     current_prompt_fingerprint = prompt_fingerprint(autonomous=autonomous)
     turn_id = uuid.uuid4().hex[:10]
     previous_sessions = dict(conv.get("codex_sessions") or {})
-    store.update_runtime_settings(cid, sandbox=sandbox, autonomous=autonomous)
+    store.update_runtime_settings(
+        workspace_id,
+        cid,
+        sandbox=sandbox,
+        autonomous=autonomous,
+    )
     store.add_message(
+        workspace_id,
         cid,
         "user",
         text,
         analyzer_context=persisted_context(body.analyzer_context),
     )
-    sessions = store.sessions_for_prompt(cid, current_prompt_fingerprint)
+    sessions = store.sessions_for_prompt(
+        workspace_id,
+        cid,
+        current_prompt_fingerprint,
+    )
+    store.start_turn(workspace_id, cid, turn_id)
     log_event(
         LOG,
         "turn.received",
+        workspace_id=workspace_id,
         conversation_id=cid,
         turn_id=turn_id,
         sandbox=sandbox,
@@ -609,10 +1059,11 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
     )
 
     active_turn = ActiveBrowserTurn(turn_id=turn_id)
-    _active_browser_turns[cid] = active_turn
+    _active_browser_turns[active_key] = active_turn
     active_turn.task = asyncio.create_task(
         _run_browser_turn(
             cid=cid,
+            workspace_id=workspace_id,
             text=text,
             sandbox=sandbox,
             sessions=sessions,
@@ -626,11 +1077,11 @@ async def send_message(cid: str, body: SendMessage) -> StreamingResponse:
     return _turn_stream_response(active_turn)
 
 
-@app.get("/api/conversations/{cid}/stream")
-async def resume_message_stream(cid: str) -> Response:
-    if store.get(cid) is None:
+@app.get("/api/workspaces/{workspace_id}/conversations/{cid}/stream")
+async def resume_message_stream(workspace_id: str, cid: str) -> Response:
+    if store.get(workspace_id, cid) is None:
         raise HTTPException(status_code=404, detail="conversation not found")
-    active_turn = _active_browser_turns.get(cid)
+    active_turn = _active_browser_turns.get((workspace_id, cid))
     if active_turn is None or active_turn.finished:
         # Reopening an idle conversation is a normal state, not a request
         # conflict. A body-less response also avoids a noisy console error.
@@ -638,11 +1089,11 @@ async def resume_message_stream(cid: str) -> Response:
     return _turn_stream_response(active_turn)
 
 
-@app.post("/api/conversations/{cid}/cancel")
-async def cancel_message(cid: str) -> dict:
-    if store.get(cid) is None:
+@app.post("/api/workspaces/{workspace_id}/conversations/{cid}/cancel")
+async def cancel_message(workspace_id: str, cid: str) -> dict:
+    if store.get(workspace_id, cid) is None:
         raise HTTPException(status_code=404, detail="conversation not found")
-    active_turn = _active_browser_turns.get(cid)
+    active_turn = _active_browser_turns.get((workspace_id, cid))
     if active_turn is None or active_turn.task is None or active_turn.task.done():
         return {"cancelled": False}
     active_turn.task.cancel()
@@ -655,6 +1106,7 @@ async def cancel_message(cid: str) -> dict:
 
 async def _run_browser_turn(
     *,
+    workspace_id: str,
     cid: str,
     text: str,
     sandbox: str,
@@ -665,7 +1117,7 @@ async def _run_browser_turn(
     analyzer_context: AnalyzerTurnContext | None,
     active_turn: ActiveBrowserTurn,
 ) -> None:
-    lock = _lock_for(cid)
+    lock = _lock_for(workspace_id)
     async with lock:
         final_text: str | None = None
         failure: dict[str, str] | None = None
@@ -675,6 +1127,7 @@ async def _run_browser_turn(
         activity: list[dict] = []
         try:
             async for ev in run_turn(
+                workspace_id,
                 cid,
                 prompt_with_analyzer_context(text, analyzer_context),
                 sandbox=sandbox,
@@ -686,7 +1139,10 @@ async def _run_browser_turn(
                 kind = ev.get("kind")
                 if kind == "session":
                     store.set_codex_session(
-                        cid, ev.get("role", ""), ev.get("session_id")
+                        workspace_id,
+                        cid,
+                        ev.get("role", ""),
+                        ev.get("session_id"),
                     )
                     log_event(
                         LOG,
@@ -744,6 +1200,12 @@ async def _run_browser_turn(
                     )
                 elif kind == "final":
                     final_text = ev.get("text") or ""
+                store.append_turn_event(
+                    workspace_id,
+                    turn_id,
+                    str(kind or "event"),
+                    ev,
+                )
             if final_text is None:
                 final_text = "(no answer)"
             log_event(
@@ -793,7 +1255,11 @@ async def _run_browser_turn(
                         "text": final_text,
                     }
                 )
+                managed_activity = _managed_turn_activity(workspace_id, turn_id)
+                if managed_activity:
+                    activity[-1:-1] = managed_activity
                 store.add_message(
+                    workspace_id,
                     cid,
                     "assistant",
                     final_text,
@@ -801,7 +1267,7 @@ async def _run_browser_turn(
                     activity=activity or None,
                     citations=frozen_citations or None,
                     citation_dictionary_id=citation_dictionary_id,
-                    citation_dsl_version="v1" if analyzer_context else None,
+                    citation_dsl_version="v2" if analyzer_context else None,
                     failure=failure,
                 )
                 await active_turn.publish(
@@ -811,14 +1277,22 @@ async def _run_browser_turn(
                             "text": final_text,
                             "citations": frozen_citations,
                             "citation_dictionary_id": citation_dictionary_id,
-                            "citation_dsl_version": "v1" if analyzer_context else None,
+                            "citation_dsl_version": "v2" if analyzer_context else None,
                             "failure": failure,
                         },
                     )
                 )
             await active_turn.finish()
-            if _active_browser_turns.get(cid) is active_turn:
-                _active_browser_turns.pop(cid, None)
+            store.finish_turn(
+                workspace_id,
+                turn_id,
+                "failed" if failure else "complete",
+            )
+            capabilities.revoke_turn(workspace_id, turn_id)
+            remove_managed_context(workspace_id, cid)
+            active_key = (workspace_id, cid)
+            if _active_browser_turns.get(active_key) is active_turn:
+                _active_browser_turns.pop(active_key, None)
 
 
 # Mounted last so it doesn't shadow the API routes above. The directory may not

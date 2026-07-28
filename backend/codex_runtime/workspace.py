@@ -1,4 +1,8 @@
-"""Workspace copy and git bootstrap for each conversation."""
+"""Managed workspace copy and git bootstrap.
+
+A workspace is durable shared working state. Conversations no longer create
+their own repo copies; they reuse the repo selected by ``workspace_id``.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ import shutil
 from pathlib import Path
 
 from .commands import run_checked
-from .config import LOG, MAIN_DIR, PROMPTS_DIR, agents_prompt_name, workspace_main_for
+from .config import LOG, MAIN_DIR, workspace_main_for
 from ..logging_config import log_event
 
 def _tracked_entries() -> tuple[list[Path], list[Path]]:
@@ -62,34 +66,6 @@ def _copy_tracked_file(rel_path: Path, dst_root: Path) -> None:
     else:
         shutil.copy2(src, dst)
 
-def _refresh_workspace_agent_files(workspace_main: Path, *, autonomous: bool) -> None:
-    """Copy runtime role instructions into the copied workspace.
-
-    ``main`` currently has no tracked ``AGENTS.md``. Keeping this file inside the
-    copied workspace makes shell/tool behavior consistent across orchestrator and
-    implementer sessions. ``.codex/skills`` points at the copied repo-local skill
-    tree so Codex can discover skills through its native workspace convention.
-    """
-    prompt_name = agents_prompt_name(autonomous)
-    log_event(
-        LOG,
-        "workspace.refresh_agent_files",
-        workspace=str(workspace_main),
-        autonomous=autonomous,
-        prompt_name=prompt_name,
-    )
-    shutil.copy2(PROMPTS_DIR / prompt_name, workspace_main / "AGENTS.md")
-    codex_dir = workspace_main / ".codex"
-    codex_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(PROMPTS_DIR / "orchestrator.schema.json", codex_dir / "orchestrator.schema.json")
-    skills_link = codex_dir / "skills"
-    if skills_link.exists() or skills_link.is_symlink():
-        if skills_link.is_dir() and not skills_link.is_symlink():
-            shutil.rmtree(skills_link)
-        else:
-            skills_link.unlink()
-    os.symlink("../skills", skills_link)
-
 def _ensure_workspace_git(workspace_main: Path) -> None:
     """Make the copied workspace a local git repo for branch/commit hygiene."""
     if (workspace_main / ".git").exists():
@@ -110,30 +86,38 @@ def _ensure_workspace_git(workspace_main: Path) -> None:
         timeout=120,
     )
 
-def prepare_workspace(conversation_id: str, *, autonomous: bool = False) -> Path:
-    """Create the per-conversation copy of git-tracked ``main`` files."""
-    workspace_main = workspace_main_for(conversation_id)
+def prepare_workspace(workspace_id: str) -> Path:
+    """Create a managed workspace's one tracked-file copy.
+
+    ``w_main`` is the external development checkout and is never rewritten by
+    this helper. Agent instructions and the orchestrator schema are mounted
+    read-only by Docker, so conversation settings cannot dirty the shared repo.
+    """
+    workspace_main = workspace_main_for(workspace_id)
+    if workspace_id == "w_main":
+        if not workspace_main.is_dir():
+            raise RuntimeError(f"main workspace does not exist: {workspace_main}")
+        return workspace_main
     if workspace_main.exists():
         log_event(
             LOG,
             "workspace.prepare.reuse",
-            conversation_id=conversation_id,
+            workspace_id=workspace_id,
             workspace=str(workspace_main),
         )
-        _refresh_workspace_agent_files(workspace_main, autonomous=autonomous)
         _ensure_workspace_git(workspace_main)
         return workspace_main
 
     log_event(
         LOG,
         "workspace.prepare.create",
-        conversation_id=conversation_id,
+        workspace_id=workspace_id,
         workspace=str(workspace_main),
     )
-    tmp_root = workspace_main.parent.with_name(workspace_main.parent.name + ".tmp")
+    tmp_root = workspace_main.with_name(workspace_main.name + ".tmp")
     if tmp_root.exists():
         shutil.rmtree(tmp_root)
-    tmp_main = tmp_root / "main"
+    tmp_main = tmp_root
     tmp_main.mkdir(parents=True, exist_ok=True)
 
     files, gitlinks = _tracked_entries()
@@ -141,17 +125,16 @@ def prepare_workspace(conversation_id: str, *, autonomous: bool = False) -> Path
         log_event(
             LOG,
             "workspace.skip_submodules",
-            conversation_id=conversation_id,
+            workspace_id=workspace_id,
             count=len(gitlinks),
             paths=[str(p) for p in gitlinks],
         )
     for rel_path in files:
         _copy_tracked_file(rel_path, tmp_main)
-    _refresh_workspace_agent_files(tmp_main, autonomous=autonomous)
     _ensure_workspace_git(tmp_main)
 
-    workspace_main.parent.parent.mkdir(parents=True, exist_ok=True)
-    if workspace_main.parent.exists():
-        shutil.rmtree(workspace_main.parent)
-    tmp_root.replace(workspace_main.parent)
+    workspace_main.parent.mkdir(parents=True, exist_ok=True)
+    if workspace_main.exists():
+        shutil.rmtree(workspace_main)
+    tmp_root.replace(workspace_main)
     return workspace_main
