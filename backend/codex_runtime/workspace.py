@@ -90,8 +90,9 @@ def prepare_workspace(workspace_id: str) -> Path:
     """Create a managed workspace's one tracked-file copy.
 
     ``w_main`` is the external development checkout and is never rewritten by
-    this helper. Agent instructions and the orchestrator schema are mounted
-    read-only by Docker, so conversation settings cannot dirty the shared repo.
+    this helper. The tracked, blank ``AGENTS.md`` is only a stable bind target;
+    Docker overlays the selected conversation contract read-only, so
+    conversation settings cannot dirty the shared repo.
     """
     workspace_main = workspace_main_for(workspace_id)
     if workspace_id == "w_main":

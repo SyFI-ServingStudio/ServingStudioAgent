@@ -5,23 +5,45 @@ import type {
   Tokens,
   TurnEvent,
 } from "./types";
+import { conversationLocation, conversationLocator } from "./conversationLocator";
 
 export const DEFAULT_SANDBOX: SandboxMode = "workspace-write";
 export const MESSAGE_PAGE_SIZE = 20;
+const MAIN_WORKSPACE_ID = "w_main";
+
+function locatedConversation(
+  conversation: Conversation,
+  workspaceId: string,
+): Conversation {
+  return {
+    ...conversation,
+    id: conversationLocator(workspaceId, conversation.id),
+  };
+}
 
 export async function listConversations(): Promise<ConversationListResponse> {
   const response = await fetch("/api/conversations");
   if (!response.ok) {
     throw new Error(`failed to list conversations: ${response.status}`);
   }
-  return response.json();
+  const payload = (await response.json()) as ConversationListResponse;
+  return {
+    ...payload,
+    conversations: (payload.conversations || []).map((conversation) => ({
+      ...conversation,
+      id: conversationLocator(
+        conversation.workspace_id || MAIN_WORKSPACE_ID,
+        conversation.id,
+      ),
+    })),
+  };
 }
 
 export async function createConversation(
   sandbox: SandboxMode,
   autonomous: boolean,
 ): Promise<Conversation> {
-  const response = await fetch("/api/conversations", {
+  const response = await fetch(`/api/workspaces/${MAIN_WORKSPACE_ID}/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sandbox, autonomous }),
@@ -29,29 +51,36 @@ export async function createConversation(
   if (!response.ok) {
     throw new Error(`failed to create conversation: ${response.status}`);
   }
-  return response.json();
+  return locatedConversation(await response.json(), MAIN_WORKSPACE_ID);
 }
 
 export async function getConversation(
   id: string,
   before?: number,
 ): Promise<Conversation | null> {
+  const location = conversationLocation(id);
   const query = new URLSearchParams({ limit: String(MESSAGE_PAGE_SIZE) });
   if (before !== undefined) {
     query.set("before", String(before));
   }
-  const response = await fetch(`/api/conversations/${id}?${query}`);
+  const response = await fetch(
+    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}?${query}`,
+  );
   if (response.status === 404) {
     return null;
   }
   if (!response.ok) {
     throw new Error(`failed to load conversation: ${response.status}`);
   }
-  return response.json();
+  return locatedConversation(await response.json(), location.workspaceId);
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-  const response = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+  const location = conversationLocation(id);
+  const response = await fetch(
+    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}`,
+    { method: "DELETE" },
+  );
   if (!response.ok) {
     throw new Error(`failed to delete conversation: ${response.status}`);
   }
@@ -73,12 +102,16 @@ export async function streamTurn(
   handlers: StreamHandlers,
   signal: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(`/api/conversations/${conversationId}/messages`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, sandbox_mode: sandbox, autonomous_mode: autonomous }),
-    signal,
-  });
+  const location = conversationLocation(conversationId);
+  const response = await fetch(
+    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/messages`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, sandbox_mode: sandbox, autonomous_mode: autonomous }),
+      signal,
+    },
+  );
   await consumeTurnStream(response, handlers);
 }
 
@@ -87,9 +120,11 @@ export async function resumeTurn(
   handlers: StreamHandlers,
   signal: AbortSignal,
 ): Promise<boolean> {
-  const response = await fetch(`/api/conversations/${conversationId}/stream`, {
-    signal,
-  });
+  const location = conversationLocation(conversationId);
+  const response = await fetch(
+    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/stream`,
+    { signal },
+  );
   // 204 is the normal idle response; 409 is accepted for compatibility with
   // an older backend during a rolling restart.
   if (response.status === 204 || response.status === 409) {
@@ -100,9 +135,11 @@ export async function resumeTurn(
 }
 
 export async function cancelTurn(conversationId: string): Promise<boolean> {
-  const response = await fetch(`/api/conversations/${conversationId}/cancel`, {
-    method: "POST",
-  });
+  const location = conversationLocation(conversationId);
+  const response = await fetch(
+    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/cancel`,
+    { method: "POST" },
+  );
   if (!response.ok) {
     throw new Error(`failed to stop turn: ${response.status}`);
   }

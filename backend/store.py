@@ -426,6 +426,23 @@ class Store:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def list_all(self) -> list[dict[str, Any]]:
+        """Flatten active-workspace summaries without erasing their identity."""
+
+        conversations = [
+            {**conversation, "workspace_id": descriptor["workspace_id"]}
+            for descriptor in self.registry.list()
+            for conversation in self.list(descriptor["workspace_id"])
+        ]
+        conversations.sort(
+            key=lambda conversation: (
+                -float(conversation.get("updated_at", 0)),
+                str(conversation["workspace_id"]),
+                str(conversation["id"]),
+            )
+        )
+        return conversations
+
     def get(self, workspace_id: str, conversation_id: str) -> dict[str, Any] | None:
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             row = connection.execute(
@@ -492,9 +509,11 @@ class Store:
         autonomous: bool = False,
         peer_workspace: str | None = None,
         created_at: float | None = None,
+        updated_at: float | None = None,
         title: str = "New chat",
     ) -> dict[str, Any]:
-        now = created_at or time.time()
+        creation_time = created_at if created_at is not None else time.time()
+        modification_time = updated_at if updated_at is not None else creation_time
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             connection.execute(
                 """
@@ -510,8 +529,8 @@ class Store:
                     int(autonomous),
                     prompt_fingerprint,
                     peer_workspace,
-                    now,
-                    now,
+                    creation_time,
+                    modification_time,
                 ),
             )
         self.registry.update(workspace_id, touch=True)
@@ -547,7 +566,7 @@ class Store:
         ts: float | None = None,
         **metadata: Any,
     ) -> None:
-        message_time = ts or time.time()
+        message_time = ts if ts is not None else time.time()
         filtered_metadata = {
             key: value for key, value in metadata.items() if value is not None
         }
@@ -897,6 +916,16 @@ class Store:
         conversation_id = str(conversation["id"])
         if self.get(workspace_id, conversation_id) is not None:
             return
+        source_created_at = (
+            float(conversation["created_at"])
+            if conversation.get("created_at") is not None
+            else time.time()
+        )
+        source_updated_at = (
+            float(conversation["updated_at"])
+            if conversation.get("updated_at") is not None
+            else source_created_at
+        )
         self.create(
             workspace_id,
             conversation_id,
@@ -904,7 +933,8 @@ class Store:
             conversation.get("prompt_fingerprint"),
             autonomous=bool(conversation.get("autonomous", False)),
             peer_workspace=conversation.get("peer_workspace"),
-            created_at=float(conversation.get("created_at") or time.time()),
+            created_at=source_created_at,
+            updated_at=source_updated_at,
             title=conversation.get("title") or "New chat",
         )
         for message in conversation.get("messages") or []:
@@ -928,6 +958,38 @@ class Store:
                 role,
                 session_id,
             )
+        self.restore_imported_timestamps(
+            workspace_id,
+            conversation_id,
+            created_at=source_created_at,
+            updated_at=source_updated_at,
+        )
+
+    def restore_imported_timestamps(
+        self,
+        workspace_id: str,
+        conversation_id: str,
+        *,
+        created_at: float,
+        updated_at: float,
+    ) -> None:
+        """Restore source timestamps after migration replays append-only messages.
+
+        ``add_message`` normally advances ``updated_at``. A lossless import must
+        replay message rows and then put the source conversation timestamps back
+        exactly so history ordering does not drift by a few microseconds.
+        """
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE conversations
+                SET created_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (created_at, updated_at, conversation_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(conversation_id)
 
     @staticmethod
     def _message_payload(row: sqlite3.Row) -> dict[str, Any]:

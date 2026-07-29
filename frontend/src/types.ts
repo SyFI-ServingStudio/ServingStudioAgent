@@ -5,7 +5,8 @@ export type Role = "orchestrator" | "implementer";
 export interface ConversationSummary {
   id: string;
   title: string;
-  updated_at?: string;
+  updated_at?: number | string;
+  workspace_id?: string;
 }
 
 export interface IntermediateOutput {

@@ -33,6 +33,7 @@ from .config import (
     MAIN_LOCK_SHA,
     PROMPTS_CONTAINER_DIR,
     PROMPTS_DIR,
+    agents_prompt_name,
     codex_home_for,
     container_name,
 )
@@ -116,6 +117,36 @@ def _model_mount_args(conversation_id: str, container: str) -> list[str]:
         f"{resolved_hf_home}:{CODEX_DOCKER_HF_HOME}:ro",
         "-e",
         f"HF_HOME={CODEX_DOCKER_HF_HOME}",
+    ]
+
+
+def _agent_prompt_mount_args(
+    workspace_main: Path,
+    *,
+    autonomous: bool,
+) -> list[str]:
+    """Mount this conversation's selected project instructions read-only.
+
+    Every shared workspace must already contain a regular ``AGENTS.md`` target.
+    Failing closed here is important: Docker's short ``-v`` syntax can create a
+    missing bind target inside the host workspace, which would violate the
+    runtime's no-mutation contract for ``w_main``.
+    """
+    prompt_path = PROMPTS_DIR / agents_prompt_name(autonomous)
+    if not prompt_path.is_file():
+        raise RuntimeError(f"agent prompt not found: {prompt_path}")
+    mount_target = workspace_main / "AGENTS.md"
+    if not mount_target.is_file():
+        raise RuntimeError(
+            "workspace AGENTS.md mount target is missing; "
+            f"refusing to modify shared workspace: {mount_target}"
+        )
+    return [
+        "--mount",
+        (
+            f"type=bind,src={prompt_path.resolve()},"
+            "dst=/workspace/AGENTS.md,readonly"
+        ),
     ]
 
 
@@ -292,8 +323,11 @@ def ensure_container(
     workspace_main: Path,
     mode: str,
     peer_dir: str | None = None,
+    *,
+    autonomous: bool = False,
 ) -> str:
     container = container_name(workspace_id, conversation_id)
+    selected_agents_prompt = agents_prompt_name(autonomous)
     log_event(
         LOG,
         "container.ensure.start",
@@ -302,6 +336,7 @@ def ensure_container(
         container=container,
         workspace=str(workspace_main),
         mode=mode,
+        agents_prompt=selected_agents_prompt,
         uid=CODEX_DOCKER_UID,
         gid=CODEX_DOCKER_GID,
         docker_home=CODEX_DOCKER_HOME,
@@ -361,6 +396,9 @@ def ensure_container(
                     "&& command -v uv >/dev/null 2>&1 "
                     "&& command -v codex >/dev/null 2>&1 "
                     f"&& test -d {CODEX_DOCKER_AUTH_DIR!r} "
+                    "&& test -r /workspace/AGENTS.md "
+                    f"&& cmp -s /workspace/AGENTS.md "
+                    f"{(PROMPTS_CONTAINER_DIR + '/' + selected_agents_prompt)!r} "
                     f"&& test -r {ANALYZER_MCP_CONTAINER_DIR + '/server.py'!r} "
                     f"{gpu_ready_clause}"
                     f"{model_ready_clause}"
@@ -422,6 +460,10 @@ def ensure_container(
         f"{ANALYZER_MCP_DIR}:{ANALYZER_MCP_CONTAINER_DIR}:ro",
         "-v",
         f"{PROMPTS_DIR}:{PROMPTS_CONTAINER_DIR}:ro",
+        *_agent_prompt_mount_args(
+            workspace_main,
+            autonomous=autonomous,
+        ),
         *_submodule_mount_args(conversation_id, container),
         *_candidate_mount_args(conversation_id, container, peer_dir),
         *_model_mount_args(conversation_id, container),

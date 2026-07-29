@@ -18,10 +18,10 @@ from .config import (
 from .docker import container_running, ensure_container
 from .prompts import (
     _format_implementer_summaries,
-    _initial_role_prompt,
     _implementer_prompt,
     _orchestrator_handoff_prompt,
     _orchestrator_prompt,
+    _role_prompt,
     compose_final_message,
     parse_orchestrator,
 )
@@ -89,6 +89,7 @@ async def run_turn(
             _workspace_main,
             mode,
             peer_dir,
+            autonomous=autonomous,
         )
     )
     while True:
@@ -118,7 +119,6 @@ async def run_turn(
     next_orchestrator_prompt = _orchestrator_prompt(
         prompt,
         is_resume=bool(orchestrator_session),
-        autonomous=autonomous,
     )
 
     while True:
@@ -215,7 +215,6 @@ async def run_turn(
             _implementer_prompt(
                 task,
                 is_resume=bool(implementer_session),
-                autonomous=autonomous,
             ),
             label="implementer",
             workspace_id=workspace_id,
@@ -240,6 +239,6 @@ async def run_turn(
             next_orchestrator_prompt = handoff_prompt
         else:
             next_orchestrator_prompt = (
-                f"{_initial_role_prompt('orchestrator.txt', autonomous=autonomous)}"
+                f"{_role_prompt('orchestrator.txt')}"
                 f"\n\n{handoff_prompt}"
             )

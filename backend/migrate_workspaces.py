@@ -260,12 +260,95 @@ def execute_migration(
         lock_path.unlink(missing_ok=True)
 
 
+def repair_completed_timestamps(
+    *,
+    registry: WorkspaceRegistry,
+    archive_root: Path,
+) -> dict:
+    """Repair the v1 migration's timestamp-only history-order drift.
+
+    Every archived message must still match the imported conversation before
+    either timestamp is touched. This prevents a rerun from overwriting
+    activity added after the migration completed.
+    """
+    marker_path = archive_root / "migration.timestamp-repair.json"
+    if marker_path.is_file():
+        return json.loads(marker_path.read_text("utf-8"))
+    conversations_path = archive_root / "legacy-source" / "conversations.json"
+    conversations = load_legacy_conversations(conversations_path)
+    store = Store(registry)
+    workspace_ids = {
+        descriptor["workspace_id"]
+        for descriptor in registry.list(include_archived=True)
+    }
+    repaired = 0
+    unchanged = 0
+    for conversation in conversations:
+        conversation_id = str(conversation["id"])
+        legacy_workspace_id = f"w_legacy_{conversation_id.replace('.', '_')}"
+        workspace_id = (
+            legacy_workspace_id
+            if legacy_workspace_id in workspace_ids
+            else "w_main"
+        )
+        imported = store.get(workspace_id, conversation_id)
+        if imported is None:
+            raise RuntimeError(
+                f"timestamp repair could not find conversation: {conversation_id}"
+            )
+        if imported["messages"] != conversation.get("messages", []):
+            raise RuntimeError(
+                "timestamp repair refused a conversation changed after migration: "
+                f"{conversation_id}"
+            )
+        source_created_at = float(conversation["created_at"])
+        source_updated_at = float(conversation["updated_at"])
+        if (
+            imported["created_at"] == source_created_at
+            and imported["updated_at"] == source_updated_at
+        ):
+            unchanged += 1
+            continue
+        store.restore_imported_timestamps(
+            workspace_id,
+            conversation_id,
+            created_at=source_created_at,
+            updated_at=source_updated_at,
+        )
+        repaired += 1
+    result = {
+        "schema_version": 1,
+        "repaired_at": time.time(),
+        "source": str(conversations_path),
+        "conversations": len(conversations),
+        "repaired": repaired,
+        "unchanged": unchanged,
+    }
+    temporary_marker = marker_path.with_suffix(".json.tmp")
+    temporary_marker.write_text(json.dumps(result, indent=2) + "\n", "utf-8")
+    temporary_marker.replace(marker_path)
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--execute", action="store_true")
+    mode.add_argument(
+        "--repair-completed",
+        type=Path,
+        metavar="MIGRATION_DIR",
+    )
     args = parser.parse_args()
+
+    if args.repair_completed is not None:
+        result = repair_completed_timestamps(
+            registry=WorkspaceRegistry(),
+            archive_root=args.repair_completed,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
 
     conversations = load_legacy_conversations()
     plan = migration_plan(conversations)

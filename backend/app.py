@@ -3,6 +3,7 @@
 Endpoints:
   GET    /                              -> Vite frontend index
   GET    /assets/*                      -> Vite frontend assets
+  GET    /api/conversations             -> standalone shell compatibility index
   GET/POST /api/workspaces              -> list/create durable workspaces
   GET/PATCH /api/workspaces/{wid}       -> workspace descriptor
   GET/POST /api/workspaces/{wid}/conversations -> list/create conversations
@@ -244,8 +245,8 @@ class NewConversation(BaseModel):
     # Co-evolution (used by vibe-serve): host path to the caller's candidate
     # workspace to bind read-only at /candidate in this conversation's container.
     peer_workspace: str | None = None
-    # Materialize workspaces/<cid>/main eagerly at create (instead of lazily on
-    # the first message) so the caller can bind-mount it read-only immediately.
+    # Materialize the selected workspace repo eagerly at create (instead of
+    # lazily on the first message) so a caller can inspect it immediately.
     eager: bool = False
 
 
@@ -309,6 +310,21 @@ def index() -> FileResponse:
 @app.get("/api/workspaces")
 def list_workspaces() -> dict:
     return {"workspaces": store.registry.list()}
+
+
+@app.get("/api/conversations")
+def list_all_conversations() -> dict:
+    """Compatibility index for the standalone shell served at ``/``.
+
+    Every returned row carries its workspace identity. The shell uses that
+    identity for all subsequent workspace-scoped operations; this endpoint
+    deliberately provides no unscoped write counterpart.
+    """
+
+    return {
+        "conversations": store.list_all(),
+        "sandbox_modes": list(SANDBOX_MODES),
+    }
 
 
 def _create_workspace(body: NewWorkspace) -> dict:

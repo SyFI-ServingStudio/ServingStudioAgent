@@ -48,6 +48,13 @@ POST /api/workspaces/{workspace_id}/conversations/{conversation_id}/cancel
 GET  /api/workspaces/{workspace_id}/conversations/{conversation_id}/experiments
 ```
 
+The backend root still serves the pre-integration standalone chat shell. Its
+read-only `GET /api/conversations` index flattens active workspace summaries and
+includes `workspace_id`; the shell immediately converts each row to the
+workspace-scoped routes above for load, pagination, send, reconnect, cancel,
+delete, and local images. This compatibility index preserves access to migrated
+history without reintroducing conversation-owned workspaces or unscoped writes.
+
 Opening a workspace or Analyzer panel only lists/restores history. An empty
 conversation is materialized on the first actual send, not on page mount.
 
@@ -67,6 +74,16 @@ Execution uses same-filesystem atomic renames, validates source/destination tree
 hashes and imported message counts, then archives only the now-empty legacy
 container plus JSON. It does not duplicate the legacy repo trees before moving
 them.
+
+Migration builds that predate exact timestamp restoration can be repaired from
+their immutable archive. The command refuses to touch a conversation whose
+messages changed after migration:
+
+```bash
+UV_CACHE_DIR="$TMPDIR/uv-cache-user-facing-ui" \
+uv run python -m backend.migrate_workspaces \
+  --repair-completed ../agent-workspaces/migrations/<timestamp>
+```
 
 ## Run
 
@@ -170,7 +187,7 @@ browser
   -> select agent-workspaces/<workspace-id>/repo (or the external w_main checkout)
   -> seed agent-workspaces/<workspace-id>/codex/<conversation-id> from host ~/.codex auth/config
   -> docker run -v <workspace-repo>:/workspace -v <conversation-codex-home>:/home/<user>/.codex
-     - mount backend/prompts read-only; role startup points Codex at the selected prompt
+     - overlay the selected backend/prompts/AGENTS*.md read-only at /workspace/AGENTS.md
      - repo-local skills remain in /workspace/skills
      - when host HF_HOME is set, mount it read-only at /model and set container HF_HOME=/model
      using the prebuilt CODEX_DOCKER_IMAGE
@@ -195,9 +212,9 @@ The orchestrator is normally an active human-in-the-loop coordinator. It reads
 matching skills, classifies the request, decides whether clarification is
 needed, and delegates only bounded implementer tasks. Before the first message
 in a conversation, the welcome area shows an Autonomous button below the example
-questions. When enabled, the backend injects
-`backend/prompts/AGENTS.autonomous.md` into each role's initial prompt instead;
-that contract tells the orchestrator to proceed with conservative assumptions
+questions. When enabled, the backend mounts
+`backend/prompts/AGENTS.autonomous.md` at `/workspace/AGENTS.md` instead; that
+contract tells the orchestrator to proceed with conservative assumptions
 instead of asking preference or clarification questions. After the first user
 message, the conversation's autonomous setting is fixed.
 
@@ -207,12 +224,16 @@ and implementer keep separate Codex session ids. Same-role continuity uses
 `codex exec resume`; cross-role handoff does not rely on shared context and is
 passed explicitly as task text and implementer summary.
 `backend/prompts/AGENTS.md` and `backend/prompts/AGENTS.autonomous.md` hold the
-detailed shared role and skill instructions. The selected contract is prepended
-to each role's initial prompt; this preserves per-conversation mode without
-mutating the shared workspace. The workspace keeps `.codex/skills -> ../skills`
-so Codex can discover the copied repo-local skills. Later turns resume that role
-and send only the new user message or delegated task. Implementer summaries are
-explicitly sent back to the orchestrator before the turn finishes.
+detailed shared role and skill instructions. One is mounted read-only into each
+conversation container as `/workspace/AGENTS.md`; this preserves Codex's native
+project-instruction discovery and per-conversation mode without changing shared
+workspace contents. The tracked blank `main/AGENTS.md` is a fail-safe bind
+target—Codex skips it outside the managed container, and Docker refuses to start
+if a workspace lacks that target. The workspace keeps `.codex/skills ->
+../skills` so Codex can discover the copied repo-local skills. Later turns
+resume that role and send only the new user message or delegated task.
+Implementer summaries are explicitly sent back to the orchestrator before the
+turn finishes.
 
 The UI shows assistant intermediate output and, when work is delegated, the
 implementer summary. If the orchestrator delegates multiple follow-ups in one
@@ -401,8 +422,8 @@ Docker GPU forwarding.
 | `backend/eval.py` | JSON `/api/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`) |
 | `backend/artifacts.py` | list/resolve files in a run workspace for the agent artifact endpoints |
 | `SKILL.md` | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/skill` |
-| `backend/prompts/AGENTS.md` | detailed instructions prepended to each role's initial prompt |
-| `backend/prompts/AGENTS.autonomous.md` | autonomous-mode contract selected for initial role prompts |
+| `backend/prompts/AGENTS.md` | detailed instructions mounted read-only as `/workspace/AGENTS.md` |
+| `backend/prompts/AGENTS.autonomous.md` | autonomous-mode instructions mounted read-only at the same path |
 | `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
 | `backend/store.py` | workspace registry plus per-workspace SQLite conversation/event store |
 | `docker/codex-runner.Dockerfile` | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked VibeSim deps |

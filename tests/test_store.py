@@ -3,7 +3,10 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from backend.migrate_workspaces import execute_migration
+from backend.migrate_workspaces import (
+    execute_migration,
+    repair_completed_timestamps,
+)
 from backend.store import Store, WorkspaceRegistry
 
 
@@ -76,6 +79,39 @@ class WorkspaceStoreTest(unittest.TestCase):
 
             self.assertEqual(store.get("w_main", "same-id")["title"], "Main chat")
             self.assertEqual(store.get("w_second", "same-id")["title"], "Second chat")
+
+    def test_global_compatibility_index_keeps_workspace_identity(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            registry.create("Second", workspace_id="w_second")
+            store = Store(registry)
+            store.create(
+                "w_main",
+                "main-conversation",
+                "read-only",
+                title="Main chat",
+                updated_at=10,
+            )
+            store.create(
+                "w_second",
+                "second-conversation",
+                "workspace-write",
+                title="Second chat",
+                updated_at=20,
+            )
+
+            conversations = store.list_all()
+
+            self.assertEqual(
+                [
+                    (conversation["workspace_id"], conversation["id"])
+                    for conversation in conversations
+                ],
+                [
+                    ("w_second", "second-conversation"),
+                    ("w_main", "main-conversation"),
+                ],
+            )
 
     def test_registry_uses_stable_workspace_ids_not_root_order(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -161,7 +197,7 @@ class LegacyMigrationTest(unittest.TestCase):
                                 ],
                                 "codex_sessions": {"orchestrator": "session-1"},
                                 "created_at": 1,
-                                "updated_at": 2,
+                                "updated_at": 2.5,
                             }
                         ]
                     }
@@ -179,6 +215,8 @@ class LegacyMigrationTest(unittest.TestCase):
             assert imported is not None
             self.assertEqual([message["content"] for message in imported["messages"]], ["hello", "hi"])
             self.assertEqual(imported["codex_sessions"]["orchestrator"], "session-1")
+            self.assertEqual(imported["created_at"], 1)
+            self.assertEqual(imported["updated_at"], 2.5)
             self.assertEqual(
                 (registry.repo_path("w_legacy_abc123") / "tracked.txt").read_text(),
                 "preserve me",
@@ -197,6 +235,59 @@ class LegacyMigrationTest(unittest.TestCase):
                 (registry.root / "migrations").glob("*/migration.complete.json")
             )
             self.assertEqual(len(archive_markers), 1)
+
+    def test_completed_timestamp_repair_is_exact_and_idempotent(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            main_dir = root / "main"
+            (main_dir / "logs").mkdir(parents=True)
+            registry = WorkspaceRegistry(root / "agent-workspaces", main_dir=main_dir)
+            store = Store(registry)
+            store.create(
+                "w_main",
+                "legacy",
+                "workspace-write",
+                created_at=10,
+                updated_at=10,
+            )
+            store.add_message("w_main", "legacy", "user", "hello", ts=11)
+            archive_root = registry.root / "migrations" / "completed"
+            legacy_source = archive_root / "legacy-source"
+            legacy_source.mkdir(parents=True)
+            (legacy_source / "conversations.json").write_text(
+                json.dumps(
+                    {
+                        "conversations": [
+                            {
+                                "id": "legacy",
+                                "title": "hello",
+                                "sandbox": "workspace-write",
+                                "messages": [
+                                    {"role": "user", "content": "hello", "ts": 11}
+                                ],
+                                "created_at": 10,
+                                "updated_at": 11.25,
+                            }
+                        ]
+                    }
+                )
+            )
+
+            first = repair_completed_timestamps(
+                registry=registry,
+                archive_root=archive_root,
+            )
+            second = repair_completed_timestamps(
+                registry=registry,
+                archive_root=archive_root,
+            )
+            repaired = store.get("w_main", "legacy")
+
+            assert repaired is not None
+            self.assertEqual(repaired["created_at"], 10)
+            self.assertEqual(repaired["updated_at"], 11.25)
+            self.assertEqual(first, second)
+            self.assertEqual(first["repaired"], 1)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
+import { conversationLocation } from "./conversationLocator";
+
 export function normalizeBackendText(text: string): string {
   return (text || "")
     .replace(/\\r\\n/g, "\n")
@@ -59,8 +61,13 @@ function rewriteLocalImages(html: string, conversationId: string | null): string
   template.content.querySelectorAll("img").forEach((image) => {
     const src = image.getAttribute("src") || "";
     if (!/^(https?:|data:|\/api\/file)/i.test(src)) {
-      const cid = conversationId ? `&cid=${encodeURIComponent(conversationId)}` : "";
-      image.setAttribute("src", `/api/file?path=${encodeURIComponent(src)}${cid}`);
+      const workspaceId = conversationId
+        ? conversationLocation(conversationId).workspaceId
+        : "w_main";
+      image.setAttribute(
+        "src",
+        `/api/file?path=${encodeURIComponent(src)}&workspace_id=${encodeURIComponent(workspaceId)}`,
+      );
     }
     image.setAttribute("loading", "lazy");
   });

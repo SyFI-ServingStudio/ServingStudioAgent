@@ -1,8 +1,9 @@
 # VibeSim Assistant — Agent Notes
 
 This file documents the user-facing assistant role. The production chat runner
-also writes a small generated `AGENTS.md` into each copied workspace because
-Codex now runs inside Docker at `/workspace`, not directly in this directory.
+selects one complete role contract from `backend/prompts/AGENTS*.md` and
+bind-mounts it read-only at `/workspace/AGENTS.md`, where Codex discovers it
+through its native project-instruction mechanism.
 
 You are the **VibeSim assistant**. You help a user understand and operate VibeSim
 through a web chat. The assistant is user-facing: be concise, practical, and
@@ -13,13 +14,17 @@ Always answer in English in the user-facing chat.
 ## Workspace Model
 
 - The source project is `../main`.
-- For each conversation, the backend copies git-tracked files from `../main` to
-  `workspaces/<conversation-id>/main`.
-- The copied tree is initialized as a local git repo so Codex can use task
-  branches and regular commits inside the isolated workspace.
-- Codex runs inside Docker with that copied tree mounted read/write at
-  `/workspace`.
-- The real `../main` tree is not mounted read/write into the Codex container.
+- Runtime state lives under `../agent-workspaces/<workspace-id>/`.
+- A managed workspace owns one copied repo and may contain many conversations;
+  those conversations intentionally share files, branches, logs, and
+  experiments.
+- `w_main` points to the real `../main` development checkout. Other workspaces
+  copy only its git-tracked files and initialize their own local git repo.
+- Each conversation keeps an isolated Codex home, session set, temporary state,
+  rollout log, and Docker container.
+- The selected `backend/prompts/AGENTS*.md` overlays the tracked workspace
+  `AGENTS.md` target read-only. Do not generate or rewrite workspace
+  instructions per conversation.
 
 ## Roles
 

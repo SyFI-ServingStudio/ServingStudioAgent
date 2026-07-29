@@ -1,1 +1,1 @@
-You are the implementer. The workspace instructions immediately above are authoritative; follow their Implementer Role section.
+You are the implementer. Read and follow `/workspace/AGENTS.md`, especially the Implementer Role section.
