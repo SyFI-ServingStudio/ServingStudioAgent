@@ -6,15 +6,35 @@ import json
 import re
 from typing import Any
 
-from .config import PROMPTS_DIR
+from .config import PROMPTS_DIR, agents_prompt_name
 
 def _role_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
 
-def _orchestrator_prompt(user_text: str, *, is_resume: bool) -> str:
+
+def _initial_role_prompt(name: str, *, autonomous: bool) -> str:
+    """Compose immutable workspace rules with one role's startup contract.
+
+    The repo is shared by every conversation in a workspace, so its files
+    cannot encode a conversation's autonomous choice. Initial prompts carry the
+    selected rules instead; resumed Codex sessions already retain them.
+    """
+    return f"{_role_prompt(agents_prompt_name(autonomous))}\n\n{_role_prompt(name)}"
+
+
+def _orchestrator_prompt(
+    user_text: str,
+    *,
+    is_resume: bool,
+    autonomous: bool,
+) -> str:
     if is_resume:
         return user_text
-    return f"{_role_prompt('orchestrator.txt')}\n\nNewest user message:\n{user_text}\n"
+    return (
+        f"{_initial_role_prompt('orchestrator.txt', autonomous=autonomous)}"
+        f"\n\nNewest user message:\n{user_text}\n"
+    )
+
 
 def _orchestrator_handoff_prompt(task: str, implementer_text: str) -> str:
     return (
@@ -32,10 +52,20 @@ def _orchestrator_handoff_prompt(task: str, implementer_text: str) -> str:
         f"{implementer_text}\n"
     )
 
-def _implementer_prompt(task: str, *, is_resume: bool) -> str:
+
+def _implementer_prompt(
+    task: str,
+    *,
+    is_resume: bool,
+    autonomous: bool,
+) -> str:
     if is_resume:
         return f"Task:\n{task}\n"
-    return f"{_role_prompt('implementer.txt')}\n\nTask:\n{task}\n"
+    return (
+        f"{_initial_role_prompt('implementer.txt', autonomous=autonomous)}"
+        f"\n\nTask:\n{task}\n"
+    )
+
 
 def _json_candidates(text: str) -> list[str]:
     stripped = text.strip()

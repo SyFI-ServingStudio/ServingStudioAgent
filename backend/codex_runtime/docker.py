@@ -33,7 +33,6 @@ from .config import (
     MAIN_LOCK_SHA,
     PROMPTS_CONTAINER_DIR,
     PROMPTS_DIR,
-    agents_prompt_name,
     codex_home_for,
     container_name,
 )
@@ -118,20 +117,6 @@ def _model_mount_args(conversation_id: str, container: str) -> list[str]:
         "-e",
         f"HF_HOME={CODEX_DOCKER_HF_HOME}",
     ]
-
-
-def _agent_prompt_mount_args(*, autonomous: bool) -> list[str]:
-    """Expose this conversation's role contract at Codex's workspace path.
-
-    Workspaces are shared by multiple conversations, so writing ``AGENTS.md``
-    into the repo would let one conversation's autonomous mode affect another.
-    A per-container read-only file mount preserves the original
-    ``/workspace/AGENTS.md`` contract without mutating shared workspace state.
-    """
-    prompt_path = PROMPTS_DIR / agents_prompt_name(autonomous)
-    if not prompt_path.is_file():
-        raise RuntimeError(f"agent prompt not found: {prompt_path}")
-    return ["-v", f"{prompt_path.resolve()}:/workspace/AGENTS.md:ro"]
 
 
 def remove_container(workspace_id: str, conversation_id: str) -> None:
@@ -307,8 +292,6 @@ def ensure_container(
     workspace_main: Path,
     mode: str,
     peer_dir: str | None = None,
-    *,
-    autonomous: bool = False,
 ) -> str:
     container = container_name(workspace_id, conversation_id)
     log_event(
@@ -378,7 +361,6 @@ def ensure_container(
                     "&& command -v uv >/dev/null 2>&1 "
                     "&& command -v codex >/dev/null 2>&1 "
                     f"&& test -d {CODEX_DOCKER_AUTH_DIR!r} "
-                    "&& test -r /workspace/AGENTS.md "
                     f"&& test -r {ANALYZER_MCP_CONTAINER_DIR + '/server.py'!r} "
                     f"{gpu_ready_clause}"
                     f"{model_ready_clause}"
@@ -440,7 +422,6 @@ def ensure_container(
         f"{ANALYZER_MCP_DIR}:{ANALYZER_MCP_CONTAINER_DIR}:ro",
         "-v",
         f"{PROMPTS_DIR}:{PROMPTS_CONTAINER_DIR}:ro",
-        *_agent_prompt_mount_args(autonomous=autonomous),
         *_submodule_mount_args(conversation_id, container),
         *_candidate_mount_args(conversation_id, container, peer_dir),
         *_model_mount_args(conversation_id, container),

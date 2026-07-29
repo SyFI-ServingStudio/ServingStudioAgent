@@ -18,10 +18,10 @@ from .config import (
 from .docker import container_running, ensure_container
 from .prompts import (
     _format_implementer_summaries,
+    _initial_role_prompt,
     _implementer_prompt,
     _orchestrator_handoff_prompt,
     _orchestrator_prompt,
-    _role_prompt,
     compose_final_message,
     parse_orchestrator,
 )
@@ -89,7 +89,6 @@ async def run_turn(
             _workspace_main,
             mode,
             peer_dir,
-            autonomous=autonomous,
         )
     )
     while True:
@@ -116,7 +115,11 @@ async def run_turn(
     orchestrator_session = sessions.get("orchestrator")
     implementer_session = sessions.get("implementer")
     implementer_summaries: list[str] = []
-    next_orchestrator_prompt = _orchestrator_prompt(prompt, is_resume=bool(orchestrator_session))
+    next_orchestrator_prompt = _orchestrator_prompt(
+        prompt,
+        is_resume=bool(orchestrator_session),
+        autonomous=autonomous,
+    )
 
     while True:
         orchestrator_text: str | None = None
@@ -209,7 +212,11 @@ async def run_turn(
         )
         async for ev in run_codex(
             container,
-            _implementer_prompt(task, is_resume=bool(implementer_session)),
+            _implementer_prompt(
+                task,
+                is_resume=bool(implementer_session),
+                autonomous=autonomous,
+            ),
             label="implementer",
             workspace_id=workspace_id,
             conversation_id=conversation_id,
@@ -232,4 +239,7 @@ async def run_turn(
         if orchestrator_session:
             next_orchestrator_prompt = handoff_prompt
         else:
-            next_orchestrator_prompt = f"{_role_prompt('orchestrator.txt')}\n\n{handoff_prompt}"
+            next_orchestrator_prompt = (
+                f"{_initial_role_prompt('orchestrator.txt', autonomous=autonomous)}"
+                f"\n\n{handoff_prompt}"
+            )
