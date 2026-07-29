@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -79,6 +80,109 @@ class WorkspaceStoreTest(unittest.TestCase):
 
             self.assertEqual(store.get("w_main", "same-id")["title"], "Main chat")
             self.assertEqual(store.get("w_second", "same-id")["title"], "Second chat")
+
+    def test_generated_names_use_pending_compare_and_set(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            descriptor = registry.create(
+                "Prompt fallback",
+                workspace_id="w_pending",
+                naming_state="pending",
+            )
+            store = Store(registry)
+            conversation = store.create(
+                "w_pending",
+                "conversation",
+                "workspace-write",
+                naming_state="pending",
+            )
+            store.add_message(
+                "w_pending",
+                "conversation",
+                "user",
+                "Find the best tensor parallel configuration",
+            )
+
+            self.assertEqual(descriptor["naming_state"], "pending")
+            self.assertEqual(conversation["naming_state"], "pending")
+            self.assertEqual(
+                store.get("w_pending", "conversation")["title"],
+                "Find the best tensor parallel configuration",
+            )
+            self.assertTrue(
+                registry.apply_generated_name("w_pending", "Llama 3 H200 Study")
+            )
+            self.assertTrue(
+                store.apply_generated_conversation_title(
+                    "w_pending",
+                    "conversation",
+                    "Tensor Parallel Tradeoffs",
+                )
+            )
+            self.assertFalse(
+                registry.apply_generated_name("w_pending", "Late Workspace Name")
+            )
+            self.assertFalse(
+                store.apply_generated_conversation_title(
+                    "w_pending",
+                    "conversation",
+                    "Late Conversation Name",
+                )
+            )
+            self.assertEqual(registry.get("w_pending")["naming_state"], "generated")
+            self.assertEqual(
+                store.get("w_pending", "conversation")["naming_state"], "generated"
+            )
+
+    def test_manual_workspace_rename_wins_over_generation(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            registry.create(
+                "Fallback",
+                workspace_id="w_pending",
+                naming_state="pending",
+            )
+
+            renamed = registry.update("w_pending", display_name="Operator name")
+
+            self.assertEqual(renamed["naming_state"], "manual")
+            self.assertFalse(registry.apply_generated_name("w_pending", "Late name"))
+            self.assertEqual(registry.get("w_pending")["display_name"], "Operator name")
+
+    def test_existing_database_migrates_conversations_to_manual(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            database_path = registry.database_path("w_main")
+            connection = sqlite3.connect(database_path)
+            connection.executescript(
+                """
+                CREATE TABLE schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at REAL NOT NULL
+                );
+                INSERT INTO schema_migrations(version, applied_at) VALUES (1, 0);
+                CREATE TABLE conversations (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    sandbox TEXT NOT NULL,
+                    autonomous INTEGER NOT NULL,
+                    prompt_fingerprint TEXT,
+                    peer_workspace TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                INSERT INTO conversations
+                    VALUES ('legacy', 'Legacy title', 'read-only', 0, NULL, NULL, 1, 2);
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            store = Store(registry)
+            legacy = store.get("w_main", "legacy")
+
+            assert legacy is not None
+            self.assertEqual(legacy["naming_state"], "manual")
 
     def test_global_compatibility_index_keeps_workspace_identity(self) -> None:
         with TemporaryDirectory() as temporary_directory:

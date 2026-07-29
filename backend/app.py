@@ -83,6 +83,7 @@ from .managed_context import (
     capabilities,
     remove_managed_context,
 )
+from .naming import schedule_auto_naming
 from .store import Store
 from .turn_result import collect_turn_event, new_turn_result
 
@@ -252,6 +253,7 @@ class NewConversation(BaseModel):
 
 class NewWorkspace(BaseModel):
     display_name: str = Field(alias="displayName")
+    auto_name: bool = Field(default=False, alias="autoName")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -329,7 +331,10 @@ def list_all_conversations() -> dict:
 
 def _create_workspace(body: NewWorkspace) -> dict:
     try:
-        descriptor = store.registry.create(body.display_name)
+        descriptor = store.registry.create(
+            body.display_name,
+            naming_state="pending" if body.auto_name else "manual",
+        )
         prepare_workspace(descriptor["workspace_id"])
         return descriptor
     except ValueError as exc:
@@ -400,6 +405,7 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
         fingerprint,
         autonomous=body.autonomous,
         peer_workspace=body.peer_workspace,
+        naming_state="pending",
     )
     if body.eager:
         conversation["workspace_path"] = str(prepare_workspace(workspace_id))
@@ -750,6 +756,7 @@ def agent_create_conversation(
         fingerprint,
         autonomous=body.autonomous,
         peer_workspace=body.peer_workspace,
+        naming_state="pending",
     )
     if body.eager:
         # Materialize the isolated workspace now so the caller can bind-mount it
@@ -922,6 +929,17 @@ async def agent_send_message(
             workspace_id,
             turn_id,
             "complete" if result["ok"] else "failed",
+        )
+        result["naming_scheduled"] = (
+            schedule_auto_naming(
+                store,
+                workspace_id,
+                cid,
+                text,
+                result["final"],
+            )
+            if result["ok"]
+            else False
         )
         capabilities.revoke_turn(workspace_id, turn_id)
         remove_managed_context(workspace_id, cid)
@@ -1137,6 +1155,7 @@ async def _run_browser_turn(
     async with lock:
         final_text: str | None = None
         failure: dict[str, str] | None = None
+        cancelled = False
         intermediate_outputs: list[dict[str, str]] = []
         # Persist render-relevant events on completion; retain all SSE events in
         # ActiveBrowserTurn during execution so a refreshed client can replay them.
@@ -1233,6 +1252,7 @@ async def _run_browser_turn(
                 final_preview=compact_text(final_text),
             )
         except asyncio.CancelledError:
+            cancelled = True
             final_text = "Stopped."
             log_event(
                 LOG,
@@ -1286,6 +1306,17 @@ async def _run_browser_turn(
                     citation_dsl_version="v2" if analyzer_context else None,
                     failure=failure,
                 )
+                naming_scheduled = (
+                    schedule_auto_naming(
+                        store,
+                        workspace_id,
+                        cid,
+                        text,
+                        final_text,
+                    )
+                    if failure is None and not cancelled and final_text != "(no answer)"
+                    else False
+                )
                 await active_turn.publish(
                     _sse(
                         "done",
@@ -1295,6 +1326,7 @@ async def _run_browser_turn(
                             "citation_dictionary_id": citation_dictionary_id,
                             "citation_dsl_version": "v2" if analyzer_context else None,
                             "failure": failure,
+                            "naming_scheduled": naming_scheduled,
                         },
                     )
                 )

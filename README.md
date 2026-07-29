@@ -58,6 +58,13 @@ history without reintroducing conversation-owned workspaces or unscoped writes.
 Opening a workspace or Analyzer panel only lists/restores history. An empty
 conversation is materialized on the first actual send, not on page mount.
 
+Workspaces created by the browser entry page and their new conversations begin
+with `naming_state: "pending"`. After the first successful answer, a best-effort
+OpenRouter request generates one stable workspace name and one conversation
+title. The answer is returned before naming runs. A manual workspace rename
+sets `naming_state: "manual"` and permanently wins over delayed generation.
+Existing/migrated objects default to `manual`; no history is backfilled.
+
 Legacy `conversations.json` plus `workspaces/<conversation-id>/` data can be
 audited and migrated with:
 
@@ -419,6 +426,7 @@ Docker GPU forwarding.
 | `backend/codex_runtime/prompts.py` | role prompts and orchestrator JSON parsing |
 | `backend/codex_runtime/turn.py` | high-level orchestrator/implementer turn loop |
 | `backend/analyzer_evidence_mcp/server.py` | bounded read-only MCP bridge to the Analyzer `/api/v1/*` resources |
+| `backend/naming.py` | non-blocking OpenRouter structured naming plus pending-state scheduling |
 | `backend/eval.py` | JSON `/api/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`) |
 | `backend/artifacts.py` | list/resolve files in a run workspace for the agent artifact endpoints |
 | `SKILL.md` | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/skill` |
@@ -478,6 +486,15 @@ Docker GPU forwarding.
   `/opt/vibesim-uv-cache`, also baked into the runner image.
 - `VIBESIM_WORKSPACES_ROOT` — shared workspace registry/state root, default
   `../agent-workspaces`.
+- `OPENROUTER_API_KEY` — enables non-blocking automatic naming for new UI
+  workspaces and conversations. Unset disables the request and keeps fallback
+  names.
+- `VIBESIM_NAMING_MODEL` — OpenRouter model used for naming, default
+  `deepseek/deepseek-v4-flash`.
+- `VIBESIM_NAMING_BASE_URL` — OpenRouter-compatible API root, default
+  `https://openrouter.ai/api/v1`.
+- `VIBESIM_NAMING_TIMEOUT_SECONDS` — naming request timeout, default `8`.
+  Requests require structured output and zero-data-retention routing.
 - `VIBESIM_MANAGED_BACKEND_URL` — callback origin written into short-lived
   managed Launcher capabilities, default
   `http://host.docker.internal:8765`. It must resolve from the Codex container.

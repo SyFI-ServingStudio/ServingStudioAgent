@@ -26,6 +26,8 @@ from typing import Any, Iterator
 
 WORKSPACE_ID_PATTERN = re.compile(r"^w_[a-zA-Z0-9_-]{1,64}$")
 SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = 2
+NAMING_STATES = {"pending", "generated", "manual"}
 
 
 def default_workspaces_root() -> Path:
@@ -77,6 +79,7 @@ class WorkspaceRegistry:
                     "schema_version": SCHEMA_VERSION,
                     "workspace_id": "w_main",
                     "display_name": "Main",
+                    "naming_state": "manual",
                     "state": "active",
                     "storage_kind": "external",
                     "repo_path": os.path.relpath(self.main_dir, descriptor_path.parent),
@@ -100,12 +103,14 @@ class WorkspaceRegistry:
         workspace_id: str | None = None,
         base_workspace_id: str = "w_main",
         base_revision: str | None = None,
+        naming_state: str = "manual",
     ) -> dict[str, Any]:
         clean_name = display_name.strip()
         if not clean_name:
             raise ValueError("workspace display_name must not be empty")
         workspace_id = workspace_id or f"w_{uuid.uuid4().hex[:12]}"
         self._validate_workspace_id(workspace_id)
+        self._validate_naming_state(naming_state)
         with self._lock:
             workspace_dir = self.workspace_dir(workspace_id)
             if workspace_dir.exists():
@@ -115,6 +120,7 @@ class WorkspaceRegistry:
                 "schema_version": SCHEMA_VERSION,
                 "workspace_id": workspace_id,
                 "display_name": clean_name,
+                "naming_state": naming_state,
                 "state": "active",
                 "storage_kind": "managed",
                 "repo_path": "repo",
@@ -168,6 +174,8 @@ class WorkspaceRegistry:
                 if not clean_name:
                     raise ValueError("workspace display_name must not be empty")
                 descriptor["display_name"] = clean_name
+                # An explicit API rename always wins over background generation.
+                descriptor["naming_state"] = "manual"
             if state is not None:
                 if state not in {"active", "archived"}:
                     raise ValueError("workspace state must be active or archived")
@@ -179,6 +187,23 @@ class WorkspaceRegistry:
             self._write_json_atomic(self.descriptor_path(workspace_id), descriptor)
             self._rewrite_registry()
             return descriptor
+
+    def apply_generated_name(self, workspace_id: str, display_name: str) -> bool:
+        """Set an automatic name only while the descriptor is still pending."""
+
+        clean_name = display_name.strip()
+        if not clean_name:
+            raise ValueError("workspace display_name must not be empty")
+        with self._lock:
+            descriptor = self.get(workspace_id)
+            if descriptor["naming_state"] != "pending":
+                return False
+            descriptor["display_name"] = clean_name
+            descriptor["naming_state"] = "generated"
+            descriptor["last_accessed_at"] = time.time()
+            self._write_json_atomic(self.descriptor_path(workspace_id), descriptor)
+            self._rewrite_registry()
+            return True
 
     def repo_path(self, workspace_id: str) -> Path:
         descriptor_path = self.descriptor_path(workspace_id)
@@ -237,6 +262,8 @@ class WorkspaceRegistry:
             raise ValueError(f"{path} has invalid state")
         if descriptor["storage_kind"] not in {"external", "managed"}:
             raise ValueError(f"{path} has invalid storage_kind")
+        descriptor.setdefault("naming_state", "manual")
+        self._validate_naming_state(descriptor["naming_state"])
         return descriptor
 
     @staticmethod
@@ -271,6 +298,11 @@ class WorkspaceRegistry:
             or conversation_id in {".", ".."}
         ):
             raise ValueError("invalid conversation id")
+
+    @staticmethod
+    def _validate_naming_state(naming_state: str) -> None:
+        if naming_state not in NAMING_STATES:
+            raise ValueError(f"invalid naming_state: {naming_state!r}")
 
     def _main_revision(self) -> str | None:
         head_path = self.main_dir / ".git" / "HEAD"
@@ -334,6 +366,7 @@ class Store:
                     CREATE TABLE IF NOT EXISTS conversations (
                         id TEXT PRIMARY KEY,
                         title TEXT NOT NULL,
+                        naming_state TEXT NOT NULL DEFAULT 'manual',
                         sandbox TEXT NOT NULL,
                         autonomous INTEGER NOT NULL,
                         prompt_fingerprint TEXT,
@@ -407,9 +440,28 @@ class Store:
                     );
                     """
                 )
+                conversation_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(conversations)"
+                    ).fetchall()
+                }
+                if "naming_state" not in conversation_columns:
+                    # Existing databases are user-owned history. They remain
+                    # manual and are never silently enrolled in auto naming.
+                    connection.execute(
+                        """
+                        ALTER TABLE conversations
+                        ADD COLUMN naming_state TEXT NOT NULL DEFAULT 'manual'
+                        """
+                    )
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, time.time()),
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (DATABASE_SCHEMA_VERSION, time.time()),
                 )
                 connection.commit()
             finally:
@@ -419,7 +471,7 @@ class Store:
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             rows = connection.execute(
                 """
-                SELECT id, title, updated_at
+                SELECT id, title, naming_state, updated_at
                 FROM conversations
                 ORDER BY updated_at DESC, id
                 """
@@ -511,20 +563,23 @@ class Store:
         created_at: float | None = None,
         updated_at: float | None = None,
         title: str = "New chat",
+        naming_state: str = "manual",
     ) -> dict[str, Any]:
+        WorkspaceRegistry._validate_naming_state(naming_state)
         creation_time = created_at if created_at is not None else time.time()
         modification_time = updated_at if updated_at is not None else creation_time
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             connection.execute(
                 """
                 INSERT INTO conversations(
-                    id, title, sandbox, autonomous, prompt_fingerprint,
+                    id, title, naming_state, sandbox, autonomous, prompt_fingerprint,
                     peer_workspace, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
                     title,
+                    naming_state,
                     sandbox,
                     int(autonomous),
                     prompt_fingerprint,
@@ -537,6 +592,40 @@ class Store:
         created = self.get(workspace_id, conversation_id)
         assert created is not None
         return created
+
+    def conversation_naming_state(
+        self, workspace_id: str, conversation_id: str
+    ) -> str:
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            row = connection.execute(
+                "SELECT naming_state FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(conversation_id)
+            return str(row["naming_state"])
+
+    def apply_generated_conversation_title(
+        self,
+        workspace_id: str,
+        conversation_id: str,
+        title: str,
+    ) -> bool:
+        """Compare-and-set a generated title without overriding manual state."""
+
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("conversation title must not be empty")
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE conversations
+                SET title = ?, naming_state = 'generated', updated_at = ?
+                WHERE id = ? AND naming_state = 'pending'
+                """,
+                (clean_title, time.time(), conversation_id),
+            )
+            return cursor.rowcount == 1
 
     def update_runtime_settings(
         self,
@@ -1029,6 +1118,7 @@ class Store:
         return {
             "id": conversation_id,
             "title": row["title"],
+            "naming_state": row["naming_state"],
             "sandbox": row["sandbox"],
             "autonomous": bool(row["autonomous"]),
             "prompt_fingerprint": row["prompt_fingerprint"],

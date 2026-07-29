@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from backend import app as app_module
+from backend.store import Store, WorkspaceRegistry
 
 
 class TurnFailureTests(unittest.TestCase):
@@ -81,6 +85,86 @@ class ResumeTurnTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 204)
         self.assertEqual(response.body, b"")
+
+    async def test_browser_done_reports_background_naming_schedule(self) -> None:
+        async def fake_run_turn(*args, **kwargs):
+            yield {"kind": "final", "text": "The answer"}
+
+        with TemporaryDirectory() as temporary_directory:
+            main_dir = Path(temporary_directory) / "main"
+            (main_dir / "logs").mkdir(parents=True)
+            registry = WorkspaceRegistry(
+                Path(temporary_directory) / "agent-workspaces",
+                main_dir=main_dir,
+            )
+            store = Store(registry)
+            store.create(
+                "w_main",
+                "conversation",
+                "workspace-write",
+                naming_state="pending",
+            )
+            store.start_turn("w_main", "conversation", "turn")
+            active_turn = app_module.ActiveBrowserTurn(turn_id="turn")
+            with (
+                patch.object(app_module, "store", store),
+                patch.object(app_module, "run_turn", fake_run_turn),
+                patch.object(app_module, "schedule_auto_naming", return_value=True),
+                patch.object(app_module, "remove_managed_context"),
+            ):
+                await app_module._run_browser_turn(
+                    workspace_id="w_main",
+                    cid="conversation",
+                    text="The question",
+                    sandbox="workspace-write",
+                    sessions={},
+                    turn_id="turn",
+                    prompt_fingerprint="fingerprint",
+                    autonomous=False,
+                    analyzer_context=None,
+                    active_turn=active_turn,
+                )
+
+            done_payload = next(
+                json.loads(event.split("data: ", 1)[1])
+                for event in active_turn.events
+                if event.startswith("event: done")
+            )
+            self.assertTrue(done_payload["naming_scheduled"])
+
+    async def test_agent_result_reports_background_naming_schedule(self) -> None:
+        async def fake_run_turn(*args, **kwargs):
+            yield {"kind": "final", "text": "The answer"}
+
+        with TemporaryDirectory() as temporary_directory:
+            main_dir = Path(temporary_directory) / "main"
+            (main_dir / "logs").mkdir(parents=True)
+            registry = WorkspaceRegistry(
+                Path(temporary_directory) / "agent-workspaces",
+                main_dir=main_dir,
+            )
+            store = Store(registry)
+            store.create(
+                "w_main",
+                "conversation",
+                "workspace-write",
+                naming_state="pending",
+            )
+            with (
+                patch.object(app_module, "store", store),
+                patch.object(app_module, "run_turn", fake_run_turn),
+                patch.object(app_module, "schedule_auto_naming", return_value=True),
+                patch.object(app_module, "remove_managed_context"),
+            ):
+                result = await app_module.agent_send_message(
+                    "w_main",
+                    "conversation",
+                    app_module.AgentSendMessage(text="The question"),
+                    None,
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["naming_scheduled"])
 
 
 if __name__ == "__main__":
