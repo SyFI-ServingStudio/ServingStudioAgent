@@ -13,6 +13,7 @@ def test_initial_orchestrator_prompt_includes_selected_workspace_contract() -> N
 
     assert "active autonomous coordinator" in prompt
     assert "You are the orchestrator." in prompt
+    assert "/workspace/AGENTS.md" not in prompt
     assert prompt.endswith("Newest user message:\nAnalyze the sweep.\n")
 
 
@@ -25,6 +26,7 @@ def test_initial_implementer_prompt_includes_default_workspace_contract() -> Non
 
     assert "active human-in-the-loop coordinator" in prompt
     assert "You are the implementer." in prompt
+    assert "/workspace/AGENTS.md" not in prompt
     assert prompt.endswith("Task:\nChange one file.\n")
 
 
