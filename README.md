@@ -195,11 +195,11 @@ The orchestrator is normally an active human-in-the-loop coordinator. It reads
 matching skills, classifies the request, decides whether clarification is
 needed, and delegates only bounded implementer tasks. Before the first message
 in a conversation, the welcome area shows an Autonomous button below the example
-questions. When enabled, the backend copies
-`backend/prompts/AGENTS.autonomous.md` instead; that prompt tells the
-orchestrator to proceed with conservative assumptions instead of asking
-preference or clarification questions. After the first user message, the
-conversation's autonomous setting is fixed.
+questions. When enabled, the backend mounts
+`backend/prompts/AGENTS.autonomous.md` at `/workspace/AGENTS.md` instead; that
+prompt tells the orchestrator to proceed with conservative assumptions instead
+of asking preference or clarification questions. After the first user message,
+the conversation's autonomous setting is fixed.
 
 The implementer returns free-form text; there is no judge, profiler, or shared
 `profile.db` write unless the copied workspace task does it. The orchestrator
@@ -207,12 +207,14 @@ and implementer keep separate Codex session ids. Same-role continuity uses
 `codex exec resume`; cross-role handoff does not rely on shared context and is
 passed explicitly as task text and implementer summary.
 `backend/prompts/AGENTS.md` and `backend/prompts/AGENTS.autonomous.md` hold the
-detailed shared role and skill instructions. One of them is copied into the
-workspace as `/workspace/AGENTS.md`. The workspace also gets `.codex/skills ->
-../skills` so Codex can discover the copied repo-local skills. The role startup
-prompts are sent only when a role session is first created; later turns resume
-that role and send only the new user message or delegated task. Implementer
-summaries are explicitly sent back to the orchestrator before the turn finishes.
+detailed shared role and skill instructions. One of them is mounted read-only
+into each conversation container as `/workspace/AGENTS.md`; this preserves
+per-conversation mode without mutating the shared workspace. The workspace also
+gets `.codex/skills -> ../skills` so Codex can discover the copied repo-local
+skills. The role startup prompts are sent only when a role session is first
+created; later turns resume that role and send only the new user message or
+delegated task. Implementer summaries are explicitly sent back to the
+orchestrator before the turn finishes.
 
 The UI shows assistant intermediate output and, when work is delegated, the
 implementer summary. If the orchestrator delegates multiple follow-ups in one
@@ -401,8 +403,8 @@ Docker GPU forwarding.
 | `backend/eval.py` | JSON `/api/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`) |
 | `backend/artifacts.py` | list/resolve files in a run workspace for the agent artifact endpoints |
 | `SKILL.md` | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/skill` |
-| `backend/prompts/AGENTS.md` | detailed instructions copied into each `/workspace` |
-| `backend/prompts/AGENTS.autonomous.md` | autonomous-mode instructions copied as `/workspace/AGENTS.md` |
+| `backend/prompts/AGENTS.md` | detailed instructions mounted read-only as `/workspace/AGENTS.md` |
+| `backend/prompts/AGENTS.autonomous.md` | autonomous-mode instructions mounted read-only at the same path |
 | `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
 | `backend/store.py` | workspace registry plus per-workspace SQLite conversation/event store |
 | `docker/codex-runner.Dockerfile` | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked VibeSim deps |

@@ -89,6 +89,7 @@ async def run_turn(
             _workspace_main,
             mode,
             peer_dir,
+            autonomous=autonomous,
         )
     )
     while True:
