@@ -92,6 +92,8 @@ def _docker_exec_prefix(container: str) -> list[str]:
         "-e",
         f"VIBESIM_MANAGED_RUN_CONTEXT={MANAGED_CONTEXT_CONTAINER_PATH}",
         "-e",
+        f"VIBESIM_MANAGED_JOB_CONTEXT={MANAGED_CONTEXT_CONTAINER_PATH}",
+        "-e",
         "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
         "-w",
         "/workspace",

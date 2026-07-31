@@ -114,7 +114,10 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                 conversation_id="conversation",
             )
             self.assertEqual(
-                [(experiment["id"], experiment["status"]) for experiment in experiments],
+                [
+                    (experiment["id"], experiment["status"])
+                    for experiment in experiments
+                ],
                 [(registration["experimentId"], "ready")],
             )
             self.assertEqual(
@@ -137,6 +140,93 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rerun["experimentId"], registration["experimentId"])
             self.assertNotEqual(rerun["jobId"], registration["jobId"])
             self.assertEqual(metadata_path.read_bytes(), immutable_metadata)
+
+    async def test_registers_typed_artifact_job_without_creating_an_experiment(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            main_dir = root / "main"
+            (main_dir / "logs").mkdir(parents=True)
+            registry = WorkspaceRegistry(root / "agent-workspaces", main_dir=main_dir)
+            registry.create("Managed", workspace_id="w_managed")
+            (registry.repo_path("w_managed") / "logs").mkdir(parents=True)
+            store = Store(registry)
+            store.create("w_managed", "conversation", "workspace-write")
+            store.start_turn("w_managed", "conversation", "turn")
+            capability = Capability(
+                token="token",
+                workspace_id="w_managed",
+                conversation_id="conversation",
+                turn_id="turn",
+                role="implementer",
+                expires_at=time.time() + 60,
+            )
+            artifact_root = (
+                registry.repo_path("w_managed")
+                / "logs"
+                / "20260731_0_single_gemm_profile"
+            )
+
+            with patch.object(app_module, "store", store):
+                registration = await app_module.register_managed_job(
+                    app_module.RegisterManagedJob(
+                        jobKind="kernel_profile",
+                        artifactRoot="logs/20260731_0_single_gemm_profile",
+                        descriptor={
+                            "table": "single_gemm",
+                            "backend": "torch",
+                            "pointCount": 4,
+                        },
+                    ),
+                    capability,
+                )
+                ready = await app_module.update_managed_job(
+                    registration["jobId"],
+                    app_module.UpdateManagedJob(
+                        status="ready",
+                        summary={"axes": ["m"], "missingCount": 0},
+                    ),
+                    capability,
+                )
+
+            self.assertFalse(artifact_root.exists())
+            self.assertEqual(registration["resourceId"], ready["resourceId"])
+            self.assertEqual(ready["jobKind"], "kernel_profile")
+            self.assertEqual(ready["artifactPath"], "20260731_0_single_gemm_profile")
+            self.assertEqual(ready["summary"]["axes"], ["m"])
+            artifact_root.mkdir(parents=True)
+            (artifact_root / "curve.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "resourceKind": "kernel_profile_curve",
+                        "axes": [{"key": "m", "values": [128, 256]}],
+                        "rows": [],
+                    }
+                )
+            )
+            with patch.object(app_module, "store", store):
+                resource = app_module.get_managed_job_resource(
+                    "w_managed",
+                    registration["resourceId"],
+                )
+            self.assertEqual(resource["curve"]["axes"][0]["key"], "m")
+            self.assertEqual(resource["files"], ["curve.json"])
+            self.assertEqual(
+                store.list_experiments(
+                    "w_managed",
+                    conversation_id="conversation",
+                ),
+                [],
+            )
+            self.assertEqual(
+                [
+                    event["kind"]
+                    for event in store.list_turn_events("w_managed", "turn")
+                ],
+                ["job.requested", "job.ready"],
+            )
 
     async def test_registers_dynamic_citations_only_for_the_current_turn(self) -> None:
         with TemporaryDirectory() as temporary_directory:

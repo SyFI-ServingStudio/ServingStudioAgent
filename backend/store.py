@@ -27,7 +27,7 @@ from typing import Any, Iterator
 
 WORKSPACE_ID_PATTERN = re.compile(r"^w_[a-zA-Z0-9_-]{1,64}$")
 SCHEMA_VERSION = 1
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 3
 NAMING_STATES = {"pending", "generated", "manual"}
 
 
@@ -429,6 +429,11 @@ class Store:
                         turn_id TEXT NOT NULL,
                         role TEXT NOT NULL,
                         status TEXT NOT NULL,
+                        job_kind TEXT NOT NULL DEFAULT 'simulation',
+                        artifact_path TEXT,
+                        resource_id TEXT,
+                        descriptor_json TEXT NOT NULL DEFAULT '{}',
+                        summary_json TEXT,
                         experiment_id TEXT,
                         experiment_path TEXT,
                         created_at REAL NOT NULL,
@@ -469,6 +474,26 @@ class Store:
                         ADD COLUMN naming_state TEXT NOT NULL DEFAULT 'manual'
                         """
                     )
+                execution_job_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(execution_jobs)"
+                    ).fetchall()
+                }
+                # Existing simulation jobs migrate in place. New typed jobs use
+                # artifact_path/resource_id without pretending to be experiments.
+                for column_name, column_definition in (
+                    ("job_kind", "TEXT NOT NULL DEFAULT 'simulation'"),
+                    ("artifact_path", "TEXT"),
+                    ("resource_id", "TEXT"),
+                    ("descriptor_json", "TEXT NOT NULL DEFAULT '{}'"),
+                    ("summary_json", "TEXT"),
+                ):
+                    if column_name not in execution_job_columns:
+                        connection.execute(
+                            f"ALTER TABLE execution_jobs ADD COLUMN "
+                            f"{column_name} {column_definition}"
+                        )
                 connection.execute(
                     "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (SCHEMA_VERSION, time.time()),
@@ -970,6 +995,56 @@ class Store:
             "experiment_id": stable_experiment_id,
             "status": "requested",
             "experiment_path": experiment_path,
+            "job_kind": "simulation",
+        }
+
+    def create_artifact_job(
+        self,
+        workspace_id: str,
+        *,
+        conversation_id: str,
+        turn_id: str,
+        role: str,
+        job_kind: str,
+        artifact_path: str,
+        descriptor: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create a typed non-simulation job linked directly to a conversation."""
+        job_id = f"j_{uuid.uuid4().hex}"
+        resource_id = f"jr_{uuid.uuid4().hex}"
+        now = time.time()
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            connection.execute(
+                """
+                INSERT INTO execution_jobs(
+                    id, conversation_id, turn_id, role, status,
+                    job_kind, artifact_path, resource_id, descriptor_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    conversation_id,
+                    turn_id,
+                    role,
+                    job_kind,
+                    artifact_path,
+                    resource_id,
+                    json.dumps(descriptor, ensure_ascii=False, sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
+        return {
+            "job_id": job_id,
+            "resource_id": resource_id,
+            "conversation_id": conversation_id,
+            "turn_id": turn_id,
+            "status": "requested",
+            "job_kind": job_kind,
+            "artifact_path": artifact_path,
+            "descriptor": descriptor,
+            "summary": None,
         }
 
     def experiment_by_path(
@@ -1003,6 +1078,7 @@ class Store:
         status: str,
         conversation_id: str | None = None,
         turn_id: str | None = None,
+        summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         now = time.time()
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
@@ -1017,9 +1093,18 @@ class Store:
                 and row["conversation_id"] != conversation_id
             ) or (turn_id is not None and row["turn_id"] != turn_id):
                 return None
+            summary_json = (
+                json.dumps(summary, ensure_ascii=False, sort_keys=True)
+                if summary is not None
+                else row["summary_json"]
+            )
             connection.execute(
-                "UPDATE execution_jobs SET status = ?, updated_at = ? WHERE id = ?",
-                (status, now, job_id),
+                """
+                UPDATE execution_jobs
+                SET status = ?, summary_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, summary_json, now, job_id),
             )
             if row["experiment_id"]:
                 connection.execute(
@@ -1033,7 +1118,45 @@ class Store:
                 "turn_id": row["turn_id"],
                 "status": status,
                 "experiment_path": row["experiment_path"],
+                "job_kind": row["job_kind"],
+                "artifact_path": row["artifact_path"],
+                "resource_id": row["resource_id"],
+                "descriptor": json.loads(row["descriptor_json"] or "{}"),
+                "summary": json.loads(summary_json) if summary_json else None,
             }
+
+    def artifact_job_by_resource(
+        self,
+        workspace_id: str,
+        resource_id: str,
+    ) -> dict[str, Any] | None:
+        """Resolve one non-simulation job for the browser result surface."""
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM execution_jobs
+                WHERE resource_id = ? AND job_kind != 'simulation'
+                """,
+                (resource_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "job_id": row["id"],
+            "resource_id": row["resource_id"],
+            "conversation_id": row["conversation_id"],
+            "turn_id": row["turn_id"],
+            "role": row["role"],
+            "status": row["status"],
+            "job_kind": row["job_kind"],
+            "artifact_path": row["artifact_path"],
+            "descriptor": json.loads(row["descriptor_json"] or "{}"),
+            "summary": (
+                json.loads(row["summary_json"]) if row["summary_json"] else None
+            ),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     def list_experiments(
         self, workspace_id: str, *, conversation_id: str | None = None

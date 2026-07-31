@@ -12,7 +12,8 @@ Endpoints:
   GET    /api/workspaces/{wid}/conversations/{cid}/stream -> reconnect
   POST   /api/workspaces/{wid}/conversations/{cid}/cancel -> cancel
   GET    /api/workspaces/{wid}/conversations/{cid}/experiments -> linked results
-  POST   /api/internal/managed-runs/*   -> capability-gated Launcher callbacks
+  POST   /api/internal/managed-runs/*   -> simulation compatibility callbacks
+  POST   /api/internal/managed-jobs/*   -> typed capability-gated job callbacks
   POST   /api/eval                          -> JSON single-turn eval (evaluation only)
   GET    /api/agent/skill                    -> agent skill doc (SKILL.md, public)
   GET    /api/agent/workspaces/{wid}/artifacts -> list workspace artifacts
@@ -208,6 +209,12 @@ _MANAGED_ACTIVITY_KINDS = {
     "experiment.ready",
     "experiment.failed",
     "experiment.interrupted",
+    "job.requested",
+    "job.running",
+    "job.analysis_running",
+    "job.ready",
+    "job.failed",
+    "job.interrupted",
 }
 
 
@@ -220,14 +227,32 @@ def _managed_turn_activity(workspace_id: str, turn_id: str) -> list[dict]:
         kinds=_MANAGED_ACTIVITY_KINDS,
     ):
         payload = event["payload"]
-        activity.append(
+        activity.append(_project_job_activity(payload, workspace_id, event["kind"]))
+    return activity
+
+
+def _project_job_activity(
+    payload: dict,
+    workspace_id: str,
+    fallback_status: str,
+) -> dict:
+    """Preserve the legacy simulation card shape; enrich only typed jobs."""
+    activity = {
+        "kind": "job",
+        "workspaceId": str(payload.get("workspaceId") or workspace_id),
+        "status": str(payload.get("status") or fallback_status),
+        "experimentId": str(payload.get("experimentId") or ""),
+        "experimentPath": str(payload.get("experimentPath") or ""),
+        "jobId": str(payload.get("jobId") or ""),
+    }
+    if payload.get("jobKind"):
+        activity.update(
             {
-                "kind": "job",
-                "workspaceId": str(payload.get("workspaceId") or workspace_id),
-                "status": str(payload.get("status") or event["kind"]),
-                "experimentId": str(payload.get("experimentId") or ""),
-                "experimentPath": str(payload.get("experimentPath") or ""),
-                "jobId": str(payload.get("jobId") or ""),
+                "jobKind": str(payload["jobKind"]),
+                "resourceId": str(payload.get("resourceId") or ""),
+                "artifactPath": str(payload.get("artifactPath") or ""),
+                "descriptor": payload.get("descriptor") or {},
+                "summary": payload.get("summary"),
             }
         )
     return activity
@@ -267,16 +292,7 @@ def _recoverable_turn_activity(workspace_id: str, turn_id: str) -> list[dict]:
                 }
             )
         elif kind in _MANAGED_ACTIVITY_KINDS:
-            activity.append(
-                {
-                    "kind": "job",
-                    "workspaceId": str(payload.get("workspaceId") or workspace_id),
-                    "status": str(payload.get("status") or kind),
-                    "experimentId": str(payload.get("experimentId") or ""),
-                    "experimentPath": str(payload.get("experimentPath") or ""),
-                    "jobId": str(payload.get("jobId") or ""),
-                }
-            )
+            activity.append(_project_job_activity(payload, workspace_id, kind))
     return activity
 
 
@@ -381,6 +397,19 @@ class UpdateManagedRun(BaseModel):
     status: str
 
 
+class RegisterManagedJob(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    job_kind: str = Field(alias="jobKind", min_length=1)
+    artifact_root: str = Field(alias="artifactRoot", min_length=1)
+    descriptor: dict = Field(default_factory=dict)
+
+
+class UpdateManagedJob(BaseModel):
+    status: str
+    summary: dict | None = None
+
+
 class RegisterManagedCitationDictionary(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -472,6 +501,92 @@ def get_workspace(workspace_id: str) -> dict:
         return store.registry.get(workspace_id)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
+
+
+@app.get("/api/workspaces/{workspace_id}/jobs/{resource_id}")
+def get_managed_job_resource(workspace_id: str, resource_id: str) -> dict:
+    """Return one job-scoped result snapshot for the integrated analysis pane."""
+    job = store.artifact_job_by_resource(workspace_id, resource_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="managed job resource not found")
+    artifact_root = _managed_job_artifact_root(workspace_id, job)
+
+    files: list[str] = []
+    if artifact_root.is_dir():
+        for path in sorted(artifact_root.rglob("*")):
+            if len(files) >= 200:
+                break
+            if path.is_file() and artifact_root in path.resolve().parents:
+                files.append(path.relative_to(artifact_root).as_posix())
+
+    curve = _read_bounded_json(artifact_root / "curve.json", max_bytes=16_000_000)
+    iter_breakdown = _read_bounded_text(
+        artifact_root / "reports" / "iter_breakdown.ans",
+        max_bytes=2_000_000,
+    )
+    return {
+        "schemaVersion": 1,
+        "workspaceId": workspace_id,
+        "jobId": job["job_id"],
+        "resourceId": job["resource_id"],
+        "jobKind": job["job_kind"],
+        "status": job["status"],
+        "artifactPath": job["artifact_path"],
+        "descriptor": job["descriptor"],
+        "summary": job["summary"],
+        "files": files,
+        "curve": curve,
+        "iterBreakdown": iter_breakdown,
+    }
+
+
+@app.get("/api/workspaces/{workspace_id}/jobs/{resource_id}/artifact")
+def get_managed_job_artifact(
+    workspace_id: str,
+    resource_id: str,
+    path: str = Query(min_length=1),
+) -> FileResponse:
+    job = store.artifact_job_by_resource(workspace_id, resource_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="managed job resource not found")
+    artifact_root = _managed_job_artifact_root(workspace_id, job)
+    requested = Path(path)
+    if requested.is_absolute() or ".." in requested.parts:
+        raise HTTPException(status_code=403, detail="invalid managed job artifact path")
+    resolved = (artifact_root / requested).resolve(strict=False)
+    if artifact_root not in resolved.parents or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="managed job artifact not found")
+    return FileResponse(resolved)
+
+
+def _managed_job_artifact_root(workspace_id: str, job: dict) -> Path:
+    logs_root = store.registry.logs_path(workspace_id).resolve()
+    artifact_root = (logs_root / job["artifact_path"]).resolve(strict=False)
+    if logs_root not in artifact_root.parents:
+        raise HTTPException(
+            status_code=403, detail="managed job artifact escaped logs root"
+        )
+    return artifact_root
+
+
+def _read_bounded_json(path: Path, *, max_bytes: int) -> dict | None:
+    text = _read_bounded_text(path, max_bytes=max_bytes)
+    if text is None:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _read_bounded_text(path: Path, *, max_bytes: int) -> str | None:
+    try:
+        if not path.is_file() or path.stat().st_size > max_bytes:
+            return None
+        return path.read_text("utf-8")
+    except OSError:
+        return None
 
 
 @app.patch("/api/workspaces/{workspace_id}")
@@ -578,6 +693,18 @@ def _managed_experiment_root(
     return resolved, relative_path, approved_root
 
 
+def _managed_artifact_root(
+    capability: Capability,
+    requested_root: str,
+) -> tuple[Path, str, str]:
+    """Apply the simulation root containment contract to any typed job artifact."""
+    try:
+        return _managed_experiment_root(capability, requested_root)
+    except HTTPException as error:
+        detail = str(error.detail).replace("experimentRoot", "artifactRoot")
+        raise HTTPException(status_code=error.status_code, detail=detail) from error
+
+
 @app.post("/api/internal/managed-runs/register")
 async def register_managed_run(
     body: RegisterManagedRun,
@@ -629,9 +756,7 @@ async def register_managed_run(
             detail="filesystem and workspace database disagree on experiment identity",
         )
     experiment_id = (
-        metadata_experiment_id
-        or database_experiment_id
-        or f"e_{uuid.uuid4().hex}"
+        metadata_experiment_id or database_experiment_id or f"e_{uuid.uuid4().hex}"
     )
     job = store.create_job(
         capability.workspace_id,
@@ -749,6 +874,116 @@ async def update_managed_run(
     return event
 
 
+@app.post("/api/internal/managed-jobs/register")
+async def register_managed_job(
+    body: RegisterManagedJob,
+    capability: Capability = Depends(require_managed_capability),
+) -> dict:
+    allowed_job_kinds = {"timing_predict", "kernel_profile", "kernel_measure"}
+    if body.job_kind not in allowed_job_kinds:
+        raise HTTPException(status_code=400, detail="unsupported managed job kind")
+    if store.get(capability.workspace_id, capability.conversation_id) is None:
+        raise HTTPException(status_code=404, detail="managed conversation not found")
+    _host_root, relative_path, approved_root = _managed_artifact_root(
+        capability,
+        body.artifact_root,
+    )
+    job = store.create_artifact_job(
+        capability.workspace_id,
+        conversation_id=capability.conversation_id,
+        turn_id=capability.turn_id,
+        role=capability.role,
+        job_kind=body.job_kind,
+        artifact_path=relative_path,
+        descriptor=body.descriptor,
+    )
+    event = {
+        "kind": "job.requested",
+        "workspaceId": capability.workspace_id,
+        "conversationId": capability.conversation_id,
+        "turnId": capability.turn_id,
+        "jobId": job["job_id"],
+        "jobKind": job["job_kind"],
+        "resourceId": job["resource_id"],
+        "artifactPath": job["artifact_path"],
+        "descriptor": job["descriptor"],
+        "status": "requested",
+    }
+    store.append_turn_event(
+        capability.workspace_id,
+        capability.turn_id,
+        "job.requested",
+        event,
+    )
+    active_turn = _active_browser_turns.get(
+        (capability.workspace_id, capability.conversation_id)
+    )
+    if active_turn is not None and not active_turn.finished:
+        await active_turn.publish(_sse("job", event))
+    return {
+        "schemaVersion": 1,
+        "workspaceId": capability.workspace_id,
+        "conversationId": capability.conversation_id,
+        "turnId": capability.turn_id,
+        "jobId": job["job_id"],
+        "resourceId": job["resource_id"],
+        "approvedRoot": approved_root,
+    }
+
+
+@app.post("/api/internal/managed-jobs/{job_id}/status")
+async def update_managed_job(
+    job_id: str,
+    body: UpdateManagedJob,
+    capability: Capability = Depends(require_managed_capability),
+) -> dict:
+    allowed_statuses = {
+        "running",
+        "analysis_running",
+        "ready",
+        "failed",
+        "interrupted",
+    }
+    if body.status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="unsupported managed-job status")
+    job = store.update_job(
+        capability.workspace_id,
+        job_id,
+        status=body.status,
+        conversation_id=capability.conversation_id,
+        turn_id=capability.turn_id,
+        summary=body.summary,
+    )
+    if job is None or job["job_kind"] == "simulation":
+        raise HTTPException(status_code=404, detail="managed job not found")
+    event_kind = f"job.{body.status}"
+    event = {
+        "kind": event_kind,
+        "workspaceId": capability.workspace_id,
+        "conversationId": capability.conversation_id,
+        "turnId": capability.turn_id,
+        "jobId": job_id,
+        "jobKind": job["job_kind"],
+        "resourceId": job["resource_id"],
+        "artifactPath": job["artifact_path"],
+        "descriptor": job["descriptor"],
+        "summary": job["summary"],
+        "status": body.status,
+    }
+    store.append_turn_event(
+        capability.workspace_id,
+        capability.turn_id,
+        event_kind,
+        event,
+    )
+    active_turn = _active_browser_turns.get(
+        (capability.workspace_id, capability.conversation_id)
+    )
+    if active_turn is not None and not active_turn.finished:
+        await active_turn.publish(_sse("job", event))
+    return event
+
+
 @app.post("/api/internal/analyzer-citations/register")
 def register_managed_analyzer_citations(
     body: RegisterManagedCitationDictionary,
@@ -793,9 +1028,7 @@ def register_managed_analyzer_citations(
     return snapshot
 
 
-@app.get(
-    "/api/workspaces/{workspace_id}/conversations/{cid}/experiments"
-)
+@app.get("/api/workspaces/{workspace_id}/conversations/{cid}/experiments")
 def list_conversation_experiments(workspace_id: str, cid: str) -> dict:
     if store.get(workspace_id, cid) is None:
         raise HTTPException(status_code=404, detail="conversation not found")

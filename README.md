@@ -209,11 +209,21 @@ browser
        GET .../stream -> 204 when the conversation is idle
        POST .../cancel -> send SIGINT to Codex and stop the whole turn
   -> stream progress + final text back to browser
-  -> when Launcher sees VIBESIM_MANAGED_RUN_CONTEXT:
-       register the bounded experiment root before artifacts are created
-       stream requested/running/analysis/ready lifecycle as job events
-       persist the stable experiment id and conversation relationship
+  -> when Launcher sees the managed capability context:
+       simulations register through the compatible managed-runs protocol
+       timing-predict and kernel profiling register typed managed jobs
+       approve a bounded logs-root artifact path before artifacts are created
+       stream requested/running/analysis/ready lifecycle as durable job events
+       preserve simulation experiment identity and typed result-resource identity
 ```
+
+Typed jobs currently include `timing_predict`, `kernel_profile`, and
+`kernel_measure`. They are linked directly to the conversation without being
+misclassified as deployment simulations. A ready typed-job card opens the
+job-scoped result surface: kernel profiles read that invocation's `curve.json`,
+while timing-predict and measurement jobs expose their generated plots and
+breakdown artifacts. The mutable `profile.db` remains the L1 cache authority;
+it is not used to reconstruct a previous job's displayed result.
 
 The orchestrator is normally an active human-in-the-loop coordinator. It reads
 matching skills, classifies the request, decides whether clarification is
