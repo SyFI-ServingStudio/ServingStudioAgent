@@ -105,6 +105,12 @@ the FastAPI backend. If `frontend/node_modules` is missing, it runs `npm ci`
 once before the build. Set `FRONTEND_SKIP_BUILD=1` when you are already running
 the Vite dev server.
 
+The browser-facing `GET /api/jobs` endpoint is a read-only Page 0 catalog of
+non-simulation managed results across active workspaces. Each row carries its
+stable `resource_id`, type, lifecycle status, artifact path, descriptor, summary,
+conversation title, and timestamps. Simulation sweeps remain owned by the Rust
+Analyzer catalog and are merged with these typed rows in viz-ui.
+
 The backend uses a prebuilt local Docker image for the Codex runner. If the image
 is missing, its VibeSim runner label is stale, or its baked `main/uv.lock` hash
 does not match the current checkout, `run.sh` builds it once from

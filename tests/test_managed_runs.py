@@ -213,6 +213,15 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                 )
             self.assertEqual(resource["curve"]["axes"][0]["key"], "m")
             self.assertEqual(resource["files"], ["curve.json"])
+            with patch.object(app_module, "store", store):
+                catalog = app_module.list_managed_jobs()
+            self.assertEqual(len(catalog["jobs"]), 1)
+            self.assertEqual(catalog["jobs"][0]["workspace_id"], "w_managed")
+            self.assertEqual(
+                catalog["jobs"][0]["resource_id"], registration["resourceId"]
+            )
+            self.assertEqual(catalog["jobs"][0]["job_kind"], "kernel_profile")
+            self.assertEqual(catalog["jobs"][0]["conversation_title"], "New chat")
             self.assertEqual(
                 store.list_experiments(
                     "w_managed",

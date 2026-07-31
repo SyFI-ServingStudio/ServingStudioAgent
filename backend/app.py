@@ -471,6 +471,12 @@ def list_all_conversations() -> dict:
     }
 
 
+@app.get("/api/jobs")
+def list_managed_jobs() -> dict:
+    """Read-only Page 0 catalog for navigable non-simulation job results."""
+    return {"jobs": store.list_all_artifact_jobs()}
+
+
 def _create_workspace(body: NewWorkspace) -> dict:
     descriptor: dict | None = None
     try:

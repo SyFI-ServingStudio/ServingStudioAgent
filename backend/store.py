@@ -534,6 +534,57 @@ class Store:
         )
         return conversations
 
+    def list_artifact_jobs(self, workspace_id: str) -> list[dict[str, Any]]:
+        """List browser-navigable non-simulation results in one workspace."""
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            rows = connection.execute(
+                """
+                SELECT jobs.id, jobs.conversation_id, conversations.title AS conversation_title,
+                       jobs.turn_id, jobs.status, jobs.job_kind, jobs.artifact_path,
+                       jobs.resource_id, jobs.descriptor_json, jobs.summary_json,
+                       jobs.created_at, jobs.updated_at
+                FROM execution_jobs AS jobs
+                JOIN conversations ON conversations.id = jobs.conversation_id
+                WHERE jobs.job_kind != 'simulation' AND jobs.resource_id IS NOT NULL
+                ORDER BY jobs.updated_at DESC, jobs.id
+                """
+            ).fetchall()
+        return [
+            {
+                "job_id": row["id"],
+                "conversation_id": row["conversation_id"],
+                "conversation_title": row["conversation_title"],
+                "turn_id": row["turn_id"],
+                "status": row["status"],
+                "job_kind": row["job_kind"],
+                "artifact_path": row["artifact_path"],
+                "resource_id": row["resource_id"],
+                "descriptor": json.loads(row["descriptor_json"] or "{}"),
+                "summary": (
+                    json.loads(row["summary_json"]) if row["summary_json"] else None
+                ),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def list_all_artifact_jobs(self) -> list[dict[str, Any]]:
+        """Flatten typed result jobs across active workspaces for Page 0."""
+        jobs = [
+            {**job, "workspace_id": descriptor["workspace_id"]}
+            for descriptor in self.registry.list()
+            for job in self.list_artifact_jobs(descriptor["workspace_id"])
+        ]
+        jobs.sort(
+            key=lambda job: (
+                -float(job.get("updated_at", 0)),
+                str(job["workspace_id"]),
+                str(job["job_id"]),
+            )
+        )
+        return jobs
+
     def get(self, workspace_id: str, conversation_id: str) -> dict[str, Any] | None:
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             row = connection.execute(
