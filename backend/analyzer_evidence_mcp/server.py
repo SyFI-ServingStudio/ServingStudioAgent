@@ -43,7 +43,12 @@ leaf's /kernel-throughput-analysis.
 Set source="host" for an experiment selected in the Analyzer UI. Set
 source="workspace" for simulations created inside this agent workspace.
 Only relative GET paths below /api/v1/ are accepted. Values are returned exactly
-from Analyzer; this tool does not estimate, aggregate, or reinterpret metrics."""
+from Analyzer; this tool does not estimate, aggregate, or reinterpret metrics.
+
+For source="workspace", reading an exact sweep payload from a managed UI turn
+also returns `_vibesim_citations`. Cite Analyzer-backed claims with the exact
+Markdown inline-code tokens in its `document`; do not omit, alter, or invent
+those tokens. They become clickable only when the user clicks the final answer."""
 
 mcp = FastMCP(
     "VibeSim Analyzer",
@@ -201,6 +206,88 @@ def validate_resource_path(resource_path: str) -> str:
     return resource_path
 
 
+def _managed_context() -> dict[str, Any] | None:
+    context_value = os.environ.get("VIBESIM_MANAGED_RUN_CONTEXT", "").strip()
+    if not context_value:
+        return None
+    context_path = Path(context_value)
+    try:
+        context = json.loads(context_path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise AnalyzerToolError("managed Agent context could not be read") from error
+    if not isinstance(context, dict):
+        raise AnalyzerToolError("managed Agent context is invalid")
+    return context
+
+
+def _register_workspace_citations(
+    safe_path: str,
+    payload: Any,
+) -> Any:
+    """Attach host-issued citation tokens to an exact managed sweep payload."""
+    parsed_path = urlsplit(safe_path)
+    path_segments = parsed_path.path.strip("/").split("/")
+    if (
+        len(path_segments) != 5
+        or path_segments[:3] != ["api", "v1", "sweeps"]
+        or path_segments[4] != "payload"
+        or not isinstance(payload, dict)
+    ):
+        return payload
+    context = _managed_context()
+    if context is None:
+        return payload
+    backend_url = context.get("backend_url")
+    capability_token = context.get("capability_token")
+    experiment_id = str(payload.get("sweep_id") or "")
+    if not isinstance(backend_url, str) or not isinstance(capability_token, str):
+        raise AnalyzerToolError("managed Agent context is incomplete")
+    if not experiment_id:
+        raise AnalyzerToolError("Analyzer sweep payload has no sweep_id")
+    request_body = json.dumps(
+        {"experimentId": experiment_id, "analysis": payload},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    registration_url = urljoin(
+        f"{backend_url.rstrip('/')}/",
+        "api/internal/analyzer-citations/register",
+    )
+    registration_request = Request(
+        registration_url,
+        data=request_body,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {capability_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(
+            registration_request,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        ) as response:
+            dictionary = json.loads(response.read(MAX_RESPONSE_BYTES + 1))
+    except HTTPError as error:
+        detail = error.read(2048).decode("utf-8", errors="replace")
+        raise AnalyzerToolError(
+            f"citation registration returned HTTP {error.code}: {detail}"
+        ) from error
+    except (URLError, json.JSONDecodeError) as error:
+        raise AnalyzerToolError(f"citation registration failed: {error}") from error
+    annotated_payload = dict(payload)
+    annotated_payload["_vibesim_citations"] = {
+        "identity": dictionary.get("identity"),
+        "document": dictionary.get("document"),
+        "instruction": (
+            "Use exact inline-code tokens from document for every Analyzer-backed "
+            "claim in the final answer."
+        ),
+    }
+    return annotated_payload
+
+
 @mcp.tool(name=TOOL_NAME, description=ENDPOINT_GUIDE)
 def read_analyzer_resource(
     path: str,
@@ -234,9 +321,12 @@ def read_analyzer_resource(
             f"Analyzer returned unsupported content type {content_type!r}"
         )
     try:
-        return json.loads(response_bytes)
+        payload = json.loads(response_bytes)
     except json.JSONDecodeError as error:
         raise AnalyzerToolError("Analyzer returned invalid JSON") from error
+    if source == "workspace":
+        return _register_workspace_citations(safe_path, payload)
+    return payload
 
 
 def main() -> None:

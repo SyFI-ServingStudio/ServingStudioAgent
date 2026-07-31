@@ -1,17 +1,18 @@
 """Strict turn-time Analyzer context and Citation DSL v2 freezing.
 
-The browser owns dictionary construction because it knows the active launcher
-axes and registered evidence panels. The conversation host only validates the
-bounded snapshot, exposes it to Codex, and freezes exact inline-code references
-against that immutable allowlist. V2 makes the workspace identity mandatory so
-an opaque Analyzer resource can never be resolved in the wrong workspace.
+The browser builds the initial dictionary for an already-open Analyzer surface.
+For Agent-first turns, the managed Analyzer bridge may register a later sweep
+dictionary after a simulation becomes discoverable. The conversation host
+validates both bounded snapshots and freezes exact inline-code references
+against the latest dictionary registered by that turn. V2 makes workspace
+identity mandatory so an opaque resource cannot resolve in the wrong workspace.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -19,6 +20,13 @@ _CITATION_TOKEN = re.compile(r"^(?:exp|run)\.[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-
 _INLINE_CODE = re.compile(r"(?<!`)`([^`\r\n]+)`(?!`)")
 CoordinatePrimitive = str | int | float | bool | None
 CoordinateValue = CoordinatePrimitive | list[CoordinatePrimitive]
+_AXIS_ALIASES = {
+    "tensor_parallel": "tp",
+    "tp": "tp",
+    "request_rate": "rate",
+    "rate": "rate",
+}
+_MAX_AGGREGATE_ENTRIES = 1_800
 
 
 class AggregateSelection(BaseModel):
@@ -129,6 +137,250 @@ class FrozenCitation(BaseModel):
     source_end: int = Field(alias="sourceEnd", ge=0)
     display_label: str = Field(alias="displayLabel")
     target: EvidenceRef
+
+
+def _safe_segment(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_-]+", "_", value.lower()).strip("_-")
+    return normalized if normalized[:1].isalpha() else f"v{normalized or 'unknown'}"
+
+
+def _compact_value(value: CoordinateValue) -> str:
+    if isinstance(value, list):
+        return "_".join(_compact_value(item) for item in value)
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        return str(value).replace("-", "m").replace(".", "p")
+    return _safe_segment(value)
+
+
+def _short_identity(value: str) -> str:
+    """Match the frontend's unsigned FNV-1a base-36 identity."""
+    hash_value = 0x811C9DC5
+    for character in value:
+        hash_value ^= ord(character)
+        hash_value = (hash_value * 0x01000193) & 0xFFFFFFFF
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    if hash_value == 0:
+        return "0"
+    encoded = ""
+    while hash_value:
+        hash_value, remainder = divmod(hash_value, 36)
+        encoded = alphabet[remainder] + encoded
+    return encoded
+
+
+def _metric_statistic(metric: dict[str, Any]) -> Literal["mean", "p99"] | None:
+    key = str(metric.get("key") or "")
+    label = str(metric.get("label") or "")
+    if re.search(r"(^|_)mean(_|$)", key) or re.match(r"^mean\b", label, re.I):
+        return "mean"
+    if re.search(r"(^|_)p99(_|$)", key) or re.match(r"^p99\b", label, re.I):
+        return "p99"
+    return None
+
+
+def _metric_path(metric: dict[str, Any]) -> str:
+    key = str(metric["key"])
+    group = str(metric["group"])
+    statistic = _metric_statistic(metric)
+    if key == "total_tps":
+        return "throughput"
+    if group == "tpot" or "tpot" in key:
+        return f"tpot.{statistic}" if statistic else "tpot"
+    if group == "ttft" or "ttft" in key:
+        return f"ttft.{statistic}" if statistic else "ttft"
+    if group == "utilization" or "utilization" in key:
+        return "utilization"
+    return _safe_segment(key)
+
+
+def build_aggregate_citation_dictionary(
+    analysis: dict[str, Any],
+    *,
+    workspace_id: str,
+    experiment_id: str,
+) -> CitationDictionarySnapshot:
+    """Build the same bounded aggregate DSL exposed by the browser.
+
+    ``workspace_id`` and ``experiment_id`` come from the managed capability and
+    registry, never from the workspace-local Analyzer payload. A local Analyzer
+    uses an implementation workspace id that is not a UI navigation identity.
+    """
+    if analysis.get("protocol_version") != 1 or analysis.get("schema_version") != 1:
+        raise ValueError("unsupported Analyzer sweep payload version")
+    if str(analysis.get("sweep_id") or "") != experiment_id:
+        raise ValueError("Analyzer sweep identity does not match managed experiment")
+    axes = analysis.get("axes")
+    metrics = analysis.get("metrics")
+    runs = analysis.get("runs")
+    if not isinstance(axes, list) or not all(isinstance(axis, str) and axis for axis in axes):
+        raise ValueError("Analyzer sweep axes are invalid")
+    if not isinstance(metrics, list) or not isinstance(runs, list):
+        raise ValueError("Analyzer sweep metrics or runs are invalid")
+
+    used_aliases: set[str] = set()
+    axis_dictionaries: list[tuple[str, str, dict[str, tuple[str, CoordinateValue]]]] = []
+    for axis in axes:
+        preferred = _AXIS_ALIASES.get(axis, _safe_segment(axis))
+        alias = preferred
+        suffix = 2
+        while alias in used_aliases:
+            alias = f"{preferred}{suffix}"
+            suffix += 1
+        used_aliases.add(alias)
+        values: dict[str, tuple[str, CoordinateValue]] = {}
+        used_segments: dict[str, str] = {}
+        for run in runs:
+            if not isinstance(run, dict) or not isinstance(run.get("coordinates"), dict):
+                raise ValueError("Analyzer sweep run is invalid")
+            if axis not in run["coordinates"]:
+                continue
+            value = run["coordinates"][axis]
+            identity = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            if identity in values:
+                continue
+            base_segment = f"{alias}{_compact_value(value)}"
+            existing_identity = used_segments.get(base_segment)
+            segment = (
+                base_segment
+                if existing_identity in {None, identity}
+                else f"{base_segment}_{_short_identity(identity)}"
+            )
+            used_segments[segment] = identity
+            values[identity] = (segment, value)
+        axis_dictionaries.append((axis, alias, values))
+
+    unique_metrics: list[tuple[dict[str, Any], str, str]] = []
+    seen_paths: set[str] = set()
+    for raw_metric in metrics:
+        if not isinstance(raw_metric, dict):
+            raise ValueError("Analyzer sweep metric is invalid")
+        required = ("key", "label", "group", "unit")
+        if any(not isinstance(raw_metric.get(field), str) for field in required):
+            raise ValueError("Analyzer sweep metric descriptor is invalid")
+        path = _metric_path(raw_metric)
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        statistic = _metric_statistic(raw_metric)
+        panel_id = str(raw_metric["group"]) if statistic else str(raw_metric["key"])
+        unique_metrics.append((raw_metric, path, panel_id))
+
+    entries: list[dict[str, Any]] = []
+    for metric, path, panel_id in unique_metrics:
+        target: dict[str, Any] = {
+            "protocol": "vibesim.analyzer/v2",
+            "kind": "aggregate",
+            "workspaceId": workspace_id,
+            "experimentId": experiment_id,
+            "panelId": panel_id,
+            "metricKey": metric["key"],
+        }
+        statistic = _metric_statistic(metric)
+        if statistic:
+            target["statistic"] = statistic
+        entries.append(
+            {
+                "token": f"exp.{path}",
+                "displayLabel": f"{metric['label']} · all coordinates",
+                "target": target,
+            }
+        )
+
+    member_rows: list[str] = []
+    for run in runs:
+        run_id = run.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        coordinates = run["coordinates"]
+        segments: list[str] = []
+        for axis, _alias, values in axis_dictionaries:
+            if axis not in coordinates:
+                segments = []
+                break
+            identity = json.dumps(
+                coordinates[axis], ensure_ascii=False, separators=(",", ":")
+            )
+            dictionary_value = values.get(identity)
+            if dictionary_value is None:
+                segments = []
+                break
+            segments.append(dictionary_value[0])
+        if len(segments) != len(axis_dictionaries):
+            continue
+        prefix = ".".join(segments)
+        member_rows.append(prefix)
+        coordinate_values = {axis: coordinates[axis] for axis in axes}
+        labels = run.get("labels") if isinstance(run.get("labels"), dict) else {}
+        coordinate_label = " · ".join(
+            str(labels.get(axis) or f"{axis}={coordinates[axis]}") for axis in axes
+        )
+        for metric, path, panel_id in unique_metrics:
+            if len(entries) >= _MAX_AGGREGATE_ENTRIES:
+                break
+            target = {
+                "protocol": "vibesim.analyzer/v2",
+                "kind": "aggregate",
+                "workspaceId": workspace_id,
+                "experimentId": experiment_id,
+                "panelId": panel_id,
+                "metricKey": metric["key"],
+                "runId": run_id,
+                "coordinates": coordinate_values,
+            }
+            statistic = _metric_statistic(metric)
+            if statistic:
+                target["statistic"] = statistic
+            entries.append(
+                {
+                    "token": f"exp.{prefix}.{path}",
+                    "displayLabel": f"{coordinate_label} · {metric['label']}",
+                    "target": target,
+                }
+            )
+
+    axis_rows = [
+        "  - `{}<value>`: {}; valid segments: {}".format(
+            alias,
+            axis,
+            ", ".join(f"`{segment}`" for segment, _value in values.values()),
+        )
+        for axis, alias, values in axis_dictionaries
+    ]
+    metric_rows = [
+        f"  - `{path}`: {metric['label']}, {metric['unit']}"
+        for metric, path, _panel_id in unique_metrics
+    ]
+    document = "\n".join(
+        [
+            "## Analyzer citation references",
+            "",
+            "Use only these exact Markdown inline-code references. Citation text never navigates until the user clicks it.",
+            "",
+            "Experiment `exp`",
+            "- axes, in launcher declaration order:",
+            *(axis_rows or ["  - none (single configuration)"]),
+            "- valid members:",
+            *(f"  - `{member}`" for member in member_rows),
+            "- metrics:",
+            *metric_rows,
+            "- forms: `exp.<metric>` and `exp.<member>.<metric>`",
+        ]
+    )
+    identity_source = "|".join(
+        f"{entry['token']}:{entry['target'].get('runId', '')}" for entry in entries
+    )
+    return CitationDictionarySnapshot.model_validate(
+        {
+            "protocol": "vibesim.citation-dictionary/v2",
+            "identity": f"aggregate-{_short_identity(f'{experiment_id}|{identity_source}')}",
+            "document": document,
+            "entries": entries,
+        }
+    )
 
 
 def prompt_with_analyzer_context(text: str, context: AnalyzerTurnContext | None) -> str:

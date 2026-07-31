@@ -51,7 +51,13 @@ def _bounded_source_text(value: str) -> str:
 
 
 def _naming_config() -> tuple[str, str, str, float] | None:
-    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    # OPENROUTE_KEY is the established host variable in the development
+    # environment. Keep the provider-standard spelling authoritative while
+    # accepting that existing secret injection without copying the key to disk.
+    api_key = (
+        os.environ.get("OPENROUTER_API_KEY", "").strip()
+        or os.environ.get("OPENROUTE_KEY", "").strip()
+    )
     if not api_key:
         return None
     model = os.environ.get("VIBESIM_NAMING_MODEL", DEFAULT_MODEL).strip()

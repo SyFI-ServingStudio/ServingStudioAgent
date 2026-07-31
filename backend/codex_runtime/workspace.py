@@ -66,6 +66,36 @@ def _copy_tracked_file(rel_path: Path, dst_root: Path) -> None:
     else:
         shutil.copy2(src, dst)
 
+
+def _copy_existing_tracked_files(
+    files: list[Path],
+    destination_root: Path,
+    *,
+    workspace_id: str,
+) -> None:
+    """Copy the tracked working-tree snapshot, preserving tracked deletions.
+
+    ``git ls-files`` describes the index, so it still returns paths deleted in
+    a dirty working tree. Those paths must remain absent in the managed
+    workspace rather than turning a valid tracked deletion into a 500.
+    """
+    deleted_paths: list[str] = []
+    for rel_path in files:
+        source = MAIN_DIR / rel_path
+        if not source.exists() and not source.is_symlink():
+            deleted_paths.append(str(rel_path))
+            continue
+        _copy_tracked_file(rel_path, destination_root)
+    if deleted_paths:
+        log_event(
+            LOG,
+            "workspace.skip_deleted_tracked",
+            workspace_id=workspace_id,
+            count=len(deleted_paths),
+            paths=deleted_paths,
+        )
+
+
 def _ensure_workspace_git(workspace_main: Path) -> None:
     """Make the copied workspace a local git repo for branch/commit hygiene."""
     if (workspace_main / ".git").exists():
@@ -130,8 +160,7 @@ def prepare_workspace(workspace_id: str) -> Path:
             count=len(gitlinks),
             paths=[str(p) for p in gitlinks],
         )
-    for rel_path in files:
-        _copy_tracked_file(rel_path, tmp_main)
+    _copy_existing_tracked_files(files, tmp_main, workspace_id=workspace_id)
     _ensure_workspace_git(tmp_main)
 
     workspace_main.parent.mkdir(parents=True, exist_ok=True)

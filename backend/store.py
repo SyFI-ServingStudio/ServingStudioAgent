@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sqlite3
 import threading
 import time
@@ -204,6 +205,19 @@ class WorkspaceRegistry:
             self._write_json_atomic(self.descriptor_path(workspace_id), descriptor)
             self._rewrite_registry()
             return True
+
+    def discard_failed_creation(self, workspace_id: str) -> None:
+        """Remove state created by a workspace request that did not complete.
+
+        This is intentionally narrower than a workspace-delete API: callers
+        may use it only while unwinding the same create request, before the
+        workspace has been returned to a client.
+        """
+        if workspace_id == "w_main":
+            raise ValueError("w_main cannot be discarded")
+        with self._lock:
+            shutil.rmtree(self.workspace_dir(workspace_id), ignore_errors=True)
+            self._rewrite_registry()
 
     def repo_path(self, workspace_id: str) -> Path:
         descriptor_path = self.descriptor_path(workspace_id)
@@ -764,6 +778,59 @@ class Store:
                 "UPDATE turns SET status = ?, updated_at = ? WHERE id = ?",
                 (status, time.time(), turn_id),
             )
+
+    def list_running_turns(self, workspace_id: str) -> list[dict[str, Any]]:
+        """Return turns that cannot still be owned after a backend restart."""
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            rows = connection.execute(
+                """
+                SELECT id, conversation_id, created_at, updated_at
+                FROM turns
+                WHERE status = 'running'
+                ORDER BY created_at, id
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def interrupt_orphaned_turn(
+        self,
+        workspace_id: str,
+        turn_id: str,
+        conversation_id: str,
+        *,
+        content: str,
+        activity: list[dict[str, Any]],
+    ) -> bool:
+        """Atomically preserve one orphan turn as a reloadable assistant message.
+
+        The conditional status update is the ownership claim. It prevents a
+        repeated startup recovery from appending the same timeline twice.
+        """
+        now = time.time()
+        metadata = json.dumps({"activity": activity}, ensure_ascii=False)
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE turns
+                SET status = 'interrupted', updated_at = ?
+                WHERE id = ? AND conversation_id = ? AND status = 'running'
+                """,
+                (now, turn_id, conversation_id),
+            )
+            if cursor.rowcount != 1:
+                return False
+            connection.execute(
+                """
+                INSERT INTO messages(conversation_id, role, content, ts, metadata_json)
+                VALUES (?, 'assistant', ?, ?, ?)
+                """,
+                (conversation_id, content, now, metadata),
+            )
+            connection.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                (now, conversation_id),
+            )
+            return True
 
     def append_turn_event(
         self,

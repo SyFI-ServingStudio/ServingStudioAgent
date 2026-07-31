@@ -59,6 +59,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .analyzer_context import (
     AnalyzerTurnContext,
+    CitationDictionarySnapshot,
+    build_aggregate_citation_dictionary,
     freeze_citations,
     persisted_context,
     prompt_with_analyzer_context,
@@ -66,11 +68,9 @@ from .analyzer_context import (
 from .artifacts import list_artifacts, resolve_artifact
 from .codex_runtime.config import (
     DEFAULT_SANDBOX,
-    MAIN_DIR,
     SANDBOX_MODES,
     VIBESIM_API_TOKEN,
     prompt_fingerprint,
-    workspace_main_for,
 )
 from .codex_runtime.docker import cleanup_conversation
 from .codex_runtime.turn import run_turn
@@ -233,6 +233,112 @@ def _managed_turn_activity(workspace_id: str, turn_id: str) -> list[dict]:
     return activity
 
 
+def _recoverable_turn_activity(workspace_id: str, turn_id: str) -> list[dict]:
+    """Rebuild the durable role timeline from append-only turn events."""
+    activity: list[dict] = []
+    for event in store.list_turn_events(workspace_id, turn_id):
+        kind = event["kind"]
+        payload = event["payload"]
+        if kind == "intermediate_output":
+            activity.append(
+                {
+                    "kind": kind,
+                    "role": str(payload.get("role") or "orchestrator"),
+                    "text": str(payload.get("text") or ""),
+                }
+            )
+        elif kind == "decision":
+            activity.append(
+                {
+                    "kind": kind,
+                    "action": str(payload.get("action") or ""),
+                    "task": str(payload.get("task") or ""),
+                }
+            )
+        elif kind == "implementer":
+            activity.append({"kind": kind, "text": str(payload.get("text") or "")})
+        elif kind == "usage":
+            activity.append(
+                {
+                    "kind": kind,
+                    "role": str(payload.get("role") or ""),
+                    "duration_ms": int(payload.get("duration_ms") or 0),
+                    "tokens": payload.get("tokens") or {},
+                }
+            )
+        elif kind in _MANAGED_ACTIVITY_KINDS:
+            activity.append(
+                {
+                    "kind": "job",
+                    "workspaceId": str(payload.get("workspaceId") or workspace_id),
+                    "status": str(payload.get("status") or kind),
+                    "experimentId": str(payload.get("experimentId") or ""),
+                    "experimentPath": str(payload.get("experimentPath") or ""),
+                    "jobId": str(payload.get("jobId") or ""),
+                }
+            )
+    return activity
+
+
+_BACKEND_RESTART_MESSAGE = (
+    "This turn was interrupted when the conversation backend restarted. "
+    "Completed Agent activity was recovered above, but no final answer was produced. "
+    "Send `continue` to resume from the existing workspace and role sessions."
+)
+
+
+def _recover_orphaned_browser_turns() -> int:
+    """Finalize pre-restart running rows without inventing an Agent answer."""
+    recovered = 0
+    for descriptor in store.registry.list(include_archived=True):
+        workspace_id = descriptor["workspace_id"]
+        for turn in store.list_running_turns(workspace_id):
+            activity = _recoverable_turn_activity(workspace_id, turn["id"])
+            activity.append({"kind": "error", "text": _BACKEND_RESTART_MESSAGE})
+            if store.interrupt_orphaned_turn(
+                workspace_id,
+                turn["id"],
+                turn["conversation_id"],
+                content=_BACKEND_RESTART_MESSAGE,
+                activity=activity,
+            ):
+                recovered += 1
+                capabilities.revoke_turn(workspace_id, turn["id"])
+                remove_managed_context(workspace_id, turn["conversation_id"])
+                log_event(
+                    LOG,
+                    "turn.recovered_after_backend_restart",
+                    workspace_id=workspace_id,
+                    conversation_id=turn["conversation_id"],
+                    turn_id=turn["id"],
+                    activity_events=len(activity) - 1,
+                )
+    return recovered
+
+
+@app.on_event("startup")
+def recover_orphaned_browser_turns_on_startup() -> None:
+    _recover_orphaned_browser_turns()
+
+
+def _latest_turn_citation_dictionary(
+    workspace_id: str,
+    turn_id: str,
+    initial_context: AnalyzerTurnContext | None,
+) -> CitationDictionarySnapshot | None:
+    """Resolve the immutable dictionary most recently registered by this turn."""
+    dynamic_events = store.list_turn_events(
+        workspace_id,
+        turn_id,
+        kinds={"citation.dictionary"},
+    )
+    if dynamic_events:
+        return CitationDictionarySnapshot.model_validate(
+            dynamic_events[-1]["payload"]["dictionary"]
+        )
+    return initial_context.citation_dictionary if initial_context else None
+
+
 def _autonomous_for_turn(conv: dict, requested_autonomous: bool) -> bool:
     """Lock autonomous mode once the conversation has a user-visible history."""
     if conv.get("messages"):
@@ -273,6 +379,13 @@ class RegisterManagedRun(BaseModel):
 
 class UpdateManagedRun(BaseModel):
     status: str
+
+
+class RegisterManagedCitationDictionary(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    experiment_id: str = Field(alias="experimentId", min_length=1)
+    analysis: dict
 
 
 class SendMessage(BaseModel):
@@ -330,6 +443,7 @@ def list_all_conversations() -> dict:
 
 
 def _create_workspace(body: NewWorkspace) -> dict:
+    descriptor: dict | None = None
     try:
         descriptor = store.registry.create(
             body.display_name,
@@ -339,6 +453,12 @@ def _create_workspace(body: NewWorkspace) -> dict:
         return descriptor
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        # Workspace creation is one transaction from the client's point of
+        # view. Never leave a discoverable descriptor or repo.tmp after a 500.
+        if descriptor is not None:
+            store.registry.discard_failed_creation(descriptor["workspace_id"])
+        raise
 
 
 @app.post("/api/workspaces")
@@ -629,6 +749,50 @@ async def update_managed_run(
     return event
 
 
+@app.post("/api/internal/analyzer-citations/register")
+def register_managed_analyzer_citations(
+    body: RegisterManagedCitationDictionary,
+    capability: Capability = Depends(require_managed_capability),
+) -> dict:
+    """Register evidence discovered after an Agent-first turn has started."""
+    linked_experiment = next(
+        (
+            experiment
+            for experiment in store.list_experiments(
+                capability.workspace_id,
+                conversation_id=capability.conversation_id,
+            )
+            if experiment["id"] == body.experiment_id
+            and experiment["turn_id"] == capability.turn_id
+        ),
+        None,
+    )
+    if linked_experiment is None:
+        raise HTTPException(
+            status_code=403,
+            detail="experiment was not produced by this managed turn",
+        )
+    try:
+        dictionary = build_aggregate_citation_dictionary(
+            body.analysis,
+            workspace_id=capability.workspace_id,
+            experiment_id=body.experiment_id,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    snapshot = dictionary.model_dump(by_alias=True, exclude_none=True)
+    store.append_turn_event(
+        capability.workspace_id,
+        capability.turn_id,
+        "citation.dictionary",
+        {
+            "experimentId": body.experiment_id,
+            "dictionary": snapshot,
+        },
+    )
+    return snapshot
+
+
 @app.get(
     "/api/workspaces/{workspace_id}/conversations/{cid}/experiments"
 )
@@ -901,17 +1065,13 @@ async def agent_send_message(
         result["failure"] = failure
         if not result["final"]:
             result["final"] = failure["message"] if failure else "(no answer)"
-        frozen_citations = freeze_citations(
-            result["final"],
-            body.analyzer_context.citation_dictionary
-            if body.analyzer_context
-            else None,
+        citation_dictionary = _latest_turn_citation_dictionary(
+            workspace_id, turn_id, body.analyzer_context
         )
+        frozen_citations = freeze_citations(result["final"], citation_dictionary)
         result["citations"] = frozen_citations
         result["citation_dictionary_id"] = (
-            body.analyzer_context.citation_dictionary.identity
-            if body.analyzer_context
-            else None
+            citation_dictionary.identity if citation_dictionary else None
         )
         store.add_message(
             workspace_id,
@@ -922,7 +1082,7 @@ async def agent_send_message(
             activity=_managed_turn_activity(workspace_id, turn_id) or None,
             citations=frozen_citations or None,
             citation_dictionary_id=result["citation_dictionary_id"],
-            citation_dsl_version="v2" if body.analyzer_context else None,
+            citation_dsl_version="v2" if citation_dictionary else None,
             failure=failure,
         )
         store.finish_turn(
@@ -1276,14 +1436,12 @@ async def _run_browser_turn(
             )
         finally:
             if final_text is not None:
-                frozen_citations = freeze_citations(
-                    final_text,
-                    analyzer_context.citation_dictionary if analyzer_context else None,
+                citation_dictionary = _latest_turn_citation_dictionary(
+                    workspace_id, turn_id, analyzer_context
                 )
+                frozen_citations = freeze_citations(final_text, citation_dictionary)
                 citation_dictionary_id = (
-                    analyzer_context.citation_dictionary.identity
-                    if analyzer_context
-                    else None
+                    citation_dictionary.identity if citation_dictionary else None
                 )
                 activity.append(
                     {
@@ -1303,7 +1461,7 @@ async def _run_browser_turn(
                     activity=activity or None,
                     citations=frozen_citations or None,
                     citation_dictionary_id=citation_dictionary_id,
-                    citation_dsl_version="v2" if analyzer_context else None,
+                    citation_dsl_version="v2" if citation_dictionary else None,
                     failure=failure,
                 )
                 naming_scheduled = (

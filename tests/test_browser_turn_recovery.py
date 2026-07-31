@@ -11,6 +11,49 @@ from backend.store import Store, WorkspaceRegistry
 
 
 class TurnFailureTests(unittest.TestCase):
+    def test_backend_restart_recovers_persisted_activity_once(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            main_dir = Path(temporary_directory) / "main"
+            (main_dir / "logs").mkdir(parents=True)
+            registry = WorkspaceRegistry(
+                Path(temporary_directory) / "agent-workspaces",
+                main_dir=main_dir,
+            )
+            store = Store(registry)
+            store.create("w_main", "conversation", "workspace-write")
+            store.add_message("w_main", "conversation", "user", "continue")
+            store.start_turn("w_main", "conversation", "turn")
+            store.append_turn_event(
+                "w_main",
+                "turn",
+                "intermediate_output",
+                {"kind": "intermediate_output", "role": "orchestrator", "text": "Plan"},
+            )
+            store.append_turn_event(
+                "w_main",
+                "turn",
+                "decision",
+                {"kind": "decision", "action": "run_implementer", "task": "Implement"},
+            )
+
+            with (
+                patch.object(app_module, "store", store),
+                patch.object(app_module, "remove_managed_context"),
+            ):
+                self.assertEqual(app_module._recover_orphaned_browser_turns(), 1)
+                self.assertEqual(app_module._recover_orphaned_browser_turns(), 0)
+
+            conversation = store.get("w_main", "conversation")
+            self.assertIsNotNone(conversation)
+            assistant = conversation["messages"][-1]
+            self.assertEqual(assistant["role"], "assistant")
+            self.assertIn("backend restarted", assistant["content"])
+            self.assertEqual(
+                [event["kind"] for event in assistant["activity"]],
+                ["intermediate_output", "decision", "error"],
+            )
+            self.assertEqual(store.list_running_turns("w_main"), [])
+
     def test_storage_failure_is_user_safe_and_actionable(self) -> None:
         failure = app_module._turn_failure(
             RuntimeError(

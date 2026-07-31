@@ -40,6 +40,11 @@ class CodexCommandTests(unittest.TestCase):
             '"http://host.docker.internal:8787"',
             command,
         )
+        self.assertIn(
+            "mcp_servers.analyzer.env.VIBESIM_MANAGED_RUN_CONTEXT="
+            '"/home/kanzhu/.codex/managed-run.json"',
+            command,
+        )
 
     def test_resumed_codex_call_also_injects_analyzer_mcp(self) -> None:
         command = build_codex_exec_command(_request(session_id="session"))

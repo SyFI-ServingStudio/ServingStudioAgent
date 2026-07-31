@@ -13,6 +13,32 @@ from backend.store import Store, WorkspaceRegistry
 
 
 class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _sweep_payload(experiment_id: str) -> dict:
+        return {
+            "protocol_version": 1,
+            "schema_version": 1,
+            "workspace_id": "root_0",
+            "sweep_id": experiment_id,
+            "axes": ["request_rate"],
+            "metrics": [
+                {
+                    "key": "total_tps",
+                    "label": "Total throughput",
+                    "group": "throughput",
+                    "unit": "token/s",
+                    "objective": "maximize",
+                }
+            ],
+            "runs": [
+                {
+                    "run_id": "r_test",
+                    "coordinates": {"request_rate": 20},
+                    "labels": {"request_rate": "20 req/s"},
+                }
+            ],
+        }
+
     def test_agent_can_create_a_workspace_before_starting_conversations(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -111,6 +137,82 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rerun["experimentId"], registration["experimentId"])
             self.assertNotEqual(rerun["jobId"], registration["jobId"])
             self.assertEqual(metadata_path.read_bytes(), immutable_metadata)
+
+    async def test_registers_dynamic_citations_only_for_the_current_turn(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            main_dir = root / "main"
+            (main_dir / "logs").mkdir(parents=True)
+            registry = WorkspaceRegistry(root / "agent-workspaces", main_dir=main_dir)
+            registry.create("Managed", workspace_id="w_managed")
+            (registry.repo_path("w_managed") / "logs").mkdir(parents=True)
+            store = Store(registry)
+            store.create("w_managed", "conversation", "workspace-write")
+            store.start_turn("w_managed", "conversation", "turn")
+            capability = Capability(
+                token="token",
+                workspace_id="w_managed",
+                conversation_id="conversation",
+                turn_id="turn",
+                role="orchestrator",
+                expires_at=time.time() + 60,
+            )
+
+            with patch.object(app_module, "store", store):
+                registration = await app_module.register_managed_run(
+                    app_module.RegisterManagedRun(
+                        experimentRoot="logs/20260731_citations",
+                        runCount=1,
+                        axes=["request_rate"],
+                    ),
+                    capability,
+                )
+                snapshot = app_module.register_managed_analyzer_citations(
+                    app_module.RegisterManagedCitationDictionary(
+                        experimentId=registration["experimentId"],
+                        analysis=self._sweep_payload(registration["experimentId"]),
+                    ),
+                    capability,
+                )
+
+            self.assertEqual(snapshot["protocol"], "vibesim.citation-dictionary/v2")
+            self.assertIn("`rate20`", snapshot["document"])
+            self.assertTrue(
+                any(
+                    entry["token"] == "exp.rate20.throughput"
+                    for entry in snapshot["entries"]
+                )
+            )
+            events = store.list_turn_events(
+                "w_managed", "turn", kinds={"citation.dictionary"}
+            )
+            self.assertEqual(len(events), 1)
+            self.assertEqual(
+                events[0]["payload"]["dictionary"]["entries"][0]["target"][
+                    "workspaceId"
+                ],
+                "w_managed",
+            )
+
+            wrong_capability = Capability(
+                token="wrong",
+                workspace_id="w_managed",
+                conversation_id="conversation",
+                turn_id="other-turn",
+                role="orchestrator",
+                expires_at=time.time() + 60,
+            )
+            with (
+                patch.object(app_module, "store", store),
+                self.assertRaisesRegex(Exception, "not produced by this managed turn"),
+            ):
+                app_module.register_managed_analyzer_citations(
+                    app_module.RegisterManagedCitationDictionary(
+                        experimentId=registration["experimentId"],
+                        analysis=self._sweep_payload(registration["experimentId"]),
+                    ),
+                    wrong_capability,
+                )
 
 
 if __name__ == "__main__":

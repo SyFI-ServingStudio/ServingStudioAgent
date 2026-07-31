@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from backend.analyzer_context import (
     AnalyzerTurnContext,
     CitationDictionarySnapshot,
+    build_aggregate_citation_dictionary,
     freeze_citations,
     prompt_with_analyzer_context,
 )
@@ -38,6 +39,57 @@ def dictionary() -> CitationDictionarySnapshot:
 
 
 class AnalyzerContextTests(unittest.TestCase):
+    def test_builds_managed_aggregate_dictionary_with_authoritative_identity(self) -> None:
+        snapshot = build_aggregate_citation_dictionary(
+            {
+                "protocol_version": 1,
+                "schema_version": 1,
+                "workspace_id": "root_0",
+                "sweep_id": "e_test",
+                "axes": ["tensor_parallel", "request_rate"],
+                "metrics": [
+                    {
+                        "key": "total_tps",
+                        "label": "Total throughput",
+                        "group": "throughput",
+                        "unit": "token/s",
+                        "objective": "maximize",
+                    },
+                    {
+                        "key": "mean_ttft_ms",
+                        "label": "Mean TTFT",
+                        "group": "ttft",
+                        "unit": "ms",
+                        "objective": "minimize",
+                    },
+                ],
+                "runs": [
+                    {
+                        "run_id": "r_test",
+                        "coordinates": {
+                            "tensor_parallel": 2,
+                            "request_rate": 20,
+                        },
+                        "labels": {
+                            "tensor_parallel": "TP 2",
+                            "request_rate": "20 req/s",
+                        },
+                    }
+                ],
+            },
+            workspace_id="w_managed",
+            experiment_id="e_test",
+        )
+
+        entries = {entry.token: entry for entry in snapshot.entries}
+        self.assertIn("exp.throughput", entries)
+        self.assertIn("exp.tp2.rate20.throughput", entries)
+        self.assertIn("exp.tp2.rate20.ttft.mean", entries)
+        target = entries["exp.tp2.rate20.throughput"].target
+        self.assertEqual(target.workspace_id, "w_managed")
+        self.assertEqual(target.experiment_id, "e_test")
+        self.assertEqual(target.run_id, "r_test")
+
     def test_freeze_citations_only_accepts_exact_inline_allowlist_tokens(self) -> None:
         markdown = (
             "Prose exp.tp2.rate20.throughput is not linked. "

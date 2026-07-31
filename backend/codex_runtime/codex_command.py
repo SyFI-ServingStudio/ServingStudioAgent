@@ -42,6 +42,9 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
         f"mcp_servers.analyzer.env.ANALYZER_MCP_SOURCE={json.dumps(ANALYZER_MCP_SOURCE)}",
         "-c",
         f"mcp_servers.analyzer.env.ANALYZER_MCP_BASE_URL={json.dumps(ANALYZER_MCP_BASE_URL)}",
+        "-c",
+        "mcp_servers.analyzer.env.VIBESIM_MANAGED_RUN_CONTEXT="
+        f'{json.dumps(MANAGED_CONTEXT_CONTAINER_PATH)}',
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",

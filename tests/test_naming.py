@@ -87,6 +87,27 @@ class OpenRouterNamingTest(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
+    def test_accepts_established_openroute_key_alias(self) -> None:
+        with patch.dict(os.environ, {"OPENROUTE_KEY": "secret"}, clear=True):
+            config = naming._naming_config()
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config[0], "secret")
+
+    def test_standard_openrouter_key_takes_precedence(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "OPENROUTER_API_KEY": "standard",
+                "OPENROUTE_KEY": "alias",
+            },
+            clear=True,
+        ):
+            config = naming._naming_config()
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config[0], "standard")
+
 
 if __name__ == "__main__":
     unittest.main()

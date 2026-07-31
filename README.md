@@ -488,7 +488,9 @@ Docker GPU forwarding.
   `../agent-workspaces`.
 - `OPENROUTER_API_KEY` — enables non-blocking automatic naming for new UI
   workspaces and conversations. Unset disables the request and keeps fallback
-  names.
+  names pending for a later successful turn. `OPENROUTE_KEY` is accepted as a
+  compatibility alias for the existing host secret; `OPENROUTER_API_KEY` takes
+  precedence when both are set.
 - `VIBESIM_NAMING_MODEL` — OpenRouter model used for naming, default
   `deepseek/deepseek-v4-flash`.
 - `VIBESIM_NAMING_BASE_URL` — OpenRouter-compatible API root, default
