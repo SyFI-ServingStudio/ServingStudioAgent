@@ -29,6 +29,12 @@ shared-state operations.
 
 - Use `uv run ...` from `/workspace` for Python commands.
 - Keep work inside `/workspace`.
+- Do not use the system `/tmp` for task-generated scratch files or artifacts.
+  Use a task-scoped directory under `/workspace/tmp/` instead (for example,
+  `/workspace/tmp/dsa-topk-profile`), create it before use, and set
+  `TMPDIR=/workspace/tmp/<task-name>` for commands that create temporary files
+  implicitly. Only clean up the task-scoped directory you created; never remove
+  unrelated contents of `/workspace/tmp`.
 - Ground every performance or capacity answer in inspectable evidence. If the
   request calls for a VibeSim prediction, actually run the matching simulation,
   timing-predict, analyzer, or profiling workflow and read its artifacts. Do not

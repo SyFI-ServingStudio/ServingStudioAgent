@@ -607,9 +607,7 @@ class Store:
         assert created is not None
         return created
 
-    def conversation_naming_state(
-        self, workspace_id: str, conversation_id: str
-    ) -> str:
+    def conversation_naming_state(self, workspace_id: str, conversation_id: str) -> str:
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             row = connection.execute(
                 "SELECT naming_state FROM conversations WHERE id = ?",
@@ -693,7 +691,9 @@ class Store:
                     (conversation_id,),
                 ).fetchone()
                 if row is not None and row["title"] == "New chat":
-                    first_line = content.strip().splitlines()[0] if content.strip() else ""
+                    first_line = (
+                        content.strip().splitlines()[0] if content.strip() else ""
+                    )
                     connection.execute(
                         "UPDATE conversations SET title = ? WHERE id = ?",
                         ((first_line[:48] or "New chat"), conversation_id),
@@ -717,15 +717,14 @@ class Store:
             if row is None:
                 return {}
             if row["prompt_fingerprint"] != prompt_fingerprint:
+                # Role contracts are re-injected on every Codex call. Keep the
+                # durable sessions—and therefore their conversation history—
+                # when those contracts change; the fingerprint is provenance,
+                # not a session compatibility boundary.
                 connection.execute(
                     "UPDATE conversations SET prompt_fingerprint = ? WHERE id = ?",
                     (prompt_fingerprint, conversation_id),
                 )
-                connection.execute(
-                    "DELETE FROM codex_sessions WHERE conversation_id = ?",
-                    (conversation_id,),
-                )
-                return {}
             rows = connection.execute(
                 "SELECT role, session_id FROM codex_sessions WHERE conversation_id = ?",
                 (conversation_id,),
@@ -759,9 +758,7 @@ class Store:
                 (conversation_id,),
             )
 
-    def start_turn(
-        self, workspace_id: str, conversation_id: str, turn_id: str
-    ) -> None:
+    def start_turn(self, workspace_id: str, conversation_id: str, turn_id: str) -> None:
         now = time.time()
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             connection.execute(

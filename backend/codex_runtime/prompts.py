@@ -8,25 +8,43 @@ from typing import Any
 
 from .config import PROMPTS_DIR
 
+
 def _role_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
+
+
+def _orchestrator_contract(conversation_id: str) -> str:
+    return (
+        f"{_role_prompt('orchestrator.txt')}\n\n"
+        f"Current conversation ID: `{conversation_id}`.\n"
+        f"Conversation plan: `/workspace/{conversation_id}_plan.md`.\n"
+        f"Conversation progress: `/workspace/{conversation_id}_progress.md`."
+    )
 
 
 def _orchestrator_prompt(
     user_text: str,
     *,
     is_resume: bool,
+    conversation_id: str,
 ) -> str:
-    if is_resume:
-        return user_text
+    # The resumed session supplies history; this prefix supplies the latest
+    # repository role contract without invalidating that history.
+    del is_resume
     return (
-        f"{_role_prompt('orchestrator.txt')}"
+        f"{_orchestrator_contract(conversation_id)}"
         f"\n\nNewest user message:\n{user_text}\n"
     )
 
 
-def _orchestrator_handoff_prompt(task: str, implementer_text: str) -> str:
+def _orchestrator_handoff_prompt(
+    task: str,
+    implementer_text: str,
+    *,
+    conversation_id: str,
+) -> str:
     return (
+        f"{_orchestrator_contract(conversation_id)}\n\n"
         "The implementer returned a summary for your delegated task.\n\n"
         "You do not share the implementer Codex session. Treat the text below as "
         "the explicit handoff record, review it against your own orchestration "
@@ -47,31 +65,31 @@ def _implementer_prompt(
     *,
     is_resume: bool,
 ) -> str:
-    if is_resume:
-        return f"Task:\n{task}\n"
-    return (
-        f"{_role_prompt('implementer.txt')}"
-        f"\n\nTask:\n{task}\n"
-    )
+    # Keep the role contract explicit on every Codex call. A resumed session
+    # has prior context, but the new delegated task must still be framed as
+    # implementor work rather than relying on that context implicitly.
+    del is_resume
+    return f"{_role_prompt('implementer.txt')}\n\nTask:\n{task}\n"
 
 
 def _json_candidates(text: str) -> list[str]:
     stripped = text.strip()
     candidates = [stripped] if stripped else []
-    candidates.extend(m.strip() for m in re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL))
+    candidates.extend(
+        m.strip()
+        for m in re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    )
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end > start:
         candidates.append(text[start : end + 1])
     return candidates
 
+
 def _normalize_orchestrator_text_field(value: str) -> str:
     """Make text fields readable when the model double-escapes JSON newlines."""
-    return (
-        value.replace("\\r\\n", "\n")
-        .replace("\\n", "\n")
-        .replace("\\t", "\t")
-    )
+    return value.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
 
 def parse_orchestrator(text: str) -> dict[str, Any] | None:
     for candidate in _json_candidates(text):
@@ -104,6 +122,7 @@ def parse_orchestrator(text: str) -> dict[str, Any] | None:
             }
     return None
 
+
 def _format_implementer_summaries(summaries: list[str]) -> str:
     if not summaries:
         return ""
@@ -113,6 +132,7 @@ def _format_implementer_summaries(summaries: list[str]) -> str:
     for idx, summary in enumerate(summaries, start=1):
         parts.append(f"**Round {idx}**\n\n{summary.strip()}")
     return "\n\n".join(parts)
+
 
 def compose_final_message(
     message: str,

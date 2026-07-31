@@ -95,7 +95,7 @@ def agents_prompt_name(autonomous: bool) -> str:
 
 
 def prompt_fingerprint(*, autonomous: bool = False) -> str:
-    """Hash role prompts/schema so stale Codex sessions are not resumed."""
+    """Hash the effective role contract for diagnostics and provenance."""
     digest = hashlib.sha256()
     for name in (
         agents_prompt_name(autonomous),
@@ -130,7 +130,5 @@ def codex_home_for(workspace_id: str, conversation_id: str) -> Path:
 
 
 def container_name(workspace_id: str, conversation_id: str) -> str:
-    safe = re.sub(
-        r"[^a-zA-Z0-9_.-]", "-", f"{workspace_id}-{conversation_id}"
-    )[:48]
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", f"{workspace_id}-{conversation_id}")[:48]
     return f"vibesim-ui-{safe}"

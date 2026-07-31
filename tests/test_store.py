@@ -81,6 +81,47 @@ class WorkspaceStoreTest(unittest.TestCase):
             self.assertEqual(store.get("w_main", "same-id")["title"], "Main chat")
             self.assertEqual(store.get("w_second", "same-id")["title"], "Second chat")
 
+    def test_prompt_change_preserves_role_sessions(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            store = Store(registry)
+            store.create(
+                "w_main",
+                "conversation",
+                "workspace-write",
+                prompt_fingerprint="old-contract",
+            )
+            store.set_codex_session(
+                "w_main",
+                "conversation",
+                "orchestrator",
+                "orchestrator-session",
+            )
+            store.set_codex_session(
+                "w_main",
+                "conversation",
+                "implementer",
+                "implementer-session",
+            )
+
+            sessions = store.sessions_for_prompt(
+                "w_main",
+                "conversation",
+                "new-contract",
+            )
+
+            self.assertEqual(
+                sessions,
+                {
+                    "orchestrator": "orchestrator-session",
+                    "implementer": "implementer-session",
+                },
+            )
+            self.assertEqual(
+                store.get("w_main", "conversation")["prompt_fingerprint"],
+                "new-contract",
+            )
+
     def test_generated_names_use_pending_compare_and_set(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             registry = self.make_registry(temporary_directory)
@@ -230,7 +271,10 @@ class WorkspaceStoreTest(unittest.TestCase):
                 {"w_main", "w_second", "w_third"},
             )
             self.assertTrue(
-                all(not Path(row["logs_root"]).is_absolute() for row in payload["workspaces"])
+                all(
+                    not Path(row["logs_root"]).is_absolute()
+                    for row in payload["workspaces"]
+                )
             )
 
     def test_turn_events_preserve_managed_callback_order(self) -> None:
@@ -283,9 +327,9 @@ class LegacyMigrationTest(unittest.TestCase):
             (legacy_conversation_dir / "main" / "logs").mkdir(parents=True)
             (legacy_conversation_dir / "main" / "tracked.txt").write_text("preserve me")
             (legacy_conversation_dir / "codex-home" / "sessions").mkdir(parents=True)
-            (legacy_conversation_dir / "codex-home" / "sessions" / "one.jsonl").write_text(
-                "{}\n"
-            )
+            (
+                legacy_conversation_dir / "codex-home" / "sessions" / "one.jsonl"
+            ).write_text("{}\n")
             conversations_path = root / "conversations.json"
             conversations_path.write_text(
                 json.dumps(
@@ -317,7 +361,10 @@ class LegacyMigrationTest(unittest.TestCase):
             self.assertEqual(result["imported_conversations"], 1)
             imported = Store(registry).get("w_legacy_abc123", "abc123")
             assert imported is not None
-            self.assertEqual([message["content"] for message in imported["messages"]], ["hello", "hi"])
+            self.assertEqual(
+                [message["content"] for message in imported["messages"]],
+                ["hello", "hi"],
+            )
             self.assertEqual(imported["codex_sessions"]["orchestrator"], "session-1")
             self.assertEqual(imported["created_at"], 1)
             self.assertEqual(imported["updated_at"], 2.5)

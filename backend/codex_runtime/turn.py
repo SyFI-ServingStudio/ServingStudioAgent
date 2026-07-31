@@ -21,13 +21,13 @@ from .prompts import (
     _implementer_prompt,
     _orchestrator_handoff_prompt,
     _orchestrator_prompt,
-    _role_prompt,
     compose_final_message,
     parse_orchestrator,
 )
 from .workspace import prepare_workspace
 from ..logging_config import compact_text, log_event
 from ..managed_context import write_managed_context
+
 
 async def run_turn(
     workspace_id: str,
@@ -73,7 +73,10 @@ async def run_turn(
             _workspace_main = await workspace_task
             break
         elapsed = loop.time() - workspace_started
-        yield {"kind": "progress", "text": f"workspace check still running ({elapsed:.0f}s)..."}
+        yield {
+            "kind": "progress",
+            "text": f"workspace check still running ({elapsed:.0f}s)...",
+        }
 
     runtime_container_name = container_name_for(workspace_id, conversation_id)
     if await asyncio.to_thread(container_running, runtime_container_name):
@@ -119,6 +122,7 @@ async def run_turn(
     next_orchestrator_prompt = _orchestrator_prompt(
         prompt,
         is_resume=bool(orchestrator_session),
+        conversation_id=conversation_id,
     )
 
     while True:
@@ -234,11 +238,8 @@ async def run_turn(
         if implementer_text is None:
             implementer_text = "(implementer produced no summary)"
         implementer_summaries.append(implementer_text)
-        handoff_prompt = _orchestrator_handoff_prompt(task, implementer_text)
-        if orchestrator_session:
-            next_orchestrator_prompt = handoff_prompt
-        else:
-            next_orchestrator_prompt = (
-                f"{_role_prompt('orchestrator.txt')}"
-                f"\n\n{handoff_prompt}"
-            )
+        next_orchestrator_prompt = _orchestrator_handoff_prompt(
+            task,
+            implementer_text,
+            conversation_id=conversation_id,
+        )

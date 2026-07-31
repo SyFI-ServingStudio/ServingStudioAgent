@@ -238,7 +238,13 @@ workspace contents. The tracked blank `main/AGENTS.md` is a fail-safe bind
 target—Codex skips it outside the managed container, and Docker refuses to start
 if a workspace lacks that target. The workspace keeps `.codex/skills ->
 ../skills` so Codex can discover the copied repo-local skills. Later turns
-resume that role and send only the new user message or delegated task.
+resume that role and send the new user message or delegated task. Every role
+call, including resumed Orchestrator calls and Implementer→Orchestrator
+handoffs, prefixes the payload with the current role contract. Prompt
+fingerprints remain provenance only: editing a prompt never discards the
+durable Codex session or its history. The Orchestrator also receives the stable
+conversation id and maintains `<conversation-id>_plan.md` plus
+`<conversation-id>_progress.md` as concise recovery state in the workspace.
 Implementer summaries are explicitly sent back to the orchestrator before the
 turn finishes.
 
