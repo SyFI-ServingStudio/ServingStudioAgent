@@ -1,8 +1,13 @@
-# user-facing-ui
+# VibeSim Agent Backend
 
-A shared workspace/conversation backend for VibeSim. The browser talks to a
-FastAPI backend, which drives **`codex exec` inside Docker** and records the
-experiments produced by managed Launcher turns.
+A shared workspace/conversation backend for VibeSim. The integrated VibeSimUI
+talks to this FastAPI service, which drives **`codex exec` inside Docker** and
+records durable workspace, conversation, turn, and managed-job ownership state.
+Rust Analyzer remains the read-only authority for result catalogs and payloads.
+
+For a complete deployment, clone the
+[`VibeSimWorkspace`](https://github.com/serendipity-zk/VibeSimWorkspace)
+meta-repository and follow its `reproduce.md`.
 
 A workspace owns one repo/logs root and may contain many conversations. A
 managed workspace gets one isolated copy of git-tracked files from `../main`;
@@ -48,8 +53,9 @@ POST /api/workspaces/{workspace_id}/conversations/{conversation_id}/cancel
 GET  /api/workspaces/{workspace_id}/conversations/{conversation_id}/experiments
 ```
 
-The backend root still serves the pre-integration standalone chat shell. Its
-read-only `GET /api/conversations` index flattens active workspace summaries and
+The backend root still serves a compatibility/debug chat shell; VibeSimUI is the
+primary browser entry. Its read-only `GET /api/conversations` index flattens
+active workspace summaries and
 includes `workspace_id`; the shell immediately converts each row to the
 workspace-scoped routes above for load, pagination, send, reconnect, cancel,
 delete, and local images. This compatibility index preserves access to migrated
@@ -105,11 +111,14 @@ the FastAPI backend. If `frontend/node_modules` is missing, it runs `npm ci`
 once before the build. Set `FRONTEND_SKIP_BUILD=1` when you are already running
 the Vite dev server.
 
-The browser-facing `GET /api/jobs` endpoint is a read-only Page 0 catalog of
-non-simulation managed results across active workspaces. Each row carries its
-stable `resource_id`, type, lifecycle status, artifact path, descriptor, summary,
-conversation title, and timestamps. Simulation sweeps remain owned by the Rust
-Analyzer catalog and are merged with these typed rows in viz-ui.
+The browser-facing `GET /api/jobs` endpoint is a read-only ownership/lifecycle
+overlay for non-simulation managed results across active workspaces. Each row
+carries workspace/conversation/job identity, lifecycle status, a stable backend
+`resource_id`, and the corresponding `analyzer_resource_id`. It intentionally
+does **not** expose artifact paths, descriptors, summaries, curves, or plots.
+Rust Analyzer owns those result catalogs and payloads; VibeSimUI joins the two
+sources by `analyzer_resource_id`. Simulation sweeps are discovered directly
+from Analyzer and linked to conversations through experiment relationships.
 
 The backend uses a prebuilt local Docker image for the Codex runner. If the image
 is missing, its VibeSim runner label is stale, or its baked `main/uv.lock` hash
@@ -136,7 +145,7 @@ To rebuild the runner image explicitly:
 
 ```bash
 cd user-facing-ui
-CODEX_FORCE_IMAGE_BUILD=1 ./run.sh
+CODEX_FORCE_IMAGE_BUILD=1 ./scripts/build-codex-runner-image.sh
 ```
 
 ### Runner image acceptance test
@@ -169,7 +178,7 @@ The image builder runs the `build` gate after `docker build`; set
 `CODEX_SKIP_RUNNER_IMAGE_TEST=1` only for an explicitly incomplete development
 build that must not be treated as ready for agent conversations.
 
-Frontend-only development can run Vite against the same backend:
+The compatibility chat shell can run its Vite frontend against the same backend:
 
 ```bash
 cd user-facing-ui
@@ -225,11 +234,12 @@ browser
 
 Typed jobs currently include `timing_predict`, `kernel_profile`, and
 `kernel_measure`. They are linked directly to the conversation without being
-misclassified as deployment simulations. A ready typed-job card opens the
-job-scoped result surface: kernel profiles read that invocation's `curve.json`,
-while timing-predict and measurement jobs expose their generated plots and
-breakdown artifacts. The mutable `profile.db` remains the L1 cache authority;
-it is not used to reconstruct a previous job's displayed result.
+misclassified as deployment simulations. A ready typed-job card resolves its
+stable Analyzer ID and opens the corresponding Analyzer-owned prediction,
+profile, or measurement surface. The conversation backend never reads
+`curve.json`, summary JSON, or plot files to construct UI results. The mutable
+`profile.db` remains the L1 cache authority; immutable per-invocation Analyzer
+artifacts are the displayed-result authority.
 
 The orchestrator is normally an active human-in-the-loop coordinator. It reads
 matching skills, classifies the request, decides whether clarification is
@@ -298,17 +308,17 @@ agent reads each turn's `final` and, like a human, answers clarifying questions
 or steers with another turn. `/api/eval` is **evaluation-only** (single-turn,
 stateless; for testcases).
 
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| GET | `/api/agent/skill` | public | Agent skill doc (`SKILL.md`, `text/markdown`). |
-| GET/POST | `/api/agent/workspaces` | token | List or create durable workspaces. |
-| POST | `/api/agent/workspaces/{wid}/conversations` | token | Create an interactive conversation. |
-| POST | `/api/agent/workspaces/{wid}/conversations/{cid}/messages` | token | Run one turn; synchronous JSON. |
-| GET | `/api/agent/workspaces/{wid}/conversations/{cid}` | token | Full conversation history. |
-| DELETE | `/api/agent/workspaces/{wid}/conversations/{cid}` | token | Human/operator cleanup only; calling agents must not invoke it. |
-| GET | `/api/agent/workspaces/{wid}/artifacts` | token | List workspace files. |
-| GET | `/api/agent/workspaces/{wid}/artifacts/download` | token | Download one workspace file. |
-| POST | `/api/eval` | token | Single-turn evaluation only (not interactive). |
+| Method   | Path                                                       | Auth   | Purpose                                                         |
+| -------- | ---------------------------------------------------------- | ------ | --------------------------------------------------------------- |
+| GET      | `/api/agent/skill`                                         | public | Agent skill doc (`SKILL.md`, `text/markdown`).                  |
+| GET/POST | `/api/agent/workspaces`                                    | token  | List or create durable workspaces.                              |
+| POST     | `/api/agent/workspaces/{wid}/conversations`                | token  | Create an interactive conversation.                             |
+| POST     | `/api/agent/workspaces/{wid}/conversations/{cid}/messages` | token  | Run one turn; synchronous JSON.                                 |
+| GET      | `/api/agent/workspaces/{wid}/conversations/{cid}`          | token  | Full conversation history.                                      |
+| DELETE   | `/api/agent/workspaces/{wid}/conversations/{cid}`          | token  | Human/operator cleanup only; calling agents must not invoke it. |
+| GET      | `/api/agent/workspaces/{wid}/artifacts`                    | token  | List workspace files.                                           |
+| GET      | `/api/agent/workspaces/{wid}/artifacts/download`           | token  | Download one workspace file.                                    |
+| POST     | `/api/eval`                                                | token  | Single-turn evaluation only (not interactive).                  |
 
 **Auth** is gated by `VIBESIM_API_TOKEN`. When it is set, agent endpoints require
 `Authorization: Bearer <token>` (missing/wrong → `401`); `/api/agent/skill` stays
@@ -434,32 +444,32 @@ Docker GPU forwarding.
 
 ## Layout
 
-| Path | Purpose |
-|------|---------|
-| `backend/app.py` | FastAPI routes + SSE streaming + Vite static serving |
-| `backend/codex_runtime/config.py` | environment, path, mode, prompt-fingerprint settings |
-| `backend/codex_runtime/workspace.py` | per-workspace `main/` copy and local git bootstrap |
-| `backend/codex_runtime/docker.py` | Docker container lifecycle and isolated Codex home setup |
-| `backend/codex_runtime/exec_types.py` | shared Codex execution request/event types |
-| `backend/codex_runtime/codex_command.py` | Docker + `codex exec` command construction |
-| `backend/codex_runtime/codex_cli.py` | Codex subprocess lifecycle, timeout, and cancellation |
-| `backend/codex_runtime/output_collector.py` | stdout/stderr/rollout collection into UI events |
-| `backend/codex_runtime/codex_events.py` | Codex JSON/rollout event translation |
-| `backend/codex_runtime/prompts.py` | role prompts and orchestrator JSON parsing |
-| `backend/codex_runtime/turn.py` | high-level orchestrator/implementer turn loop |
-| `backend/analyzer_evidence_mcp/server.py` | bounded read-only MCP bridge to the Analyzer `/api/v1/*` resources |
-| `backend/naming.py` | non-blocking OpenRouter structured naming plus pending-state scheduling |
-| `backend/eval.py` | JSON `/api/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`) |
-| `backend/artifacts.py` | list/resolve files in a run workspace for the agent artifact endpoints |
-| `SKILL.md` | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/skill` |
-| `backend/prompts/AGENTS.md` | detailed instructions mounted read-only as `/workspace/AGENTS.md` |
-| `backend/prompts/AGENTS.autonomous.md` | autonomous-mode instructions mounted read-only at the same path |
-| `backend/prompts/*.txt` | short role startup prompts for orchestrator/implementer |
-| `backend/store.py` | workspace registry plus per-workspace SQLite conversation/event store |
-| `docker/codex-runner.Dockerfile` | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked VibeSim deps |
-| `scripts/build-codex-runner-image.sh` | one-shot image builder used by `run.sh` when needed |
-| `frontend/` | React + TypeScript + Vite chat UI |
-| `../agent-workspaces/` | generated workspace envelopes, shared repos, Codex homes, and SQLite state |
+| Path                                        | Purpose                                                                                                  |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `backend/app.py`                            | FastAPI routes + SSE streaming + Vite static serving                                                     |
+| `backend/codex_runtime/config.py`           | environment, path, mode, prompt-fingerprint settings                                                     |
+| `backend/codex_runtime/workspace.py`        | per-workspace `main/` copy and local git bootstrap                                                       |
+| `backend/codex_runtime/docker.py`           | Docker container lifecycle and isolated Codex home setup                                                 |
+| `backend/codex_runtime/exec_types.py`       | shared Codex execution request/event types                                                               |
+| `backend/codex_runtime/codex_command.py`    | Docker + `codex exec` command construction                                                               |
+| `backend/codex_runtime/codex_cli.py`        | Codex subprocess lifecycle, timeout, and cancellation                                                    |
+| `backend/codex_runtime/output_collector.py` | stdout/stderr/rollout collection into UI events                                                          |
+| `backend/codex_runtime/codex_events.py`     | Codex JSON/rollout event translation                                                                     |
+| `backend/codex_runtime/prompts.py`          | role prompts and orchestrator JSON parsing                                                               |
+| `backend/codex_runtime/turn.py`             | high-level orchestrator/implementer turn loop                                                            |
+| `backend/analyzer_evidence_mcp/server.py`   | bounded read-only MCP bridge to the Analyzer `/api/v1/*` resources                                       |
+| `backend/naming.py`                         | non-blocking OpenRouter structured naming plus pending-state scheduling                                  |
+| `backend/eval.py`                           | JSON `/api/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`)                         |
+| `backend/artifacts.py`                      | list/resolve files in a run workspace for the agent artifact endpoints                                   |
+| `SKILL.md`                                  | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/skill` |
+| `backend/prompts/AGENTS.md`                 | detailed instructions mounted read-only as `/workspace/AGENTS.md`                                        |
+| `backend/prompts/AGENTS.autonomous.md`      | autonomous-mode instructions mounted read-only at the same path                                          |
+| `backend/prompts/*.txt`                     | short role startup prompts for orchestrator/implementer                                                  |
+| `backend/store.py`                          | workspace registry plus per-workspace SQLite conversation/event store                                    |
+| `docker/codex-runner.Dockerfile`            | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked VibeSim deps |
+| `scripts/build-codex-runner-image.sh`       | one-shot image builder used by `run.sh` when needed                                                      |
+| `frontend/`                                 | React + TypeScript + Vite chat UI                                                                        |
+| `../agent-workspaces/`                      | generated workspace envelopes, shared repos, Codex homes, and SQLite state                               |
 
 ## Environment
 

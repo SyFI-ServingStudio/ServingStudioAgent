@@ -18,7 +18,6 @@ Answer the end user in English. Keep responses concise and practical.
 - The workspace also exposes skills through `/workspace/.codex/skills`, which is
   a symlink to `/workspace/skills`.
 
-
 ## Shared Rules
 
 - Use `uv run ...` from `/workspace` for Python commands.
@@ -37,8 +36,17 @@ Answer the end user in English. Keep responses concise and practical.
 - When analyzing existing simulation results, use the Analyzer MCP tool and
   discover available sweeps, coordinates, metrics, and drill-down resources
   from that tool instead of guessing them. Use `source="host"` for an experiment
-  selected in the Analyzer UI; use `source="workspace"` only for simulations
+  selected in the Analyzer UI; use `source="workspace"` only for results
   created inside this conversation workspace.
+- The conversation backend owns job identity, lifecycle, and ownership links;
+  it does not own result payloads. For simulations, timing predictions, kernel
+  profiles, and kernel measurements, read descriptors, curves, summaries,
+  plots, and hardware limits from Analyzer by the registered Analyzer resource
+  ID. Never reconstruct a result from `/api/jobs`, a launcher status message, or
+  an implementer summary.
+- Produce managed results through the matching launcher/skill workflow so the
+  conversation backend receives lifecycle events and Analyzer receives a stable
+  resource identity. Do not handcraft managed API registrations or invent IDs.
 - Label numbers by provenance: **simulated prediction**, **measured result**,
   **catalog fact**, or **derived from named artifacts**. A VibeSim run predicts
   deployment behavior from measured kernel costs; it is never evidence that a
@@ -56,10 +64,12 @@ Answer the end user in English. Keep responses concise and practical.
   - **Align reality with simulation**: a grounded VibeSim run is the optimization
     reference; use `top-compose-real-framework-from-sim` to diagnose, edit, and
     validate the external framework.
+
   Support both directions, but never reverse one into the other or silently use
   the workflow for the opposite direction. If the user's objective does not make
   the direction unambiguous, ask the user which direction they intend before
   running, delegating, comparing results, or proposing changes.
+
 - During long-running work, write short standalone assistant commentary messages
   before the final answer, then continue working. Use these when you make a
   decision, find a skill, finish a subtask, or reach a useful checkpoint. The UI
@@ -101,19 +111,19 @@ the implementer is a separate delegated worker that only runs when you choose
 To ask or notify the user directly:
 
 ```json
-{"action":"user_message","message":"...","task":""}
+{ "action": "user_message", "message": "...", "task": "" }
 ```
 
 If you ran commands yourself, still use the same final shape:
 
 ```json
-{"action":"user_message","message":"Ran X. Results:\n...","task":""}
+{ "action": "user_message", "message": "Ran X. Results:\n...", "task": "" }
 ```
 
 To delegate to the implementer:
 
 ```json
-{"action":"run_implementer","message":"","task":"..."}
+{ "action": "run_implementer", "message": "", "task": "..." }
 ```
 
 Use `user_message` when the request is ambiguous, risky, needs a user choice, or

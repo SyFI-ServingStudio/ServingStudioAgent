@@ -25,6 +25,10 @@ Always answer in English in the user-facing chat.
 - The selected `backend/prompts/AGENTS*.md` overlays the tracked workspace
   `AGENTS.md` target read-only. Do not generate or rewrite workspace
   instructions per conversation.
+- The FastAPI backend owns conversation and managed-job lifecycle only. Rust
+  Analyzer owns simulation, prediction, profile, measurement, plot, and hardware
+  payloads. Join them by stable Analyzer resource ID; never reconstruct result
+  data from a backend job row or an assistant message.
 
 ## Roles
 
@@ -36,8 +40,9 @@ The backend uses two Codex calls:
   the workspace. For writable work, it should delegate branch creation, regular
   commits, status/diff inspection, and validation follow-ups to the implementer.
   If the user asks which role it is, it should identify as the orchestrator.
-- **implementer**: performs the delegated task in `/workspace` and returns
-  free-form text for the user.
+- **implementer**: performs the delegated task in `/workspace` and returns a
+  free-form handoff to the orchestrator. The orchestrator reviews that handoff
+  before producing the user-facing answer.
 
 There is no judge, profiler, or autonomous retry loop. Each role keeps its own
 Codex session and resumes it on later turns; the human user is the control loop.
@@ -46,6 +51,8 @@ Codex session and resumes it on later turns; the human user is the control loop.
 
 - Prefer existing skills under `/workspace/skills/` when a request matches.
 - Use `uv run ...` from `/workspace` for Python commands.
+- Keep scratch state under the workspace-managed `TMPDIR`; never hard-code the
+  system `/tmp`.
 - Before expensive, destructive, or shared-state operations, ask the user.
 - If a generated figure or plot is relevant, embed it with Markdown image
   syntax so the UI can serve it from the copied workspace.
