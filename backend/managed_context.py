@@ -8,15 +8,14 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 from .codex_runtime.config import (
-    CODEX_DOCKER_AUTH_DIR,
+    CODEX_DOCKER_CODEX_ROOT,
     codex_home_for,
 )
 
 MANAGED_CONTEXT_FILENAME = "managed-run.json"
-MANAGED_CONTEXT_CONTAINER_PATH = f"{CODEX_DOCKER_AUTH_DIR}/{MANAGED_CONTEXT_FILENAME}"
+MANAGED_CONTEXT_CONTAINER_PATH = f"{CODEX_DOCKER_CODEX_ROOT}/{MANAGED_CONTEXT_FILENAME}"
 MANAGED_BACKEND_URL = os.environ.get(
     "VIBESIM_MANAGED_BACKEND_URL",
     "http://host.docker.internal:8765",

@@ -1,6 +1,19 @@
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 export type Role = "orchestrator" | "implementer";
+export type CodexBackendId = "traditional" | "codexds";
+
+export interface CodexBackendSelection {
+  orchestrator: CodexBackendId;
+  implementer: CodexBackendId;
+}
+
+export interface CodexBackendOption {
+  id: CodexBackendId;
+  label: string;
+  model: string;
+  available: boolean;
+}
 
 export interface ConversationSummary {
   id: string;
@@ -26,10 +39,10 @@ export interface Tokens {
  * same `reduceTurn` reducer drives both playback and reload.
  */
 export type TurnEvent =
-  | { kind: "intermediate_output"; role: string; text: string }
+  | { kind: "intermediate_output"; role: string; backend?: CodexBackendId; text: string }
   | { kind: "decision"; action: string; task: string }
   | { kind: "implementer"; text: string }
-  | { kind: "usage"; role: string; duration_ms: number; tokens: Tokens }
+  | { kind: "usage"; role: string; backend?: CodexBackendId; duration_ms: number; tokens: Tokens }
   | { kind: "final"; text: string };
 
 export interface ChatMessage {
@@ -51,6 +64,7 @@ export interface Conversation {
   title: string;
   sandbox?: SandboxMode | string;
   autonomous?: boolean;
+  codex_backends?: CodexBackendSelection;
   messages: ChatMessage[];
   message_page?: MessagePage;
   codex_sessions?: Record<string, string>;
@@ -65,6 +79,7 @@ export interface ConversationListResponse {
 export interface RolePhase {
   type: "role";
   role: Role;
+  backend: CodexBackendId;
   round: number;
   notes: string[];
   durationMs: number | null;

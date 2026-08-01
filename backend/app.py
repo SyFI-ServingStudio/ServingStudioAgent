@@ -52,7 +52,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -69,9 +69,12 @@ from .analyzer_context import (
 )
 from .artifacts import list_artifacts, resolve_artifact
 from .codex_runtime.config import (
+    DEFAULT_CODEX_BACKEND,
     DEFAULT_SANDBOX,
     SANDBOX_MODES,
     VIBESIM_API_TOKEN,
+    codex_backend,
+    codex_backend_catalog,
     prompt_fingerprint,
 )
 from .codex_runtime.docker import cleanup_conversation
@@ -251,9 +254,7 @@ def _project_job_activity(
             {
                 "jobKind": str(payload["jobKind"]),
                 "resourceId": str(payload.get("resourceId") or ""),
-                "analyzerResourceId": str(
-                    payload.get("analyzerResourceId") or ""
-                ),
+                "analyzerResourceId": str(payload.get("analyzerResourceId") or ""),
                 "artifactPath": str(payload.get("artifactPath") or ""),
                 "descriptor": payload.get("descriptor") or {},
                 "summary": payload.get("summary"),
@@ -273,6 +274,7 @@ def _recoverable_turn_activity(workspace_id: str, turn_id: str) -> list[dict]:
                 {
                     "kind": kind,
                     "role": str(payload.get("role") or "orchestrator"),
+                    "backend": str(payload.get("backend") or "traditional"),
                     "text": str(payload.get("text") or ""),
                 }
             )
@@ -291,6 +293,7 @@ def _recoverable_turn_activity(workspace_id: str, turn_id: str) -> list[dict]:
                 {
                     "kind": kind,
                     "role": str(payload.get("role") or ""),
+                    "backend": str(payload.get("backend") or "traditional"),
                     "duration_ms": int(payload.get("duration_ms") or 0),
                     "tokens": payload.get("tokens") or {},
                 }
@@ -366,9 +369,22 @@ def _autonomous_for_turn(conv: dict, requested_autonomous: bool) -> bool:
     return requested_autonomous
 
 
+CodexBackendId = Literal["traditional", "codexds"]
+
+
+class RoleBackendSelection(BaseModel):
+    orchestrator: CodexBackendId = DEFAULT_CODEX_BACKEND
+    implementer: CodexBackendId = DEFAULT_CODEX_BACKEND
+
+
+class UpdateConversationRuntime(BaseModel):
+    codex_backends: RoleBackendSelection
+
+
 class NewConversation(BaseModel):
     sandbox: str = DEFAULT_SANDBOX
     autonomous: bool = False
+    codex_backends: RoleBackendSelection = Field(default_factory=RoleBackendSelection)
     # Co-evolution (used by vibe-serve): host path to the caller's candidate
     # workspace to bind read-only at /candidate in this conversation's container.
     peer_workspace: str | None = None
@@ -395,6 +411,31 @@ class RegisterManagedRun(BaseModel):
     experiment_root: str = Field(alias="experimentRoot")
     run_count: int = Field(default=1, ge=1, alias="runCount")
     axes: list[str] = Field(default_factory=list)
+
+
+def _backend_ids(selection: RoleBackendSelection | dict) -> dict[str, str]:
+    if isinstance(selection, RoleBackendSelection):
+        return selection.model_dump()
+    return {
+        "orchestrator": str(selection.get("orchestrator") or DEFAULT_CODEX_BACKEND),
+        "implementer": str(selection.get("implementer") or DEFAULT_CODEX_BACKEND),
+    }
+
+
+def _require_available_backends(backends: dict[str, str]) -> None:
+    unavailable = [
+        backend_id
+        for backend_id in backends.values()
+        if not codex_backend(backend_id).available
+    ]
+    if unavailable:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "codex_backend_unavailable",
+                "backends": sorted(set(unavailable)),
+            },
+        )
 
 
 class UpdateManagedRun(BaseModel):
@@ -460,6 +501,18 @@ def index() -> FileResponse:
 @app.get("/api/workspaces")
 def list_workspaces() -> dict:
     return {"workspaces": store.registry.list()}
+
+
+@app.get("/api/codex-backends")
+def list_codex_backends() -> dict:
+    """Return the safe, server-owned backend choices shared by both UIs."""
+    return {
+        "backends": codex_backend_catalog(),
+        "defaults": {
+            "orchestrator": DEFAULT_CODEX_BACKEND,
+            "implementer": DEFAULT_CODEX_BACKEND,
+        },
+    }
 
 
 @app.get("/api/conversations")
@@ -606,8 +659,14 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
         store.registry.get(workspace_id)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
+    backends = _backend_ids(body.codex_backends)
+    _require_available_backends(backends)
     cid = uuid.uuid4().hex[:12]
-    fingerprint = prompt_fingerprint(autonomous=body.autonomous)
+    fingerprint = prompt_fingerprint(
+        autonomous=body.autonomous,
+        orchestrator_backend=backends["orchestrator"],
+        implementer_backend=backends["implementer"],
+    )
     log_event(
         LOG,
         "conversation.create",
@@ -615,6 +674,7 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
         conversation_id=cid,
         sandbox=body.sandbox,
         autonomous=body.autonomous,
+        codex_backends=backends,
         prompt_fingerprint=fingerprint,
     )
     conversation = store.create(
@@ -623,11 +683,38 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
         body.sandbox,
         fingerprint,
         autonomous=body.autonomous,
+        orchestrator_backend=backends["orchestrator"],
+        implementer_backend=backends["implementer"],
         peer_workspace=body.peer_workspace,
         naming_state="pending",
     )
     if body.eager:
         conversation["workspace_path"] = str(prepare_workspace(workspace_id))
+    return conversation
+
+
+@app.patch("/api/workspaces/{workspace_id}/conversations/{cid}/runtime")
+def update_conversation_runtime(
+    workspace_id: str, cid: str, body: UpdateConversationRuntime
+) -> dict:
+    backends = _backend_ids(body.codex_backends)
+    _require_available_backends(backends)
+    try:
+        store.update_codex_backends(
+            workspace_id,
+            cid,
+            orchestrator_backend=backends["orchestrator"],
+            implementer_backend=backends["implementer"],
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="conversation not found") from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "conversation_runtime_locked", "message": str(exc)},
+        ) from exc
+    conversation = store.get(workspace_id, cid)
+    assert conversation is not None
     return conversation
 
 
@@ -1119,8 +1206,14 @@ def agent_create_conversation(
         store.registry.get(workspace_id)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
+    backends = _backend_ids(body.codex_backends)
+    _require_available_backends(backends)
     cid = uuid.uuid4().hex[:12]
-    fingerprint = prompt_fingerprint(autonomous=body.autonomous)
+    fingerprint = prompt_fingerprint(
+        autonomous=body.autonomous,
+        orchestrator_backend=backends["orchestrator"],
+        implementer_backend=backends["implementer"],
+    )
     log_event(
         LOG,
         "agent.conversation.create",
@@ -1128,6 +1221,7 @@ def agent_create_conversation(
         conversation_id=cid,
         sandbox=body.sandbox,
         autonomous=body.autonomous,
+        codex_backends=backends,
         prompt_fingerprint=fingerprint,
         peer_workspace=body.peer_workspace,
         eager=body.eager,
@@ -1138,6 +1232,8 @@ def agent_create_conversation(
         body.sandbox,
         fingerprint,
         autonomous=body.autonomous,
+        orchestrator_backend=backends["orchestrator"],
+        implementer_backend=backends["implementer"],
         peer_workspace=body.peer_workspace,
         naming_state="pending",
     )
@@ -1198,7 +1294,12 @@ async def agent_send_message(
         else bool(conv.get("autonomous", False))
     )
     autonomous = _autonomous_for_turn(conv, requested_autonomous)
-    fingerprint = prompt_fingerprint(autonomous=autonomous)
+    backends = _backend_ids(conv.get("codex_backends") or {})
+    fingerprint = prompt_fingerprint(
+        autonomous=autonomous,
+        orchestrator_backend=backends["orchestrator"],
+        implementer_backend=backends["implementer"],
+    )
     turn_id = uuid.uuid4().hex[:10]
     store.update_runtime_settings(
         workspace_id,
@@ -1213,7 +1314,9 @@ async def agent_send_message(
         text,
         analyzer_context=persisted_context(body.analyzer_context),
     )
-    sessions = store.sessions_for_prompt(workspace_id, cid, fingerprint)
+    sessions = store.sessions_for_prompt(
+        workspace_id, cid, fingerprint, backends=backends
+    )
     store.start_turn(workspace_id, cid, turn_id)
     log_event(
         LOG,
@@ -1249,6 +1352,8 @@ async def agent_send_message(
                 prompt_fingerprint=fingerprint,
                 autonomous=autonomous,
                 peer_dir=conv.get("peer_workspace"),
+                orchestrator_backend=backends["orchestrator"],
+                implementer_backend=backends["implementer"],
             ):
                 if ev.get("kind") == "session":
                     store.set_codex_session(
@@ -1256,6 +1361,10 @@ async def agent_send_message(
                         cid,
                         ev.get("role", ""),
                         ev.get("session_id"),
+                        backend_id=str(
+                            ev.get("backend")
+                            or backends.get(ev.get("role", ""), "traditional")
+                        ),
                     )
                 store.append_turn_event(
                     workspace_id,
@@ -1433,7 +1542,12 @@ async def send_message(
 
     sandbox = body.sandbox_mode
     autonomous = _autonomous_for_turn(conv, body.autonomous_mode)
-    current_prompt_fingerprint = prompt_fingerprint(autonomous=autonomous)
+    backends = _backend_ids(conv.get("codex_backends") or {})
+    current_prompt_fingerprint = prompt_fingerprint(
+        autonomous=autonomous,
+        orchestrator_backend=backends["orchestrator"],
+        implementer_backend=backends["implementer"],
+    )
     turn_id = uuid.uuid4().hex[:10]
     previous_sessions = dict(conv.get("codex_sessions") or {})
     store.update_runtime_settings(
@@ -1453,6 +1567,7 @@ async def send_message(
         workspace_id,
         cid,
         current_prompt_fingerprint,
+        backends=backends,
     )
     store.start_turn(workspace_id, cid, turn_id)
     log_event(
@@ -1485,6 +1600,7 @@ async def send_message(
             autonomous=autonomous,
             analyzer_context=body.analyzer_context,
             active_turn=active_turn,
+            backends=backends,
         )
     )
     return _turn_stream_response(active_turn)
@@ -1529,7 +1645,12 @@ async def _run_browser_turn(
     autonomous: bool,
     analyzer_context: AnalyzerTurnContext | None,
     active_turn: ActiveBrowserTurn,
+    backends: dict[str, str] | None = None,
 ) -> None:
+    backends = backends or {
+        "orchestrator": DEFAULT_CODEX_BACKEND,
+        "implementer": DEFAULT_CODEX_BACKEND,
+    }
     lock = _lock_for(workspace_id)
     async with lock:
         final_text: str | None = None
@@ -1549,6 +1670,8 @@ async def _run_browser_turn(
                 turn_id=turn_id,
                 prompt_fingerprint=prompt_fingerprint,
                 autonomous=autonomous,
+                orchestrator_backend=backends["orchestrator"],
+                implementer_backend=backends["implementer"],
             ):
                 kind = ev.get("kind")
                 if kind == "session":
@@ -1557,6 +1680,10 @@ async def _run_browser_turn(
                         cid,
                         ev.get("role", ""),
                         ev.get("session_id"),
+                        backend_id=str(
+                            ev.get("backend")
+                            or backends.get(ev.get("role", ""), "traditional")
+                        ),
                     )
                     log_event(
                         LOG,
@@ -1571,6 +1698,7 @@ async def _run_browser_turn(
                             "session",
                             {
                                 "role": ev.get("role"),
+                                "backend": ev.get("backend"),
                                 "session_id": ev.get("session_id"),
                             },
                         )
@@ -1584,6 +1712,7 @@ async def _run_browser_turn(
                 elif kind == "intermediate_output":
                     intermediate_output = {
                         "role": str(ev.get("role") or ""),
+                        "backend": str(ev.get("backend") or "traditional"),
                         "text": str(ev.get("text") or ""),
                     }
                     intermediate_outputs.append(intermediate_output)
@@ -1603,6 +1732,7 @@ async def _run_browser_turn(
                 elif kind == "usage":
                     usage = {
                         "role": str(ev.get("role") or ""),
+                        "backend": str(ev.get("backend") or "traditional"),
                         "duration_ms": int(ev.get("duration_ms") or 0),
                         "tokens": ev.get("tokens") or {},
                     }

@@ -16,9 +16,11 @@ import {
   createConversation,
   deleteConversation,
   getConversation,
+  listCodexBackends,
   listConversations,
   resumeTurn,
   streamTurn,
+  updateConversationRuntime,
 } from "./api";
 import { cn } from "./lib/cn";
 import { LegacyAssistant, TurnTimeline } from "./components/Turn";
@@ -26,6 +28,9 @@ import { markdownHtml } from "./markdown";
 import { reduceTurn } from "./turn";
 import type {
   ChatMessage,
+  CodexBackendId,
+  CodexBackendOption,
+  CodexBackendSelection,
   Conversation,
   ConversationSummary,
   SandboxMode,
@@ -78,6 +83,11 @@ function App() {
   const [autonomous, setAutonomous] = useState(
     localStorage.getItem("vibesim_autonomous") === "1",
   );
+  const [backendOptions, setBackendOptions] = useState<CodexBackendOption[]>([]);
+  const [codexBackends, setCodexBackends] = useState<CodexBackendSelection>({
+    orchestrator: "traditional",
+    implementer: "traditional",
+  });
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [live, setLive] = useState<LiveTurn | null>(null);
@@ -98,11 +108,13 @@ function App() {
   const shouldAutoScrollRef = useRef(true);
 
   useEffect(() => {
-    refreshSidebar().then((items) => {
-      if (items.length) {
-        void selectConversation(items[0].id);
-      }
-    });
+    void (async () => {
+      const catalog = await listCodexBackends();
+      setBackendOptions(catalog.backends);
+      setCodexBackends(catalog.defaults);
+      const items = await refreshSidebar();
+      if (items.length) await selectConversation(items[0].id);
+    })();
   }, []);
 
   useEffect(() => {
@@ -217,6 +229,9 @@ function App() {
       setSandbox(conversation.sandbox as SandboxMode);
     }
     setAutonomous(Boolean(conversation.autonomous));
+    if (conversation.codex_backends) {
+      setCodexBackends(conversation.codex_backends);
+    }
     setTitle(
       conversation.title && conversation.title !== "New chat"
         ? conversation.title
@@ -283,7 +298,7 @@ function App() {
     if (streaming) {
       return;
     }
-    const conversation = await createConversation(sandbox, autonomous);
+    const conversation = await createConversation(sandbox, autonomous, codexBackends);
     shouldAutoScrollRef.current = true;
     olderMessagesRequestSequenceRef.current += 1;
     loadingOlderMessagesRef.current = false;
@@ -330,10 +345,12 @@ function App() {
 
     let conversationId = currentId;
     if (!conversationId) {
-      const conversation = await createConversation(sandbox, autonomous);
+      const conversation = await createConversation(sandbox, autonomous, codexBackends);
       conversationId = conversation.id;
       setCurrentId(conversation.id);
       await refreshSidebar();
+    } else if (messages.length === 0) {
+      await updateConversationRuntime(conversationId, codexBackends);
     }
 
     setInput("");
@@ -501,6 +518,7 @@ function App() {
           onNewConversation={newConversation}
           onSelect={selectConversation}
           onDelete={removeConversation}
+          backendSummary={`${codexBackends.orchestrator === "codexds" ? "DS" : "Traditional"} / ${codexBackends.implementer === "codexds" ? "DS" : "Traditional"}`}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -589,6 +607,31 @@ function App() {
                 </button>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-3 text-[12.5px] text-zinc-500">
+                {(["orchestrator", "implementer"] as const).map((role) => (
+                  <label key={role} className="flex items-center gap-1.5">
+                    <span className={role === "orchestrator" ? "text-orch-soft" : "text-impl-soft"}>
+                      {role === "orchestrator" ? "Orchestrator" : "Implementer"}
+                    </span>
+                    <select
+                      aria-label={`${role} Codex backend`}
+                      value={codexBackends[role]}
+                      disabled={streaming || messages.length > 0}
+                      onChange={(nativeEvent) =>
+                        setCodexBackends((current) => ({
+                          ...current,
+                          [role]: nativeEvent.target.value as CodexBackendId,
+                        }))
+                      }
+                      className="cursor-pointer rounded-md border border-hair bg-panel px-2 py-1 text-[12.5px] text-zinc-300 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {backendOptions.map((backend) => (
+                        <option key={backend.id} value={backend.id} disabled={!backend.available}>
+                          {backend.label}{backend.available ? "" : " (unavailable)"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
                 <label
                   className="flex cursor-pointer items-center gap-2"
                   title="How much this turn is allowed to do in the copied Docker workspace"
@@ -623,6 +666,7 @@ function Sidebar({
   onNewConversation,
   onSelect,
   onDelete,
+  backendSummary,
 }: {
   conversations: ConversationSummary[];
   currentId: string | null;
@@ -630,6 +674,7 @@ function Sidebar({
   onNewConversation: () => void | Promise<void>;
   onSelect: (id: string) => void | Promise<void>;
   onDelete: (id: string) => void | Promise<void>;
+  backendSummary: string;
 }) {
   return (
     <aside className="hidden w-[230px] shrink-0 flex-col gap-1 border-r border-hairsoft py-4 pr-4 md:flex">
@@ -683,7 +728,7 @@ function Sidebar({
 
       <footer className="mt-auto flex items-center gap-2 border-t border-hairsoft pt-3 text-[12px] text-zinc-500">
         <span className="h-1.5 w-1.5 rounded-full bg-impl" /> docker · codex ·{" "}
-        <span className="font-mono text-[11px]">gpt-5.6-sol</span>
+        <span className="font-mono text-[11px]">{backendSummary}</span>
       </footer>
     </aside>
   );

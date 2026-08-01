@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parents[3]
@@ -48,7 +49,7 @@ CODEX_DOCKER_USER = (
     os.environ.get("CODEX_DOCKER_USER") or os.environ.get("USER") or "codex"
 )
 CODEX_DOCKER_HOME = os.environ.get("CODEX_DOCKER_HOME", f"/home/{CODEX_DOCKER_USER}")
-CODEX_DOCKER_AUTH_DIR = f"{CODEX_DOCKER_HOME}/.codex"
+CODEX_DOCKER_CODEX_ROOT = f"{CODEX_DOCKER_HOME}/.vibesim-codex"
 CODEX_DOCKER_DG_USE_LOCAL_VERSION = os.environ.get(
     "CODEX_DOCKER_DG_USE_LOCAL_VERSION", "0"
 )
@@ -72,8 +73,74 @@ AGENTS_PROMPT_AUTONOMOUS = "AGENTS.autonomous.md"
 EXECUTION_MODES = ("read-only", "workspace-write", "danger-full-access")
 SANDBOX_MODES = EXECUTION_MODES
 DEFAULT_SANDBOX = "workspace-write"
+DEFAULT_CODEX_BACKEND = "traditional"
 
 LOG = logging.getLogger("vibesim_ui.codex_runtime")
+
+
+@dataclass(frozen=True, slots=True)
+class CodexBackendSpec:
+    """Allowlisted model-provider profile selectable by a conversation role."""
+
+    backend_id: str
+    label: str
+    model: str
+    host_codex_home: Path
+    required_environment: tuple[str, ...] = ()
+    cli_options: tuple[str, ...] = ()
+
+    @property
+    def available(self) -> bool:
+        return self.host_codex_home.joinpath("config.toml").is_file() and all(
+            os.environ.get(name, "").strip() for name in self.required_environment
+        )
+
+
+CODEX_BACKENDS: dict[str, CodexBackendSpec] = {
+    "traditional": CodexBackendSpec(
+        backend_id="traditional",
+        label="Traditional Codex",
+        model=CODEX_MODEL,
+        host_codex_home=Path(
+            os.environ.get("CODEX_TRADITIONAL_HOME", Path.home() / ".codex")
+        ).expanduser(),
+        # Preserve the pre-registry invocation contract for the default backend.
+        cli_options=(
+            "-m",
+            CODEX_MODEL,
+            "-c",
+            f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"',
+        ),
+    ),
+    "codexds": CodexBackendSpec(
+        backend_id="codexds",
+        label="CodexDS",
+        model=os.environ.get("CODEXDS_MODEL", "deepseek-ai/DeepSeek-V4-Flash-0731"),
+        host_codex_home=Path(
+            os.environ.get("CODEXDS_HOME", Path.home() / ".codex-ds")
+        ).expanduser(),
+        required_environment=("VLLM_API_KEY",),
+    ),
+}
+
+
+def codex_backend(backend_id: str) -> CodexBackendSpec:
+    try:
+        return CODEX_BACKENDS[backend_id]
+    except KeyError as exc:
+        raise ValueError(f"unsupported Codex backend: {backend_id!r}") from exc
+
+
+def codex_backend_catalog() -> list[dict[str, object]]:
+    return [
+        {
+            "id": backend.backend_id,
+            "label": backend.label,
+            "model": backend.model,
+            "available": backend.available,
+        }
+        for backend in CODEX_BACKENDS.values()
+    ]
 
 
 def _sha256_file(path: Path) -> str:
@@ -94,7 +161,12 @@ def agents_prompt_name(autonomous: bool) -> str:
     return AGENTS_PROMPT_AUTONOMOUS if autonomous else AGENTS_PROMPT_DEFAULT
 
 
-def prompt_fingerprint(*, autonomous: bool = False) -> str:
+def prompt_fingerprint(
+    *,
+    autonomous: bool = False,
+    orchestrator_backend: str = DEFAULT_CODEX_BACKEND,
+    implementer_backend: str = DEFAULT_CODEX_BACKEND,
+) -> str:
     """Hash the effective role contract for diagnostics and provenance."""
     digest = hashlib.sha256()
     for name in (
@@ -107,7 +179,16 @@ def prompt_fingerprint(*, autonomous: bool = False) -> str:
         digest.update(b"\0")
         digest.update((PROMPTS_DIR / name).read_bytes())
         digest.update(b"\0")
-    digest.update(CODEX_MODEL.encode("utf-8"))
+    for role, backend_id in (
+        ("orchestrator", orchestrator_backend),
+        ("implementer", implementer_backend),
+    ):
+        backend = codex_backend(backend_id)
+        digest.update(role.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(backend.backend_id.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(backend.model.encode("utf-8"))
     digest.update(b"\0autonomous=")
     digest.update(str(autonomous).encode("utf-8"))
     return digest.hexdigest()[:16]
@@ -127,6 +208,18 @@ def workspace_main_for(workspace_id: str) -> Path:
 
 def codex_home_for(workspace_id: str, conversation_id: str) -> Path:
     return AGENT_WORKSPACES_ROOT / workspace_id / "codex" / conversation_id
+
+
+def role_codex_home_for(workspace_id: str, conversation_id: str, role: str) -> Path:
+    if role not in {"orchestrator", "implementer"}:
+        raise ValueError(f"unsupported Codex role: {role!r}")
+    return codex_home_for(workspace_id, conversation_id) / role
+
+
+def role_codex_home_in_container(role: str) -> str:
+    if role not in {"orchestrator", "implementer"}:
+        raise ValueError(f"unsupported Codex role: {role!r}")
+    return f"{CODEX_DOCKER_CODEX_ROOT}/{role}"
 
 
 def container_name(workspace_id: str, conversation_id: str) -> str:

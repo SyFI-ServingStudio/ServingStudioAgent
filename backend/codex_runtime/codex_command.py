@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 
+from ..managed_context import MANAGED_CONTEXT_CONTAINER_PATH
 from .config import (
     ANALYZER_MCP_BASE_URL,
+    ANALYZER_MCP_CONTAINER_DIR,
+    ANALYZER_MCP_PYTHON,
+    ANALYZER_MCP_SOURCE,
     CODEX_DOCKER_DG_USE_LOCAL_VERSION,
     CODEX_DOCKER_GID,
     CODEX_DOCKER_GPUS,
@@ -14,26 +18,19 @@ from .config import (
     CODEX_DOCKER_USER,
     CODEX_DOCKER_UV_CACHE_DIR,
     CODEX_DOCKER_UV_PROJECT_ENVIRONMENT,
-    CODEX_MODEL,
-    CODEX_REASONING_EFFORT,
-    ANALYZER_MCP_CONTAINER_DIR,
-    ANALYZER_MCP_PYTHON,
-    ANALYZER_MCP_SOURCE,
     MAIN_LOCK_SHA,
+    codex_backend,
+    role_codex_home_in_container,
 )
 from .exec_types import CodexExecRequest
-from ..managed_context import MANAGED_CONTEXT_CONTAINER_PATH
 
 
 def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
-    command = _docker_exec_prefix(request.container)
+    command = _docker_exec_prefix(request)
     command.extend(["codex", "exec"])
 
     codex_options = [
-        "-m",
-        CODEX_MODEL,
-        "-c",
-        f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"',
+        *codex_backend(request.backend_id).cli_options,
         "-c",
         f'mcp_servers.analyzer.command="{ANALYZER_MCP_PYTHON}"',
         "-c",
@@ -43,8 +40,10 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
         "-c",
         f"mcp_servers.analyzer.env.ANALYZER_MCP_BASE_URL={json.dumps(ANALYZER_MCP_BASE_URL)}",
         "-c",
-        "mcp_servers.analyzer.env.VIBESIM_MANAGED_RUN_CONTEXT="
-        f'{json.dumps(MANAGED_CONTEXT_CONTAINER_PATH)}',
+        (
+            "mcp_servers.analyzer.env.VIBESIM_MANAGED_RUN_CONTEXT="
+            f"{json.dumps(MANAGED_CONTEXT_CONTAINER_PATH)}"
+        ),
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
         "--json",
@@ -62,7 +61,7 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
     return command
 
 
-def _docker_exec_prefix(container: str) -> list[str]:
+def _docker_exec_prefix(request: CodexExecRequest) -> list[str]:
     return [
         "docker",
         "exec",
@@ -71,6 +70,8 @@ def _docker_exec_prefix(container: str) -> list[str]:
         f"{CODEX_DOCKER_UID}:{CODEX_DOCKER_GID}",
         "-e",
         f"HOME={CODEX_DOCKER_HOME}",
+        "-e",
+        f"CODEX_HOME={role_codex_home_in_container(request.label)}",
         "-e",
         f"USER={CODEX_DOCKER_USER}",
         "-e",
@@ -97,5 +98,5 @@ def _docker_exec_prefix(container: str) -> list[str]:
         "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
         "-w",
         "/workspace",
-        container,
+        request.container,
     ]

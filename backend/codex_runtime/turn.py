@@ -6,15 +6,17 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ..logging_config import compact_text, log_event
+from ..managed_context import write_managed_context
 from .codex_cli import run_codex
 from .config import (
     DEFAULT_SANDBOX,
     EXECUTION_MODES,
     LOG,
     ORCHESTRATOR_SCHEMA_IN_CONTAINER,
-    container_name as container_name_for,
     workspace_main_for,
 )
+from .config import container_name as container_name_for
 from .docker import container_running, ensure_container
 from .prompts import (
     _format_implementer_summaries,
@@ -25,8 +27,6 @@ from .prompts import (
     parse_orchestrator,
 )
 from .workspace import prepare_workspace
-from ..logging_config import compact_text, log_event
-from ..managed_context import write_managed_context
 
 
 async def run_turn(
@@ -40,6 +40,8 @@ async def run_turn(
     prompt_fingerprint: str = "",
     autonomous: bool = False,
     peer_dir: str | None = None,
+    orchestrator_backend: str = "traditional",
+    implementer_backend: str = "traditional",
 ) -> AsyncIterator[dict[str, Any]]:
     """Run one user turn through orchestrator/implementer handoffs."""
     turn_id = turn_id or "unknown"
@@ -93,6 +95,8 @@ async def run_turn(
             mode,
             peer_dir,
             autonomous=autonomous,
+            orchestrator_backend=orchestrator_backend,
+            implementer_backend=implementer_backend,
         )
     )
     while True:
@@ -140,6 +144,7 @@ async def run_turn(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
+            backend_id=orchestrator_backend,
             session_id=orchestrator_session,
             output_schema=ORCHESTRATOR_SCHEMA_IN_CONTAINER,
         ):
@@ -224,6 +229,7 @@ async def run_turn(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
+            backend_id=implementer_backend,
             session_id=implementer_session,
         ):
             if ev["kind"] == "session":

@@ -6,17 +6,17 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 
+from ..logging_config import compact_text, log_event
 from .codex_command import build_codex_exec_command
 from .config import (
-    CODEX_IDLE_TIMEOUT,
     CODEX_DOCKER_GID,
     CODEX_DOCKER_HOME,
     CODEX_DOCKER_UID,
+    CODEX_IDLE_TIMEOUT,
     LOG,
 )
 from .exec_types import CodexEvent, CodexExecRequest
 from .output_collector import CodexOutputCollector
-from ..logging_config import compact_text, log_event
 
 
 async def run_codex(
@@ -27,6 +27,7 @@ async def run_codex(
     workspace_id: str,
     conversation_id: str,
     turn_id: str,
+    backend_id: str,
     session_id: str | None = None,
     output_schema: str | None = None,
 ) -> AsyncIterator[CodexEvent]:
@@ -38,6 +39,7 @@ async def run_codex(
         workspace_id=workspace_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
+        backend_id=backend_id,
         session_id=session_id,
         output_schema=output_schema,
     )
@@ -83,10 +85,13 @@ class CodexExecCall:
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
+            backend=self.request.backend_id,
             container=self.request.container,
             resume=self.request.is_resume,
             codex_session_id=self.request.session_id,
-            output_schema=self.request.output_schema if self.request.schema_arg_used else "",
+            output_schema=self.request.output_schema
+            if self.request.schema_arg_used
+            else "",
             output_schema_requested=bool(self.request.output_schema),
             output_schema_arg_used=self.request.schema_arg_used,
             uid=CODEX_DOCKER_UID,

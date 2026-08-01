@@ -19,6 +19,7 @@ class CodexExecRequest:
     workspace_id: str
     conversation_id: str
     turn_id: str
+    backend_id: str = "traditional"
     session_id: str | None = None
     output_schema: str | None = None
 

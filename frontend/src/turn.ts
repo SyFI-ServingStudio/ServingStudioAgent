@@ -1,4 +1,4 @@
-import type { Role, RolePhase, TurnCard, TurnEvent } from "./types";
+import type { CodexBackendId, Role, RolePhase, TurnCard, TurnEvent } from "./types";
 
 function asRole(value: string): Role {
   return value === "implementer" ? "implementer" : "orchestrator";
@@ -52,11 +52,12 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
   const round: Record<Role, number> = { orchestrator: 0, implementer: 0 };
   let current: RolePhase | null = null;
 
-  const openPhase = (role: Role): RolePhase => {
+  const openPhase = (role: Role, backend: CodexBackendId = "traditional"): RolePhase => {
     round[role] += 1;
     const phase: RolePhase = {
       type: "role",
       role,
+      backend,
       round: round[role],
       notes: [],
       durationMs: null,
@@ -87,7 +88,10 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
         }
         const role = asRole(event.role);
         const phase: RolePhase =
-          current && current.role === role && !current.done ? current : openPhase(role);
+          current && current.role === role && !current.done
+            ? current
+            : openPhase(role, event.backend);
+        phase.backend = event.backend || phase.backend;
         phase.notes.push(clean);
         current = phase;
         break;
@@ -97,7 +101,8 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
         const target: RolePhase =
           (current && current.role === role && !current.done ? current : null) ??
           lastOpenPhase(role) ??
-          openPhase(role);
+          openPhase(role, event.backend);
+        target.backend = event.backend || target.backend;
         target.durationMs = event.duration_ms;
         target.tokens = event.tokens;
         target.done = true;

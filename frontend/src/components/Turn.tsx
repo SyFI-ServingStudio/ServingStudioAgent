@@ -183,7 +183,7 @@ function RoleCard({
       avatar={<RoleIcon size={13} weight="fill" />}
       avatarClass={style.avatar}
       title={style.label}
-      sub={`round ${phase.round}`}
+      sub={`${phase.backend === "codexds" ? "CodexDS" : "Traditional"} · round ${phase.round}`}
       chip={chip}
       working={working}
       workingClass={style.cardWorking}

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .config import codex_home_for
+from .config import role_codex_home_for
 
 
 def _describe_item(item: dict[str, Any]) -> str:
@@ -53,9 +53,9 @@ def _assistant_message_from_payload(payload: dict[str, Any]) -> tuple[str, str] 
 
 
 def _find_rollout_file(
-    workspace_id: str, conversation_id: str, session_id: str
+    workspace_id: str, conversation_id: str, role: str, session_id: str
 ) -> Path | None:
-    sessions_dir = codex_home_for(workspace_id, conversation_id) / "sessions"
+    sessions_dir = role_codex_home_for(workspace_id, conversation_id, role) / "sessions"
     if not sessions_dir.exists():
         return None
     candidates = []
@@ -148,7 +148,10 @@ def _scan_rollout_last_token_usage(rollout_file: Path) -> dict[str, int] | None:
                 if event.get("type") != "event_msg":
                     continue
                 payload = event.get("payload")
-                if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("type") != "token_count"
+                ):
                     continue
                 info = payload.get("info")
                 if not isinstance(info, dict):
@@ -192,7 +195,9 @@ def _translate(ev: dict[str, Any]) -> list[dict[str, str]]:
     return []
 
 
-def _codex_stderr_for_error(stderr_text: str, *, returncode: int | None, has_final_text: bool) -> str:
+def _codex_stderr_for_error(
+    stderr_text: str, *, returncode: int | None, has_final_text: bool
+) -> str:
     """Drop known Codex CLI bookkeeping noise after successful calls."""
     if returncode not in (0, None) or not has_final_text:
         return stderr_text

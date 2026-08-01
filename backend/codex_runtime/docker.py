@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
 from pathlib import Path
 
+from ..logging_config import log_event
 from .commands import run_checked
 from .config import (
     ANALYZER_MCP_BASE_URL,
     ANALYZER_MCP_CONTAINER_DIR,
     ANALYZER_MCP_DIR,
     ANALYZER_MCP_SOURCE,
-    CODEX_DOCKER_AUTH_DIR,
+    CODEX_DOCKER_CODEX_ROOT,
     CODEX_DOCKER_DG_USE_LOCAL_VERSION,
     CODEX_DOCKER_GID,
     CODEX_DOCKER_GPUS,
@@ -34,11 +36,13 @@ from .config import (
     PROMPTS_CONTAINER_DIR,
     PROMPTS_DIR,
     agents_prompt_name,
+    codex_backend,
     codex_home_for,
     container_name,
+    role_codex_home_for,
+    role_codex_home_in_container,
 )
 from .workspace import main_submodule_paths
-from ..logging_config import log_event
 
 
 def _submodule_mount_args(conversation_id: str, container: str) -> list[str]:
@@ -143,10 +147,7 @@ def _agent_prompt_mount_args(
         )
     return [
         "--mount",
-        (
-            f"type=bind,src={prompt_path.resolve()},"
-            "dst=/workspace/AGENTS.md,readonly"
-        ),
+        (f"type=bind,src={prompt_path.resolve()},dst=/workspace/AGENTS.md,readonly"),
     ]
 
 
@@ -184,36 +185,94 @@ def _copy_codex_auth_entry(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
-def _prepare_codex_home(workspace_id: str, conversation_id: str) -> Path:
-    """Create a clean per-conversation Codex home seeded with host auth.
+def _import_legacy_shared_runtime(legacy_home: Path, role_home: Path) -> None:
+    """Copy pre-role-isolation session state into one role home once.
 
-    Mounting the host ``~/.codex`` directly leaks stale ``tmp`` / ``sessions`` /
-    state DB paths into the Docker runtime. Copy only authentication/configuration
-    inputs and let this isolated home own its runtime state.
+    Older conversations stored both role sessions directly below the
+    conversation Codex home.  The database still identifies the correct role
+    session, so copying the legacy trees into both isolated homes preserves
+    resume behavior without moving or deleting user-owned history.
     """
-    host_codex_home = Path.home() / ".codex"
-    if not host_codex_home.exists():
-        raise RuntimeError(f"Codex auth directory not found: {host_codex_home}")
+    migration_marker = role_home / ".legacy-shared-runtime-imported"
+    if migration_marker.exists():
+        return
 
-    codex_home = codex_home_for(workspace_id, conversation_id)
+    for runtime_name in ("sessions", "shell_snapshots"):
+        source = legacy_home / runtime_name
+        if source.is_dir():
+            shutil.copytree(
+                source,
+                role_home / runtime_name,
+                symlinks=True,
+                dirs_exist_ok=True,
+            )
+
+    migration_marker.write_text("role-isolation-v1\n", encoding="utf-8")
+
+
+def _prepare_role_codex_home(
+    workspace_id: str,
+    conversation_id: str,
+    role: str,
+    backend_id: str,
+) -> Path:
+    """Prepare one role's durable Codex home from its selected backend profile.
+
+    Runtime state is never copied from the source profile. Keeping role homes
+    separate prevents a session created against one provider from being resumed
+    by the other role after a backend selection change.
+    """
+    backend = codex_backend(backend_id)
+    host_codex_home = backend.host_codex_home
+    if not host_codex_home.exists():
+        raise RuntimeError(
+            f"Codex backend {backend_id!r} home not found: {host_codex_home}"
+        )
+    missing_environment = [
+        name
+        for name in backend.required_environment
+        if not os.environ.get(name, "").strip()
+    ]
+    if missing_environment:
+        raise RuntimeError(
+            f"Codex backend {backend_id!r} is missing environment: "
+            + ", ".join(missing_environment)
+        )
+
+    legacy_home = codex_home_for(workspace_id, conversation_id)
+    codex_home = role_codex_home_for(workspace_id, conversation_id, role)
     codex_home.mkdir(parents=True, exist_ok=True)
+    _import_legacy_shared_runtime(legacy_home, codex_home)
     for name in (
         "auth.json",
         "config.toml",
         "installation_id",
         "version.json",
         "models_cache.json",
+        "models_catalog.json",
         ".personality_migration",
         "rules",
     ):
         _copy_codex_auth_entry(host_codex_home / name, codex_home / name)
+
+    config_path = codex_home / "config.toml"
+    if config_path.is_file() and (codex_home / "models_catalog.json").is_file():
+        config_text = config_path.read_text("utf-8")
+        container_catalog = f"{role_codex_home_in_container(role)}/models_catalog.json"
+        config_text = re.sub(
+            r"^model_catalog_json\s*=.*$",
+            f'model_catalog_json = "{container_catalog}"',
+            config_text,
+            flags=re.MULTILINE,
+        )
+        config_path.write_text(config_text, "utf-8")
 
     for runtime_dir in ("sessions", "tmp", "shell_snapshots", "log", "cache"):
         (codex_home / runtime_dir).mkdir(parents=True, exist_ok=True)
     return codex_home
 
 
-def _docker_init_script() -> str:
+def _docker_init_script(backend_fingerprint: str) -> str:
     return f"""
 set -euo pipefail
 APP_UID={CODEX_DOCKER_UID}
@@ -228,6 +287,7 @@ EXPECTED_BUILD_SHA={shlex.quote(MAIN_BUILD_SHA)}
 GPU_REQUEST={shlex.quote(CODEX_DOCKER_GPUS)}
 MODEL_HOME={shlex.quote(CODEX_DOCKER_HF_HOME)}
 MODEL_MOUNT_REQUIRED={"1" if HOST_HF_HOME is not None else "0"}
+BACKEND_FINGERPRINT={shlex.quote(backend_fingerprint)}
 
 if [ "$(id -u)" != "$APP_UID" ] || [ "$(id -g)" != "$APP_GID" ]; then
   echo "Docker runner is not using the requested UID/GID: got $(id -u):$(id -g), expected $APP_UID:$APP_GID" >&2
@@ -303,6 +363,7 @@ echo "$RUNTIME_IMAGE" > /tmp/vibesim_ui_runtime_image
 echo "$GPU_REQUEST" > /tmp/vibesim_ui_gpu_request
 echo "$EXPECTED_LOCK_SHA" > /tmp/vibesim_ui_main_lock_sha
 echo "$EXPECTED_BUILD_SHA" > /tmp/vibesim_ui_main_build_sha
+echo "$BACKEND_FINGERPRINT" > /tmp/vibesim_ui_backend_fingerprint
 touch /tmp/vibesim_ui_codex_ready
 """
 
@@ -325,8 +386,20 @@ def ensure_container(
     peer_dir: str | None = None,
     *,
     autonomous: bool = False,
+    orchestrator_backend: str = "traditional",
+    implementer_backend: str = "traditional",
 ) -> str:
     container = container_name(workspace_id, conversation_id)
+    backend_selection = {
+        "orchestrator": orchestrator_backend,
+        "implementer": implementer_backend,
+    }
+    backend_fingerprint = ",".join(
+        f"{role}:{backend_id}" for role, backend_id in backend_selection.items()
+    )
+    for role, backend_id in backend_selection.items():
+        _prepare_role_codex_home(workspace_id, conversation_id, role, backend_id)
+    codex_root = codex_home_for(workspace_id, conversation_id)
     selected_agents_prompt = agents_prompt_name(autonomous)
     log_event(
         LOG,
@@ -378,6 +451,7 @@ def ensure_container(
                     f'&& test "$(cat /tmp/vibesim_ui_gpu_request 2>/dev/null)" = {CODEX_DOCKER_GPUS!r} '
                     f'&& test "$(cat /tmp/vibesim_ui_main_lock_sha 2>/dev/null)" = {MAIN_LOCK_SHA!r} '
                     f'&& test "$(cat /tmp/vibesim_ui_main_build_sha 2>/dev/null)" = {MAIN_BUILD_SHA!r} '
+                    f'&& test "$(cat /tmp/vibesim_ui_backend_fingerprint 2>/dev/null)" = {backend_fingerprint!r} '
                     f'&& test "${{DG_USE_LOCAL_VERSION:-}}" = {CODEX_DOCKER_DG_USE_LOCAL_VERSION!r} '
                     f'&& test "${{VIBESIM_BAKED_LOCK_SHA:-}}" = {MAIN_LOCK_SHA!r} '
                     f'&& test "${{VIBESIM_BAKED_BUILD_SHA:-}}" = {MAIN_BUILD_SHA!r} '
@@ -395,7 +469,8 @@ def ensure_container(
                     "&& command -v rustc >/dev/null 2>&1 "
                     "&& command -v uv >/dev/null 2>&1 "
                     "&& command -v codex >/dev/null 2>&1 "
-                    f"&& test -d {CODEX_DOCKER_AUTH_DIR!r} "
+                    f"&& test -d {role_codex_home_in_container('orchestrator')!r} "
+                    f"&& test -d {role_codex_home_in_container('implementer')!r} "
                     "&& test -r /workspace/AGENTS.md "
                     f"&& cmp -s /workspace/AGENTS.md "
                     f"{(PROMPTS_CONTAINER_DIR + '/' + selected_agents_prompt)!r} "
@@ -433,13 +508,13 @@ def ensure_container(
     )
     subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
 
-    auth_dir = _prepare_codex_home(workspace_id, conversation_id)
     log_event(
         LOG,
         "container.codex_home.ready",
         conversation_id=conversation_id,
         container=container,
-        codex_home=str(auth_dir),
+        codex_home=str(codex_root),
+        backends=backend_selection,
     )
 
     cmd = [
@@ -455,7 +530,7 @@ def ensure_container(
         "-v",
         f"{workspace_main}:/workspace",
         "-v",
-        f"{auth_dir}:{CODEX_DOCKER_AUTH_DIR}",
+        f"{codex_root}:{CODEX_DOCKER_CODEX_ROOT}",
         "-v",
         f"{ANALYZER_MCP_DIR}:{ANALYZER_MCP_CONTAINER_DIR}:ro",
         "-v",
@@ -494,6 +569,15 @@ def ensure_container(
         "-e",
         "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
     ]
+    required_environment = {
+        environment_name
+        for backend_id in backend_selection.values()
+        for environment_name in codex_backend(backend_id).required_environment
+    }
+    for environment_name in sorted(required_environment):
+        # Passing only the name keeps the secret value out of command logs;
+        # Docker copies it from the backend process environment.
+        cmd.extend(["-e", environment_name])
     if CODEX_DOCKER_GPUS:
         cmd.extend(["--gpus", CODEX_DOCKER_GPUS])
     cmd.extend([CODEX_DOCKER_IMAGE, "sleep", "infinity"])
@@ -514,7 +598,7 @@ def ensure_container(
             container,
             "bash",
             "-lc",
-            _docker_init_script(),
+            _docker_init_script(backend_fingerprint),
         ],
         timeout=300,
     )

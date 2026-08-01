@@ -145,8 +145,14 @@ To rebuild the runner image explicitly:
 
 ```bash
 cd user-facing-ui
+export CODEX_DOCKER_IMAGE="vibesim-ui-codex-runner:${USER}"
 CODEX_FORCE_IMAGE_BUILD=1 ./scripts/build-codex-runner-image.sh
 ```
+
+Use a user-specific tag on hosts with a shared Docker daemon. Runner images
+embed the building user's UID/GID and home path, so a shared `latest` tag can be
+valid for one account and unusable by another. Keep the same
+`CODEX_DOCKER_IMAGE` value when starting `run.sh`.
 
 ### Runner image acceptance test
 
@@ -481,6 +487,8 @@ Docker GPU forwarding.
 - `CODEX_REASONING_EFFORT` — Codex reasoning effort passed as
   `-c model_reasoning_effort=...`, default `xhigh`.
 - `CODEX_DOCKER_IMAGE` — Docker image, default `vibesim-ui-codex-runner:latest`.
+  On shared Docker hosts, set a stable user-specific tag such as
+  `vibesim-ui-codex-runner:${USER}` for both image build and backend startup.
 - `CODEX_CUDA_IMAGE` — CUDA devel base image baked into the runner image,
   default `nvidia/cuda:12.8.1-devel-ubuntu24.04`.
 - `CODEX_UV_IMAGE` — source image copied for the `uv`/`uvx` binaries, default

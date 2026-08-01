@@ -6,6 +6,7 @@ import contextlib
 import json
 from pathlib import Path
 
+from ..logging_config import compact_text, log_event
 from .codex_events import (
     _codex_stderr_for_error,
     _find_rollout_file,
@@ -16,7 +17,6 @@ from .codex_events import (
 )
 from .config import CODEX_IDLE_TIMEOUT, LOG
 from .exec_types import CodexEvent, CodexExecRequest
-from ..logging_config import compact_text, log_event
 
 
 class CodexOutputCollector:
@@ -41,6 +41,7 @@ class CodexOutputCollector:
         self.rollout_file = _find_rollout_file(
             self.request.workspace_id,
             self.request.conversation_id,
+            self.request.label,
             self.current_session_id,
         )
         if self.rollout_file is not None:
@@ -69,6 +70,7 @@ class CodexOutputCollector:
             self.rollout_file = _find_rollout_file(
                 self.request.workspace_id,
                 self.request.conversation_id,
+                self.request.label,
                 self.current_session_id,
             )
             if self.rollout_file is None:
@@ -113,6 +115,7 @@ class CodexOutputCollector:
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
+            backend=self.request.backend_id,
             duration_ms=duration_ms,
             read_tokens=tokens["read"],
             prefill_tokens=tokens["prefill"],
@@ -121,6 +124,7 @@ class CodexOutputCollector:
         return {
             "kind": "usage",
             "role": self.request.label,
+            "backend": self.request.backend_id,
             "duration_ms": duration_ms,
             "tokens": tokens,
         }
@@ -135,6 +139,7 @@ class CodexOutputCollector:
             self.rollout_file = _find_rollout_file(
                 self.request.workspace_id,
                 self.request.conversation_id,
+                self.request.label,
                 self.current_session_id,
             )
         end = (
@@ -153,7 +158,11 @@ class CodexOutputCollector:
             field(base, "input_tokens") - field(base, "cached_input_tokens")
         )
         output = field(end, "output_tokens") - field(base, "output_tokens")
-        return {"read": max(0, read), "prefill": max(0, prefill), "output": max(0, output)}
+        return {
+            "read": max(0, read),
+            "prefill": max(0, prefill),
+            "output": max(0, output),
+        }
 
     def final_event(self, returncode: int | None) -> CodexEvent:
         raw_stderr_text = "".join(self.stderr_chunks).strip()
@@ -162,7 +171,9 @@ class CodexOutputCollector:
             returncode=returncode,
             has_final_text=self.final_text is not None,
         )
-        final_text = self.final_text or self._fallback_final_text(returncode, stderr_text)
+        final_text = self.final_text or self._fallback_final_text(
+            returncode, stderr_text
+        )
         log_event(
             LOG,
             "codex.final",
@@ -178,7 +189,9 @@ class CodexOutputCollector:
         )
         return {"kind": "final", "text": final_text}
 
-    def _event_from_translated_event(self, translated_event: CodexEvent) -> CodexEvent | None:
+    def _event_from_translated_event(
+        self, translated_event: CodexEvent
+    ) -> CodexEvent | None:
         kind = translated_event["kind"]
         if kind == "session":
             return self._session_event(translated_event["session_id"])
@@ -194,11 +207,13 @@ class CodexOutputCollector:
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
+            backend=self.request.backend_id,
             codex_session_id=session_id,
         )
         return {
             "kind": "session",
             "role": self.request.label,
+            "backend": self.request.backend_id,
             "session_id": session_id,
         }
 
@@ -211,7 +226,9 @@ class CodexOutputCollector:
             self.final_text = text.strip()
         return None
 
-    def _intermediate_output_event(self, note_text: str, *, source: str) -> CodexEvent | None:
+    def _intermediate_output_event(
+        self, note_text: str, *, source: str
+    ) -> CodexEvent | None:
         note_text = unwrap_commentary(note_text)
         if not note_text:
             return None
@@ -225,10 +242,16 @@ class CodexOutputCollector:
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
+            backend=self.request.backend_id,
             text=note_text,
             source=source,
         )
-        return {"kind": "intermediate_output", "role": self.request.label, "text": note_text}
+        return {
+            "kind": "intermediate_output",
+            "role": self.request.label,
+            "backend": self.request.backend_id,
+            "text": note_text,
+        }
 
     def _progress_event(self, progress_text: str) -> CodexEvent:
         log_event(

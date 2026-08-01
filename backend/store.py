@@ -383,6 +383,8 @@ class Store:
                         naming_state TEXT NOT NULL DEFAULT 'manual',
                         sandbox TEXT NOT NULL,
                         autonomous INTEGER NOT NULL,
+                        orchestrator_backend TEXT NOT NULL DEFAULT 'traditional',
+                        implementer_backend TEXT NOT NULL DEFAULT 'traditional',
                         prompt_fingerprint TEXT,
                         peer_workspace TEXT,
                         created_at REAL NOT NULL,
@@ -403,6 +405,7 @@ class Store:
                         conversation_id TEXT NOT NULL REFERENCES conversations(id)
                             ON DELETE CASCADE,
                         role TEXT NOT NULL,
+                        backend_id TEXT NOT NULL DEFAULT 'traditional',
                         session_id TEXT NOT NULL,
                         PRIMARY KEY (conversation_id, role)
                     );
@@ -474,6 +477,26 @@ class Store:
                         ALTER TABLE conversations
                         ADD COLUMN naming_state TEXT NOT NULL DEFAULT 'manual'
                         """
+                    )
+                for column_name in (
+                    "orchestrator_backend",
+                    "implementer_backend",
+                ):
+                    if column_name not in conversation_columns:
+                        connection.execute(
+                            f"ALTER TABLE conversations ADD COLUMN {column_name} "
+                            "TEXT NOT NULL DEFAULT 'traditional'"
+                        )
+                session_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(codex_sessions)"
+                    ).fetchall()
+                }
+                if "backend_id" not in session_columns:
+                    connection.execute(
+                        "ALTER TABLE codex_sessions ADD COLUMN backend_id "
+                        "TEXT NOT NULL DEFAULT 'traditional'"
                     )
                 execution_job_columns = {
                     row[1]
@@ -653,6 +676,8 @@ class Store:
         prompt_fingerprint: str | None = None,
         *,
         autonomous: bool = False,
+        orchestrator_backend: str = "traditional",
+        implementer_backend: str = "traditional",
         peer_workspace: str | None = None,
         created_at: float | None = None,
         updated_at: float | None = None,
@@ -666,9 +691,10 @@ class Store:
             connection.execute(
                 """
                 INSERT INTO conversations(
-                    id, title, naming_state, sandbox, autonomous, prompt_fingerprint,
+                    id, title, naming_state, sandbox, autonomous,
+                    orchestrator_backend, implementer_backend, prompt_fingerprint,
                     peer_workspace, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -676,6 +702,8 @@ class Store:
                     naming_state,
                     sandbox,
                     int(autonomous),
+                    orchestrator_backend,
+                    implementer_backend,
                     prompt_fingerprint,
                     peer_workspace,
                     creation_time,
@@ -737,6 +765,59 @@ class Store:
                 (sandbox, int(autonomous), time.time(), conversation_id),
             )
 
+    def update_codex_backends(
+        self,
+        workspace_id: str,
+        conversation_id: str,
+        *,
+        orchestrator_backend: str,
+        implementer_backend: str,
+    ) -> None:
+        """Change role backends only before the conversation starts.
+
+        Backend identity is part of Codex session compatibility. The API keeps
+        this create-time choice immutable once user-visible history or a turn
+        exists, so no provider can accidentally resume another provider's
+        rollout.
+        """
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)
+            ).fetchone()
+            if exists is None:
+                raise KeyError(conversation_id)
+            message_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()[0]
+            )
+            turn_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM turns WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()[0]
+            )
+            if message_count or turn_count:
+                raise ValueError("conversation runtime is locked")
+            connection.execute(
+                """
+                UPDATE conversations
+                SET orchestrator_backend = ?, implementer_backend = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    orchestrator_backend,
+                    implementer_backend,
+                    time.time(),
+                    conversation_id,
+                ),
+            )
+            connection.execute(
+                "DELETE FROM codex_sessions WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+
     def add_message(
         self,
         workspace_id: str,
@@ -788,6 +869,7 @@ class Store:
         workspace_id: str,
         conversation_id: str,
         prompt_fingerprint: str,
+        backends: dict[str, str] | None = None,
     ) -> dict[str, str]:
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             row = connection.execute(
@@ -806,10 +888,17 @@ class Store:
                     (prompt_fingerprint, conversation_id),
                 )
             rows = connection.execute(
-                "SELECT role, session_id FROM codex_sessions WHERE conversation_id = ?",
+                "SELECT role, backend_id, session_id FROM codex_sessions "
+                "WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchall()
-            return {row["role"]: row["session_id"] for row in rows}
+            selected_backends = backends or {}
+            return {
+                session["role"]: session["session_id"]
+                for session in rows
+                if session["backend_id"]
+                == selected_backends.get(session["role"], session["backend_id"])
+            }
 
     def set_codex_session(
         self,
@@ -817,18 +906,20 @@ class Store:
         conversation_id: str,
         role: str,
         session_id: str | None,
+        backend_id: str = "traditional",
     ) -> None:
         if not role or not session_id:
             return
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             connection.execute(
                 """
-                INSERT INTO codex_sessions(conversation_id, role, session_id)
-                VALUES (?, ?, ?)
+                INSERT INTO codex_sessions(conversation_id, role, backend_id, session_id)
+                VALUES (?, ?, ?, ?)
                 ON CONFLICT(conversation_id, role)
-                DO UPDATE SET session_id = excluded.session_id
+                DO UPDATE SET backend_id = excluded.backend_id,
+                              session_id = excluded.session_id
                 """,
-                (conversation_id, role, session_id),
+                (conversation_id, role, backend_id, session_id),
             )
 
     def delete(self, workspace_id: str, conversation_id: str) -> None:
@@ -1251,6 +1342,12 @@ class Store:
             conversation.get("sandbox", "workspace-write"),
             conversation.get("prompt_fingerprint"),
             autonomous=bool(conversation.get("autonomous", False)),
+            orchestrator_backend=(conversation.get("codex_backends") or {}).get(
+                "orchestrator", "traditional"
+            ),
+            implementer_backend=(conversation.get("codex_backends") or {}).get(
+                "implementer", "traditional"
+            ),
             peer_workspace=conversation.get("peer_workspace"),
             created_at=source_created_at,
             updated_at=source_updated_at,
@@ -1276,6 +1373,9 @@ class Store:
                 conversation_id,
                 role,
                 session_id,
+                backend_id=(conversation.get("codex_backends") or {}).get(
+                    role, "traditional"
+                ),
             )
         self.restore_imported_timestamps(
             workspace_id,
@@ -1342,7 +1442,8 @@ class Store:
                 (conversation_id,),
             ).fetchall()
         session_rows = connection.execute(
-            "SELECT role, session_id FROM codex_sessions WHERE conversation_id = ?",
+            "SELECT role, backend_id, session_id FROM codex_sessions "
+            "WHERE conversation_id = ?",
             (conversation_id,),
         ).fetchall()
         return {
@@ -1351,6 +1452,10 @@ class Store:
             "naming_state": row["naming_state"],
             "sandbox": row["sandbox"],
             "autonomous": bool(row["autonomous"]),
+            "codex_backends": {
+                "orchestrator": row["orchestrator_backend"],
+                "implementer": row["implementer_backend"],
+            },
             "prompt_fingerprint": row["prompt_fingerprint"],
             "peer_workspace": row["peer_workspace"],
             "codex_sessions": {

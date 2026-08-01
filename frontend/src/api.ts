@@ -1,4 +1,7 @@
 import type {
+  CodexBackendId,
+  CodexBackendOption,
+  CodexBackendSelection,
   Conversation,
   ConversationListResponse,
   SandboxMode,
@@ -10,6 +13,17 @@ import { conversationLocation, conversationLocator } from "./conversationLocator
 export const DEFAULT_SANDBOX: SandboxMode = "workspace-write";
 export const MESSAGE_PAGE_SIZE = 20;
 const MAIN_WORKSPACE_ID = "w_main";
+
+export async function listCodexBackends(): Promise<{
+  backends: CodexBackendOption[];
+  defaults: CodexBackendSelection;
+}> {
+  const response = await fetch("/api/codex-backends");
+  if (!response.ok) {
+    throw new Error(`failed to list Codex backends: ${response.status}`);
+  }
+  return response.json();
+}
 
 function locatedConversation(
   conversation: Conversation,
@@ -42,11 +56,12 @@ export async function listConversations(): Promise<ConversationListResponse> {
 export async function createConversation(
   sandbox: SandboxMode,
   autonomous: boolean,
+  codexBackends: CodexBackendSelection,
 ): Promise<Conversation> {
   const response = await fetch(`/api/workspaces/${MAIN_WORKSPACE_ID}/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sandbox, autonomous }),
+    body: JSON.stringify({ sandbox, autonomous, codex_backends: codexBackends }),
   });
   if (!response.ok) {
     throw new Error(`failed to create conversation: ${response.status}`);
@@ -72,6 +87,23 @@ export async function getConversation(
   if (!response.ok) {
     throw new Error(`failed to load conversation: ${response.status}`);
   }
+  return locatedConversation(await response.json(), location.workspaceId);
+}
+
+export async function updateConversationRuntime(
+  id: string,
+  codexBackends: CodexBackendSelection,
+): Promise<Conversation> {
+  const location = conversationLocation(id);
+  const response = await fetch(
+    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/runtime`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ codex_backends: codexBackends }),
+    },
+  );
+  if (!response.ok) throw new Error(`failed to update conversation runtime: ${response.status}`);
   return locatedConversation(await response.json(), location.workspaceId);
 }
 
@@ -214,6 +246,7 @@ function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
       handlers.event?.({
         kind: "intermediate_output",
         role: data.role ? String(data.role) : "",
+        backend: String(data.backend || "traditional") as CodexBackendId,
         text: data.text ? String(data.text) : "",
       });
       break;
@@ -228,6 +261,7 @@ function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
       handlers.event?.({
         kind: "usage",
         role: data.role ? String(data.role) : "",
+        backend: String(data.backend || "traditional") as CodexBackendId,
         duration_ms: typeof data.duration_ms === "number" ? data.duration_ms : 0,
         tokens: parseTokens(data.tokens),
       });

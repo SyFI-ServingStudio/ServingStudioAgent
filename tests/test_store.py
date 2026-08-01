@@ -122,6 +122,63 @@ class WorkspaceStoreTest(unittest.TestCase):
                 "new-contract",
             )
 
+    def test_role_backends_are_persisted_and_lock_after_first_message(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            store = Store(registry)
+            store.create(
+                "w_main",
+                "conversation",
+                "workspace-write",
+                orchestrator_backend="codexds",
+                implementer_backend="traditional",
+            )
+            store.set_codex_session(
+                "w_main",
+                "conversation",
+                "orchestrator",
+                "deepseek-session",
+                backend_id="codexds",
+            )
+
+            self.assertEqual(
+                store.get("w_main", "conversation")["codex_backends"],
+                {"orchestrator": "codexds", "implementer": "traditional"},
+            )
+            self.assertEqual(
+                store.sessions_for_prompt(
+                    "w_main",
+                    "conversation",
+                    "contract",
+                    backends={
+                        "orchestrator": "codexds",
+                        "implementer": "traditional",
+                    },
+                ),
+                {"orchestrator": "deepseek-session"},
+            )
+            self.assertEqual(
+                store.sessions_for_prompt(
+                    "w_main",
+                    "conversation",
+                    "contract",
+                    backends={
+                        "orchestrator": "traditional",
+                        "implementer": "traditional",
+                    },
+                ),
+                {},
+            )
+
+            store.add_message("w_main", "conversation", "user", "start")
+            with self.assertRaisesRegex(ValueError, "runtime is locked"):
+                store.update_codex_backends(
+                    "w_main",
+                    "conversation",
+                    orchestrator_backend="traditional",
+                    implementer_backend="traditional",
+                )
+
     def test_generated_names_use_pending_compare_and_set(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             registry = self.make_registry(temporary_directory)
