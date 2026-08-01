@@ -2,10 +2,13 @@ export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 
 export type Role = "orchestrator" | "implementer";
 export type CommentaryLevel = "progress" | "milestone";
-/** One role's Codex choice: which model runs it, and at what reasoning effort. */
+export type CodexServiceTier = "default" | "fast";
+
+/** One role's Codex choice: model, reasoning effort, and per-call speed tier. */
 export interface CodexRoleRuntime {
   model: string;
   effort: string;
+  serviceTier: CodexServiceTier;
 }
 
 export interface CodexRuntimeSelection {
@@ -21,6 +24,8 @@ export interface CodexModelOption {
   familyLabel: string;
   efforts: string[];
   defaultEffort: string;
+  serviceTiers: CodexServiceTier[];
+  defaultServiceTier: CodexServiceTier;
   available: boolean;
 }
 

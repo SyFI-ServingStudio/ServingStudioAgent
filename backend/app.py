@@ -73,6 +73,7 @@ from .codex_runtime.config import (
     DEFAULT_CODEX_EFFORT,
     DEFAULT_CODEX_FAMILY,
     DEFAULT_CODEX_MODEL,
+    DEFAULT_CODEX_SERVICE_TIER,
     DEFAULT_SANDBOX,
     SANDBOX_MODES,
     VIBESIM_API_TOKEN,
@@ -383,13 +384,16 @@ def _autonomous_for_turn(conv: dict, requested_autonomous: bool) -> bool:
 
 
 class RoleRuntime(BaseModel):
-    """One role's Codex model plus its reasoning effort."""
+    """One role's Codex model, reasoning effort, and speed tier."""
 
     model: str = DEFAULT_CODEX_MODEL
     effort: str = DEFAULT_CODEX_EFFORT
+    service_tier: str = Field(
+        default=DEFAULT_CODEX_SERVICE_TIER, alias="serviceTier"
+    )
 
     # `model_` is Pydantic's own namespace; `model` here is a plain field name.
-    model_config = ConfigDict(protected_namespaces=())
+    model_config = ConfigDict(protected_namespaces=(), populate_by_name=True)
 
 
 class ConversationRuntime(BaseModel):
@@ -455,7 +459,9 @@ def _role_runtimes(
                 },
             )
         runtimes[role] = normalize_role_runtime(
-            requested.get("model"), requested.get("effort")
+            requested.get("model"),
+            requested.get("effort"),
+            requested.get("service_tier") or requested.get("serviceTier"),
         )
     return runtimes
 
@@ -558,7 +564,14 @@ def list_codex_backends() -> dict:
     Models and their effort ladders come from each family's on-disk Codex model
     catalog, so the selector cannot offer something the runtime cannot run.
     """
-    default_runtime = {"model": DEFAULT_CODEX_MODEL, "effort": DEFAULT_CODEX_EFFORT}
+    default_runtime = normalize_role_runtime(
+        DEFAULT_CODEX_MODEL, DEFAULT_CODEX_EFFORT, DEFAULT_CODEX_SERVICE_TIER
+    )
+    default_runtime = {
+        "model": default_runtime["model"],
+        "effort": default_runtime["effort"],
+        "serviceTier": default_runtime["service_tier"],
+    }
     return {
         "models": codex_model_catalog(),
         "families": codex_family_catalog(),

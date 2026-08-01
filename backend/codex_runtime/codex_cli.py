@@ -13,6 +13,7 @@ from .config import (
     CODEX_DOCKER_HOME,
     CODEX_DOCKER_UID,
     CODEX_IDLE_TIMEOUT,
+    DEFAULT_CODEX_SERVICE_TIER,
     LOG,
 )
 from .exec_types import CodexEvent, CodexExecRequest
@@ -32,6 +33,7 @@ async def run_codex(
     turn_id: str,
     model_id: str,
     effort: str,
+    service_tier: str = DEFAULT_CODEX_SERVICE_TIER,
     session_id: str | None = None,
     output_schema: str | None = None,
 ) -> AsyncIterator[CodexEvent]:
@@ -45,6 +47,7 @@ async def run_codex(
         turn_id=turn_id,
         model_id=model_id,
         effort=effort,
+        service_tier=service_tier,
         session_id=session_id,
         output_schema=output_schema,
     )
@@ -99,7 +102,8 @@ class CodexExecCall:
         return {
             "kind": "tool_call",
             "text": (
-                f"{self.request.label}: {stage} {model} · {self.request.effort}{age}..."
+                f"{self.request.label}: {stage} {model} · {self.request.effort}"
+                f"{' · fast' if self.request.service_tier == 'fast' else ''}{age}..."
             ),
         }
 
@@ -112,6 +116,7 @@ class CodexExecCall:
             role=self.request.label,
             model=self.request.model_id,
             effort=self.request.effort,
+            service_tier=self.request.service_tier,
             container=self.request.container,
             resume=self.request.is_resume,
             codex_session_id=self.request.session_id,

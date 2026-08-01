@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .config import DEFAULT_CODEX_EFFORT, DEFAULT_CODEX_MODEL, codex_model
+from .config import (
+    DEFAULT_CODEX_EFFORT,
+    DEFAULT_CODEX_MODEL,
+    DEFAULT_CODEX_SERVICE_TIER,
+    CodexModelSpec,
+    codex_model,
+)
 
 # UI-facing events are plain dicts keyed by ``kind``. Most values are strings,
 # but a few carry richer payloads (e.g. ``usage`` events hold an int duration
@@ -23,12 +29,17 @@ class CodexExecRequest:
     turn_id: str
     model_id: str = DEFAULT_CODEX_MODEL
     effort: str = DEFAULT_CODEX_EFFORT
+    service_tier: str = DEFAULT_CODEX_SERVICE_TIER
     session_id: str | None = None
     output_schema: str | None = None
 
     @property
     def family_id(self) -> str:
         return codex_model(self.model_id).family_id
+
+    @property
+    def model(self) -> CodexModelSpec:
+        return codex_model(self.model_id)
 
     @property
     def is_resume(self) -> bool:

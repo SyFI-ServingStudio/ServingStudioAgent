@@ -72,7 +72,8 @@ function runtimeSummary(runtime: CodexRoleRuntime): string {
   const name = runtime.model.includes("DeepSeek")
     ? "DS"
     : runtime.model.replace(/^gpt-5\.6-/i, "").replace(/^gpt-/i, "");
-  return runtime.effort ? `${name}\u00b7${runtime.effort}` : name;
+  const tier = runtime.serviceTier === "fast" ? "\u00b7fast" : "";
+  return runtime.effort ? `${name}\u00b7${runtime.effort}${tier}` : `${name}${tier}`;
 }
 
 function App() {
@@ -94,8 +95,8 @@ function App() {
   const [modelOptions, setModelOptions] = useState<CodexModelOption[]>([]);
   // Replaced by the server catalog's defaults as soon as it answers.
   const [codexRuntime, setCodexRuntime] = useState<CodexRuntimeSelection>({
-    orchestrator: { model: "", effort: "" },
-    implementer: { model: "", effort: "" },
+    orchestrator: { model: "", effort: "", serviceTier: "default" },
+    implementer: { model: "", effort: "", serviceTier: "default" },
   });
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -651,6 +652,11 @@ function App() {
                               effort: model.efforts.includes(current[role].effort)
                                 ? current[role].effort
                                 : model.defaultEffort,
+                              serviceTier: model.serviceTiers.includes(
+                                current[role].serviceTier,
+                              )
+                                ? current[role].serviceTier
+                                : model.defaultServiceTier,
                             },
                           }));
                         }}
@@ -681,6 +687,44 @@ function App() {
                           </option>
                         ))}
                       </select>
+                      <span
+                        role="group"
+                        aria-label={`${role} speed tier`}
+                        className="inline-flex rounded-md border border-hair bg-panel p-0.5"
+                      >
+                        {(["default", "fast"] as const).map((serviceTier) => {
+                          const supported = selected?.serviceTiers.includes(serviceTier) ?? false;
+                          const active = codexRuntime[role].serviceTier === serviceTier;
+                          return (
+                            <button
+                              key={serviceTier}
+                              type="button"
+                              aria-pressed={active}
+                              aria-label={`${role} ${serviceTier === "fast" ? "Fast" : "Normal"} tier`}
+                              disabled={streaming || !supported}
+                              title={
+                                serviceTier === "fast" && !supported
+                                  ? "This model does not offer the Fast service tier"
+                                  : undefined
+                              }
+                              onClick={() =>
+                                setCodexRuntime((current) => ({
+                                  ...current,
+                                  [role]: { ...current[role], serviceTier },
+                                }))
+                              }
+                              className={cn(
+                                "rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide transition disabled:cursor-not-allowed disabled:opacity-35",
+                                active
+                                  ? "bg-zinc-700 text-zinc-100 shadow-sm"
+                                  : "text-zinc-500 hover:text-zinc-300",
+                              )}
+                            >
+                              {serviceTier === "fast" ? "Fast" : "Normal"}
+                            </button>
+                          );
+                        })}
+                      </span>
                     </label>
                   );
                 })}

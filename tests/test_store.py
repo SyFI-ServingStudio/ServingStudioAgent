@@ -189,8 +189,16 @@ class WorkspaceStoreTest(unittest.TestCase):
             self.assertEqual(
                 store.get("w_main", "conversation")["codex_runtime"],
                 {
-                    "orchestrator": {"model": DEEPSEEK_MODEL, "effort": "high"},
-                    "implementer": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                    "orchestrator": {
+                        "model": DEEPSEEK_MODEL,
+                        "effort": "high",
+                        "serviceTier": "default",
+                    },
+                    "implementer": {
+                        "model": "gpt-5.6-sol",
+                        "effort": "xhigh",
+                        "serviceTier": "default",
+                    },
                 },
             )
             self.assertEqual(
@@ -238,14 +246,26 @@ class WorkspaceStoreTest(unittest.TestCase):
             store.update_codex_runtime(
                 "w_main",
                 "conversation",
-                orchestrator_runtime={"model": "gpt-5.6-luna", "effort": "low"},
+                orchestrator_runtime={
+                    "model": "gpt-5.6-luna",
+                    "effort": "low",
+                    "serviceTier": "fast",
+                },
                 implementer_runtime={"model": "gpt-5.6-sol", "effort": "max"},
             )
             self.assertEqual(
                 store.get("w_main", "conversation")["codex_runtime"],
                 {
-                    "orchestrator": {"model": "gpt-5.6-luna", "effort": "low"},
-                    "implementer": {"model": "gpt-5.6-sol", "effort": "max"},
+                    "orchestrator": {
+                        "model": "gpt-5.6-luna",
+                        "effort": "low",
+                        "serviceTier": "fast",
+                    },
+                    "implementer": {
+                        "model": "gpt-5.6-sol",
+                        "effort": "max",
+                        "serviceTier": "default",
+                    },
                 },
             )
             self.assertEqual(
@@ -274,8 +294,16 @@ class WorkspaceStoreTest(unittest.TestCase):
             self.assertEqual(
                 conversation["codex_runtime"],
                 {
-                    "orchestrator": {"model": DEEPSEEK_MODEL, "effort": "max"},
-                    "implementer": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                    "orchestrator": {
+                        "model": DEEPSEEK_MODEL,
+                        "effort": "max",
+                        "serviceTier": "default",
+                    },
+                    "implementer": {
+                        "model": "gpt-5.6-sol",
+                        "effort": "xhigh",
+                        "serviceTier": "default",
+                    },
                 },
             )
             # The old rollout is still reusable: its backend id became a family.

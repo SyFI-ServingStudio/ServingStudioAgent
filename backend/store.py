@@ -30,6 +30,7 @@ from .codex_runtime.config import (
     DEFAULT_CODEX_EFFORT,
     DEFAULT_CODEX_FAMILY,
     DEFAULT_CODEX_MODEL,
+    DEFAULT_CODEX_SERVICE_TIER,
     LEGACY_BACKEND_MODELS,
     codex_model,
     normalize_role_runtime,
@@ -37,13 +38,15 @@ from .codex_runtime.config import (
 
 WORKSPACE_ID_PATTERN = re.compile(r"^w_[a-zA-Z0-9_-]{1,64}$")
 SCHEMA_VERSION = 1
-DATABASE_SCHEMA_VERSION = 5
+DATABASE_SCHEMA_VERSION = 6
 NAMING_STATES = {"pending", "generated", "manual"}
 
 
 def _normalized_runtime(runtime: dict[str, str] | None) -> dict[str, str]:
     return normalize_role_runtime(
-        (runtime or {}).get("model"), (runtime or {}).get("effort")
+        (runtime or {}).get("model"),
+        (runtime or {}).get("effort"),
+        (runtime or {}).get("service_tier") or (runtime or {}).get("serviceTier"),
     )
 
 
@@ -397,6 +400,7 @@ class Store:
         database_path.parent.mkdir(parents=True, exist_ok=True)
         default_model = DEFAULT_CODEX_MODEL
         default_effort = DEFAULT_CODEX_EFFORT
+        default_service_tier = DEFAULT_CODEX_SERVICE_TIER
         default_family = DEFAULT_CODEX_FAMILY
         with self._lock_for(workspace_id):
             connection = sqlite3.connect(database_path)
@@ -417,8 +421,10 @@ class Store:
                         autonomous INTEGER NOT NULL,
                         orchestrator_model TEXT NOT NULL DEFAULT '{default_model}',
                         orchestrator_effort TEXT NOT NULL DEFAULT '{default_effort}',
+                        orchestrator_service_tier TEXT NOT NULL DEFAULT '{default_service_tier}',
                         implementer_model TEXT NOT NULL DEFAULT '{default_model}',
                         implementer_effort TEXT NOT NULL DEFAULT '{default_effort}',
+                        implementer_service_tier TEXT NOT NULL DEFAULT '{default_service_tier}',
                         prompt_fingerprint TEXT,
                         peer_workspace TEXT,
                         created_at REAL NOT NULL,
@@ -518,8 +524,10 @@ class Store:
                 for column_name, default_value in (
                     ("orchestrator_model", default_model),
                     ("orchestrator_effort", default_effort),
+                    ("orchestrator_service_tier", default_service_tier),
                     ("implementer_model", default_model),
                     ("implementer_effort", default_effort),
+                    ("implementer_service_tier", default_service_tier),
                 ):
                     if column_name not in conversation_columns:
                         connection.execute(
@@ -767,10 +775,11 @@ class Store:
                 """
                 INSERT INTO conversations(
                     id, title, naming_state, sandbox, autonomous,
-                    orchestrator_model, orchestrator_effort,
-                    implementer_model, implementer_effort, prompt_fingerprint,
+                    orchestrator_model, orchestrator_effort, orchestrator_service_tier,
+                    implementer_model, implementer_effort, implementer_service_tier,
+                    prompt_fingerprint,
                     peer_workspace, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -780,8 +789,10 @@ class Store:
                     int(autonomous),
                     orchestrator["model"],
                     orchestrator["effort"],
+                    orchestrator["service_tier"],
                     implementer["model"],
                     implementer["effort"],
+                    implementer["service_tier"],
                     prompt_fingerprint,
                     peer_workspace,
                     creation_time,
@@ -851,11 +862,11 @@ class Store:
         orchestrator_runtime: dict[str, str],
         implementer_runtime: dict[str, str],
     ) -> None:
-        """Change a role's model and effort, bounded by Codex resume compatibility.
+        """Change a role's model, effort, and tier within resume compatibility.
 
         Before the conversation starts anything goes. Once it has history, a role
-        may still move to a sibling model and to any effort — both are per-call
-        Codex options and the rollout stays resumable inside one family — but it
+        may still move to a sibling model, any effort, and any supported service
+        tier — all are per-call Codex options and the rollout stays resumable — but it
         may not cross families, because that rollout lives in the other family's
         ``CODEX_HOME`` under different auth.
         """
@@ -900,14 +911,18 @@ class Store:
                 """
                 UPDATE conversations
                 SET orchestrator_model = ?, orchestrator_effort = ?,
-                    implementer_model = ?, implementer_effort = ?, updated_at = ?
+                    orchestrator_service_tier = ?, implementer_model = ?,
+                    implementer_effort = ?, implementer_service_tier = ?,
+                    updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     orchestrator["model"],
                     orchestrator["effort"],
+                    orchestrator["service_tier"],
                     implementer["model"],
                     implementer["effort"],
+                    implementer["service_tier"],
                     time.time(),
                     conversation_id,
                 ),
@@ -1576,10 +1591,12 @@ class Store:
                 "orchestrator": {
                     "model": row["orchestrator_model"],
                     "effort": row["orchestrator_effort"],
+                    "serviceTier": row["orchestrator_service_tier"],
                 },
                 "implementer": {
                     "model": row["implementer_model"],
                     "effort": row["implementer_effort"],
+                    "serviceTier": row["implementer_service_tier"],
                 },
             },
             "prompt_fingerprint": row["prompt_fingerprint"],

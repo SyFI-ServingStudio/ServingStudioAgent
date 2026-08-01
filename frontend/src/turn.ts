@@ -56,7 +56,9 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
   let current: RolePhase | null = null;
 
   const runtimeFrom = (event: { model?: string; effort?: string }): CodexRoleRuntime | undefined =>
-    event.model ? { model: event.model, effort: event.effort ?? "" } : undefined;
+    event.model
+      ? { model: event.model, effort: event.effort ?? "", serviceTier: "default" }
+      : undefined;
 
   const openPhase = (role: Role, runtime?: CodexRoleRuntime): RolePhase => {
     round[role] += 1;

@@ -40,6 +40,7 @@ CODEX_DOCKER_IMAGE = os.environ.get(
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
 # Codex reasoning effort, passed per call as `-c model_reasoning_effort=...`.
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "xhigh")
+DEFAULT_CODEX_SERVICE_TIER = "default"
 CODEXDS_MODEL = os.environ.get("CODEXDS_MODEL", "deepseek-ai/DeepSeek-V4-Flash-0731")
 CODEXDS_REASONING_EFFORT = os.environ.get("CODEXDS_REASONING_EFFORT", "max")
 # Bearer token gating the agent-facing HTTP API (/api/agent/*, /api/eval).
@@ -121,6 +122,7 @@ class CodexModelSpec:
     family_id: str
     efforts: tuple[str, ...]
     default_effort: str
+    service_tiers: tuple[str, ...]
 
     @property
     def family(self) -> CodexFamilySpec:
@@ -224,6 +226,14 @@ def _family_registry(family: CodexFamilySpec) -> dict[str, CodexModelSpec]:
             if family.default_effort in efforts
             else str((entry or {}).get("default_reasoning_level") or efforts[-1])
         )
+        additional_service_tiers = tuple(
+            str(service_tier)
+            for service_tier in (entry or {}).get("additional_speed_tiers", [])
+            if service_tier
+        )
+        service_tiers = tuple(
+            dict.fromkeys((DEFAULT_CODEX_SERVICE_TIER, *additional_service_tiers))
+        )
         registry[model_id] = CodexModelSpec(
             model_id=model_id,
             label=str((entry or {}).get("display_name") or model_id),
@@ -232,6 +242,7 @@ def _family_registry(family: CodexFamilySpec) -> dict[str, CodexModelSpec]:
             default_effort=(
                 default_effort if default_effort in efforts else efforts[-1]
             ),
+            service_tiers=service_tiers,
         )
     return registry
 
@@ -269,14 +280,27 @@ def codex_model(model_id: str) -> CodexModelSpec:
         raise ValueError(f"unsupported Codex model: {model_id!r}") from exc
 
 
-def normalize_role_runtime(model_id: str | None, effort: str | None) -> dict[str, str]:
+def normalize_role_runtime(
+    model_id: str | None,
+    effort: str | None,
+    service_tier: str | None = None,
+) -> dict[str, str]:
     """Coerce one role's stored or requested selection onto the live registry."""
     try:
         model = codex_model(model_id or DEFAULT_CODEX_MODEL)
     except ValueError:
         model = codex_model(DEFAULT_CODEX_MODEL)
     chosen_effort = effort if effort in model.efforts else model.default_effort
-    return {"model": model.model_id, "effort": chosen_effort}
+    chosen_service_tier = (
+        service_tier
+        if service_tier in model.service_tiers
+        else DEFAULT_CODEX_SERVICE_TIER
+    )
+    return {
+        "model": model.model_id,
+        "effort": chosen_effort,
+        "service_tier": chosen_service_tier,
+    }
 
 
 def codex_model_catalog() -> list[dict[str, object]]:
@@ -288,6 +312,8 @@ def codex_model_catalog() -> list[dict[str, object]]:
             "familyLabel": model.family.label,
             "efforts": list(model.efforts),
             "defaultEffort": model.default_effort,
+            "serviceTiers": list(model.service_tiers),
+            "defaultServiceTier": DEFAULT_CODEX_SERVICE_TIER,
             "available": model.available,
         }
         for model in codex_model_registry().values()
@@ -350,7 +376,9 @@ def prompt_fingerprint(
         ("implementer", implementer_runtime),
     ):
         selection = normalize_role_runtime(
-            (runtime or {}).get("model"), (runtime or {}).get("effort")
+            (runtime or {}).get("model"),
+            (runtime or {}).get("effort"),
+            (runtime or {}).get("service_tier"),
         )
         model = codex_model(selection["model"])
         digest.update(role.encode("utf-8"))
@@ -360,6 +388,8 @@ def prompt_fingerprint(
         digest.update(model.model_id.encode("utf-8"))
         digest.update(b"\0")
         digest.update(selection["effort"].encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(selection["service_tier"].encode("utf-8"))
     digest.update(b"\0autonomous=")
     digest.update(str(autonomous).encode("utf-8"))
     return digest.hexdigest()[:16]

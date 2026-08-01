@@ -11,6 +11,7 @@ def _request(
     session_id: str | None = None,
     model_id: str = "gpt-5.6-sol",
     effort: str = "xhigh",
+    service_tier: str = "default",
     output_schema: str | None = None,
 ) -> CodexExecRequest:
     return CodexExecRequest(
@@ -23,6 +24,7 @@ def _request(
         session_id=session_id,
         model_id=model_id,
         effort=effort,
+        service_tier=service_tier,
         output_schema=output_schema,
     )
 
@@ -47,22 +49,38 @@ class CodexCommandTests(unittest.TestCase):
 
     def test_gpt_family_carries_the_selected_model_and_effort(self) -> None:
         command = build_codex_exec_command(
-            _request(model_id="gpt-5.6-luna", effort="medium")
+            _request(
+                model_id="gpt-5.6-luna", effort="medium", service_tier="fast"
+            )
         )
 
         self.assertIn("-m", command)
         self.assertIn("gpt-5.6-luna", command)
         self.assertIn('model_reasoning_effort="medium"', command)
+        self.assertIn('service_tier="fast"', command)
+
+    def test_deepseek_does_not_receive_an_unsupported_service_tier(self) -> None:
+        command = build_codex_exec_command(
+            _request(model_id=CODEXDS_MODEL, effort="max", service_tier="default")
+        )
+
+        self.assertFalse(any("service_tier=" in option for option in command))
 
     def test_resume_keeps_model_and_effort_options(self) -> None:
         """A within-family model switch happens on a resumed session."""
         command = build_codex_exec_command(
-            _request(session_id="session-1", model_id="gpt-5.6-terra", effort="high")
+            _request(
+                session_id="session-1",
+                model_id="gpt-5.6-terra",
+                effort="high",
+                service_tier="fast",
+            )
         )
 
         self.assertIn("resume", command)
         self.assertIn("gpt-5.6-terra", command)
         self.assertIn('model_reasoning_effort="high"', command)
+        self.assertIn('service_tier="fast"', command)
 
     def test_fresh_and_resumed_orchestrators_share_the_output_schema(self) -> None:
         schema = "/opt/vibesim/prompts/orchestrator.schema.json"

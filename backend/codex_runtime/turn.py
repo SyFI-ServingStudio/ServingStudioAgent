@@ -57,10 +57,12 @@ async def run_turn(
     orchestrator_selection = normalize_role_runtime(
         (orchestrator_runtime or {}).get("model"),
         (orchestrator_runtime or {}).get("effort"),
+        (orchestrator_runtime or {}).get("service_tier"),
     )
     implementer_selection = normalize_role_runtime(
         (implementer_runtime or {}).get("model"),
         (implementer_runtime or {}).get("effort"),
+        (implementer_runtime or {}).get("service_tier"),
     )
     log_event(
         LOG,
@@ -163,6 +165,7 @@ async def run_turn(
             turn_id=turn_id,
             model_id=orchestrator_selection["model"],
             effort=orchestrator_selection["effort"],
+            service_tier=orchestrator_selection["service_tier"],
             session_id=orchestrator_session,
             output_schema=ORCHESTRATOR_SCHEMA_IN_CONTAINER,
         ):
@@ -291,6 +294,7 @@ async def run_turn(
             turn_id=turn_id,
             model_id=implementer_selection["model"],
             effort=implementer_selection["effort"],
+            service_tier=implementer_selection["service_tier"],
             session_id=implementer_session,
         ):
             if ev["kind"] == "session":

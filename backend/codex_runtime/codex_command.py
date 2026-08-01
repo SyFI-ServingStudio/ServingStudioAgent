@@ -52,6 +52,15 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
         "--skip-git-repo-check",
         "--json",
     ]
+    # The GPT profile advertises Codex speed tiers; pass the selected tier on
+    # every call so a user's host config cannot silently change Agent cost or
+    # latency. Profiles without speed-tier support (for example local vLLM)
+    # keep their own provider-compatible config untouched.
+    if len(request.model.service_tiers) > 1:
+        codex_options[4:4] = [
+            "-c",
+            f'service_tier="{request.service_tier}"',
+        ]
     # Codex constrains every text agent message in the current tool loop, not
     # only the final item, so fresh and resumed orchestrator calls must share
     # the exact same progress/milestone/terminal envelope contract.
