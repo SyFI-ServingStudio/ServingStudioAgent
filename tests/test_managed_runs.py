@@ -13,6 +13,23 @@ from backend.store import Store, WorkspaceRegistry
 
 
 class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
+    def test_analyzer_resource_ids_are_typed_by_job_kind(self) -> None:
+        self.assertTrue(
+            app_module._valid_analyzer_resource_id("timing_predict", "p_prediction")
+        )
+        self.assertTrue(
+            app_module._valid_analyzer_resource_id("kernel_profile", "kp_profile")
+        )
+        self.assertTrue(
+            app_module._valid_analyzer_resource_id("kernel_measure", "km_measure")
+        )
+        self.assertFalse(
+            app_module._valid_analyzer_resource_id("kernel_profile", "km_measure")
+        )
+        self.assertFalse(
+            app_module._valid_analyzer_resource_id("kernel_measure", None)
+        )
+
     @staticmethod
     def _sweep_payload(experiment_id: str) -> dict:
         return {
@@ -173,11 +190,7 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                     app_module.RegisterManagedJob(
                         jobKind="kernel_profile",
                         artifactRoot="logs/20260731_0_single_gemm_profile",
-                        descriptor={
-                            "table": "single_gemm",
-                            "backend": "torch",
-                            "pointCount": 4,
-                        },
+                        analyzerResourceId="kp_profile_test",
                     ),
                     capability,
                 )
@@ -185,7 +198,6 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                     registration["jobId"],
                     app_module.UpdateManagedJob(
                         status="ready",
-                        summary={"axes": ["m"], "missingCount": 0},
                     ),
                     capability,
                 )
@@ -193,26 +205,17 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(artifact_root.exists())
             self.assertEqual(registration["resourceId"], ready["resourceId"])
             self.assertEqual(ready["jobKind"], "kernel_profile")
-            self.assertEqual(ready["artifactPath"], "20260731_0_single_gemm_profile")
-            self.assertEqual(ready["summary"]["axes"], ["m"])
-            artifact_root.mkdir(parents=True)
-            (artifact_root / "curve.json").write_text(
-                json.dumps(
-                    {
-                        "schemaVersion": 1,
-                        "resourceKind": "kernel_profile_curve",
-                        "axes": [{"key": "m", "values": [128, 256]}],
-                        "rows": [],
-                    }
-                )
-            )
+            self.assertNotIn("artifactPath", ready)
+            self.assertNotIn("descriptor", ready)
+            self.assertNotIn("summary", ready)
             with patch.object(app_module, "store", store):
                 resource = app_module.get_managed_job_resource(
                     "w_managed",
                     registration["resourceId"],
                 )
-            self.assertEqual(resource["curve"]["axes"][0]["key"], "m")
-            self.assertEqual(resource["files"], ["curve.json"])
+            self.assertEqual(resource["analyzerResourceId"], "kp_profile_test")
+            self.assertNotIn("curve", resource)
+            self.assertNotIn("files", resource)
             with patch.object(app_module, "store", store):
                 catalog = app_module.list_managed_jobs()
             self.assertEqual(len(catalog["jobs"]), 1)
@@ -222,6 +225,9 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(catalog["jobs"][0]["job_kind"], "kernel_profile")
             self.assertEqual(catalog["jobs"][0]["conversation_title"], "New chat")
+            self.assertNotIn("descriptor", catalog["jobs"][0])
+            self.assertNotIn("summary", catalog["jobs"][0])
+            self.assertNotIn("artifact_path", catalog["jobs"][0])
             self.assertEqual(
                 store.list_experiments(
                     "w_managed",
@@ -235,6 +241,50 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                     for event in store.list_turn_events("w_managed", "turn")
                 ],
                 ["job.requested", "job.ready"],
+            )
+
+    async def test_timing_job_links_to_analyzer_without_parsing_artifacts(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            main_dir = root / "main"
+            (main_dir / "logs").mkdir(parents=True)
+            registry = WorkspaceRegistry(root / "agent-workspaces", main_dir=main_dir)
+            registry.create("Managed", workspace_id="w_managed")
+            (registry.repo_path("w_managed") / "logs").mkdir(parents=True)
+            store = Store(registry)
+            store.create("w_managed", "conversation", "workspace-write")
+            store.start_turn("w_managed", "conversation", "turn")
+            capability = Capability(
+                token="token",
+                workspace_id="w_managed",
+                conversation_id="conversation",
+                turn_id="turn",
+                role="implementer",
+                expires_at=time.time() + 60,
+            )
+
+            with patch.object(app_module, "store", store):
+                registration = await app_module.register_managed_job(
+                    app_module.RegisterManagedJob(
+                        jobKind="timing_predict",
+                        artifactRoot="logs/predict_llama",
+                        analyzerResourceId="p_prediction_test",
+                    ),
+                    capability,
+                )
+                resource = app_module.get_managed_job_resource(
+                    "w_managed",
+                    registration["resourceId"],
+                )
+
+            self.assertEqual(
+                registration["analyzerResourceId"], "p_prediction_test"
+            )
+            self.assertEqual(resource["analyzerResourceId"], "p_prediction_test")
+            self.assertNotIn("files", resource)
+            self.assertNotIn("iterBreakdown", resource)
+            self.assertFalse(
+                (registry.repo_path("w_managed") / "logs" / "predict_llama").exists()
             )
 
     async def test_registers_dynamic_citations_only_for_the_current_turn(self) -> None:

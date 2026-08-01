@@ -40,6 +40,22 @@ workload-conservation. Deeper resources are:
 /operations/{iter_id}/{batch_id}/{operation_id}/cost-tree, and a cost-tree
 leaf's /kernel-throughput-analysis.
 
+Offline timing predictions are separate first-class resources. Start with
+/predictions, then follow /predictions/{prediction_id}/descriptor and /cases.
+Exact evidence is available below
+/predictions/{prediction_id}/cases/{case_id}/operations/{operation_id}/cost-tree,
+with the same leaf /kernel-throughput-analysis, case optimality-kernel-ladder,
+case optimality-waterfall, and prediction-level kernel-input-distribution
+resources. Prediction responses intentionally contain no pool or worker identity.
+
+Kernel profiling and measurement results are first-class resources too. Start
+with /kernel-profiles or /kernel-measurements, then follow their descriptor
+links. A profile exposes /kernel-profiles/{profile_id}/curve. A measurement
+exposes /kernel-measurements/{measurement_id}/summary and only the plot links
+declared by its descriptor. Resolve GPU ceilings with
+/hardware/gpus?name={gpu_name}; catalog TFLOPS are dense peaks and interconnect
+bandwidth includes both bidirectional and derived one-way values.
+
 Set source="host" for an experiment selected in the Analyzer UI. Set
 source="workspace" for simulations created inside this agent workspace.
 Only relative GET paths below /api/v1/ are accepted. Values are returned exactly

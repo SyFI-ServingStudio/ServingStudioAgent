@@ -27,7 +27,7 @@ from typing import Any, Iterator
 
 WORKSPACE_ID_PATTERN = re.compile(r"^w_[a-zA-Z0-9_-]{1,64}$")
 SCHEMA_VERSION = 1
-DATABASE_SCHEMA_VERSION = 3
+DATABASE_SCHEMA_VERSION = 4
 NAMING_STATES = {"pending", "generated", "manual"}
 
 
@@ -432,6 +432,7 @@ class Store:
                         job_kind TEXT NOT NULL DEFAULT 'simulation',
                         artifact_path TEXT,
                         resource_id TEXT,
+                        analyzer_resource_id TEXT,
                         descriptor_json TEXT NOT NULL DEFAULT '{}',
                         summary_json TEXT,
                         experiment_id TEXT,
@@ -486,6 +487,7 @@ class Store:
                     ("job_kind", "TEXT NOT NULL DEFAULT 'simulation'"),
                     ("artifact_path", "TEXT"),
                     ("resource_id", "TEXT"),
+                    ("analyzer_resource_id", "TEXT"),
                     ("descriptor_json", "TEXT NOT NULL DEFAULT '{}'"),
                     ("summary_json", "TEXT"),
                 ):
@@ -541,7 +543,8 @@ class Store:
                 """
                 SELECT jobs.id, jobs.conversation_id, conversations.title AS conversation_title,
                        jobs.turn_id, jobs.status, jobs.job_kind, jobs.artifact_path,
-                       jobs.resource_id, jobs.descriptor_json, jobs.summary_json,
+                       jobs.resource_id, jobs.analyzer_resource_id,
+                       jobs.descriptor_json, jobs.summary_json,
                        jobs.created_at, jobs.updated_at
                 FROM execution_jobs AS jobs
                 JOIN conversations ON conversations.id = jobs.conversation_id
@@ -559,6 +562,7 @@ class Store:
                 "job_kind": row["job_kind"],
                 "artifact_path": row["artifact_path"],
                 "resource_id": row["resource_id"],
+                "analyzer_resource_id": row["analyzer_resource_id"],
                 "descriptor": json.loads(row["descriptor_json"] or "{}"),
                 "summary": (
                     json.loads(row["summary_json"]) if row["summary_json"] else None
@@ -1058,7 +1062,7 @@ class Store:
         role: str,
         job_kind: str,
         artifact_path: str,
-        descriptor: dict[str, Any],
+        analyzer_resource_id: str | None = None,
     ) -> dict[str, Any]:
         """Create a typed non-simulation job linked directly to a conversation."""
         job_id = f"j_{uuid.uuid4().hex}"
@@ -1069,7 +1073,7 @@ class Store:
                 """
                 INSERT INTO execution_jobs(
                     id, conversation_id, turn_id, role, status,
-                    job_kind, artifact_path, resource_id, descriptor_json,
+                    job_kind, artifact_path, resource_id, analyzer_resource_id,
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, 'requested', ?, ?, ?, ?, ?, ?)
                 """,
@@ -1081,7 +1085,7 @@ class Store:
                     job_kind,
                     artifact_path,
                     resource_id,
-                    json.dumps(descriptor, ensure_ascii=False, sort_keys=True),
+                    analyzer_resource_id,
                     now,
                     now,
                 ),
@@ -1089,13 +1093,12 @@ class Store:
         return {
             "job_id": job_id,
             "resource_id": resource_id,
+            "analyzer_resource_id": analyzer_resource_id,
             "conversation_id": conversation_id,
             "turn_id": turn_id,
             "status": "requested",
             "job_kind": job_kind,
             "artifact_path": artifact_path,
-            "descriptor": descriptor,
-            "summary": None,
         }
 
     def experiment_by_path(
@@ -1129,7 +1132,6 @@ class Store:
         status: str,
         conversation_id: str | None = None,
         turn_id: str | None = None,
-        summary: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         now = time.time()
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
@@ -1144,18 +1146,13 @@ class Store:
                 and row["conversation_id"] != conversation_id
             ) or (turn_id is not None and row["turn_id"] != turn_id):
                 return None
-            summary_json = (
-                json.dumps(summary, ensure_ascii=False, sort_keys=True)
-                if summary is not None
-                else row["summary_json"]
-            )
             connection.execute(
                 """
                 UPDATE execution_jobs
-                SET status = ?, summary_json = ?, updated_at = ?
+                SET status = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (status, summary_json, now, job_id),
+                (status, now, job_id),
             )
             if row["experiment_id"]:
                 connection.execute(
@@ -1172,8 +1169,7 @@ class Store:
                 "job_kind": row["job_kind"],
                 "artifact_path": row["artifact_path"],
                 "resource_id": row["resource_id"],
-                "descriptor": json.loads(row["descriptor_json"] or "{}"),
-                "summary": json.loads(summary_json) if summary_json else None,
+                "analyzer_resource_id": row["analyzer_resource_id"],
             }
 
     def artifact_job_by_resource(
@@ -1195,16 +1191,12 @@ class Store:
         return {
             "job_id": row["id"],
             "resource_id": row["resource_id"],
+            "analyzer_resource_id": row["analyzer_resource_id"],
             "conversation_id": row["conversation_id"],
             "turn_id": row["turn_id"],
             "role": row["role"],
             "status": row["status"],
             "job_kind": row["job_kind"],
-            "artifact_path": row["artifact_path"],
-            "descriptor": json.loads(row["descriptor_json"] or "{}"),
-            "summary": (
-                json.loads(row["summary_json"]) if row["summary_json"] else None
-            ),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }

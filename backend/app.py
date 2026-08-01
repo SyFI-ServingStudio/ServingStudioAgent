@@ -48,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -250,6 +251,9 @@ def _project_job_activity(
             {
                 "jobKind": str(payload["jobKind"]),
                 "resourceId": str(payload.get("resourceId") or ""),
+                "analyzerResourceId": str(
+                    payload.get("analyzerResourceId") or ""
+                ),
                 "artifactPath": str(payload.get("artifactPath") or ""),
                 "descriptor": payload.get("descriptor") or {},
                 "summary": payload.get("summary"),
@@ -402,12 +406,14 @@ class RegisterManagedJob(BaseModel):
 
     job_kind: str = Field(alias="jobKind", min_length=1)
     artifact_root: str = Field(alias="artifactRoot", min_length=1)
-    descriptor: dict = Field(default_factory=dict)
+    analyzer_resource_id: str | None = Field(
+        default=None,
+        alias="analyzerResourceId",
+    )
 
 
 class UpdateManagedJob(BaseModel):
     status: str
-    summary: dict | None = None
 
 
 class RegisterManagedCitationDictionary(BaseModel):
@@ -473,8 +479,26 @@ def list_all_conversations() -> dict:
 
 @app.get("/api/jobs")
 def list_managed_jobs() -> dict:
-    """Read-only Page 0 catalog for navigable non-simulation job results."""
-    return {"jobs": store.list_all_artifact_jobs()}
+    """Return conversation ownership overlays; Analyzer owns result catalogs."""
+    fields = {
+        "workspace_id",
+        "job_id",
+        "conversation_id",
+        "conversation_title",
+        "turn_id",
+        "status",
+        "job_kind",
+        "resource_id",
+        "analyzer_resource_id",
+        "created_at",
+        "updated_at",
+    }
+    return {
+        "jobs": [
+            {key: value for key, value in job.items() if key in fields}
+            for job in store.list_all_artifact_jobs()
+        ]
+    }
 
 
 def _create_workspace(body: NewWorkspace) -> dict:
@@ -511,88 +535,42 @@ def get_workspace(workspace_id: str) -> dict:
 
 @app.get("/api/workspaces/{workspace_id}/jobs/{resource_id}")
 def get_managed_job_resource(workspace_id: str, resource_id: str) -> dict:
-    """Return one job-scoped result snapshot for the integrated analysis pane."""
+    """Return only the conversation-owned overlay for an Analyzer resource.
+
+    Result payloads belong to Analyzer. The browser resolves
+    ``analyzerResourceId`` there; this backend never reparses job artifacts.
+    """
     job = store.artifact_job_by_resource(workspace_id, resource_id)
     if job is None:
         raise HTTPException(status_code=404, detail="managed job resource not found")
-    artifact_root = _managed_job_artifact_root(workspace_id, job)
-
-    files: list[str] = []
-    if artifact_root.is_dir():
-        for path in sorted(artifact_root.rglob("*")):
-            if len(files) >= 200:
-                break
-            if path.is_file() and artifact_root in path.resolve().parents:
-                files.append(path.relative_to(artifact_root).as_posix())
-
-    curve = _read_bounded_json(artifact_root / "curve.json", max_bytes=16_000_000)
-    iter_breakdown = _read_bounded_text(
-        artifact_root / "reports" / "iter_breakdown.ans",
-        max_bytes=2_000_000,
-    )
     return {
         "schemaVersion": 1,
         "workspaceId": workspace_id,
         "jobId": job["job_id"],
         "resourceId": job["resource_id"],
+        "analyzerResourceId": job["analyzer_resource_id"],
         "jobKind": job["job_kind"],
         "status": job["status"],
-        "artifactPath": job["artifact_path"],
-        "descriptor": job["descriptor"],
-        "summary": job["summary"],
-        "files": files,
-        "curve": curve,
-        "iterBreakdown": iter_breakdown,
     }
 
 
-@app.get("/api/workspaces/{workspace_id}/jobs/{resource_id}/artifact")
-def get_managed_job_artifact(
-    workspace_id: str,
-    resource_id: str,
-    path: str = Query(min_length=1),
-) -> FileResponse:
-    job = store.artifact_job_by_resource(workspace_id, resource_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="managed job resource not found")
-    artifact_root = _managed_job_artifact_root(workspace_id, job)
-    requested = Path(path)
-    if requested.is_absolute() or ".." in requested.parts:
-        raise HTTPException(status_code=403, detail="invalid managed job artifact path")
-    resolved = (artifact_root / requested).resolve(strict=False)
-    if artifact_root not in resolved.parents or not resolved.is_file():
-        raise HTTPException(status_code=404, detail="managed job artifact not found")
-    return FileResponse(resolved)
+_ANALYZER_RESOURCE_PREFIXES = {
+    "timing_predict": "p_",
+    "kernel_profile": "kp_",
+    "kernel_measure": "km_",
+}
 
 
-def _managed_job_artifact_root(workspace_id: str, job: dict) -> Path:
-    logs_root = store.registry.logs_path(workspace_id).resolve()
-    artifact_root = (logs_root / job["artifact_path"]).resolve(strict=False)
-    if logs_root not in artifact_root.parents:
-        raise HTTPException(
-            status_code=403, detail="managed job artifact escaped logs root"
-        )
-    return artifact_root
-
-
-def _read_bounded_json(path: Path, *, max_bytes: int) -> dict | None:
-    text = _read_bounded_text(path, max_bytes=max_bytes)
-    if text is None:
-        return None
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _read_bounded_text(path: Path, *, max_bytes: int) -> str | None:
-    try:
-        if not path.is_file() or path.stat().st_size > max_bytes:
-            return None
-        return path.read_text("utf-8")
-    except OSError:
-        return None
+def _valid_analyzer_resource_id(job_kind: str, resource_id: str | None) -> bool:
+    prefix = _ANALYZER_RESOURCE_PREFIXES.get(job_kind)
+    if prefix is None or not isinstance(resource_id, str):
+        return False
+    suffix = resource_id.removeprefix(prefix)
+    return (
+        resource_id.startswith(prefix)
+        and 1 <= len(suffix) <= 64
+        and re.fullmatch(r"[a-z0-9_]+", suffix) is not None
+    )
 
 
 @app.patch("/api/workspaces/{workspace_id}")
@@ -888,6 +866,11 @@ async def register_managed_job(
     allowed_job_kinds = {"timing_predict", "kernel_profile", "kernel_measure"}
     if body.job_kind not in allowed_job_kinds:
         raise HTTPException(status_code=400, detail="unsupported managed job kind")
+    if not _valid_analyzer_resource_id(body.job_kind, body.analyzer_resource_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{body.job_kind} requires a valid analyzerResourceId",
+        )
     if store.get(capability.workspace_id, capability.conversation_id) is None:
         raise HTTPException(status_code=404, detail="managed conversation not found")
     _host_root, relative_path, approved_root = _managed_artifact_root(
@@ -901,7 +884,7 @@ async def register_managed_job(
         role=capability.role,
         job_kind=body.job_kind,
         artifact_path=relative_path,
-        descriptor=body.descriptor,
+        analyzer_resource_id=body.analyzer_resource_id,
     )
     event = {
         "kind": "job.requested",
@@ -911,8 +894,7 @@ async def register_managed_job(
         "jobId": job["job_id"],
         "jobKind": job["job_kind"],
         "resourceId": job["resource_id"],
-        "artifactPath": job["artifact_path"],
-        "descriptor": job["descriptor"],
+        "analyzerResourceId": job["analyzer_resource_id"],
         "status": "requested",
     }
     store.append_turn_event(
@@ -933,6 +915,7 @@ async def register_managed_job(
         "turnId": capability.turn_id,
         "jobId": job["job_id"],
         "resourceId": job["resource_id"],
+        "analyzerResourceId": job["analyzer_resource_id"],
         "approvedRoot": approved_root,
     }
 
@@ -958,7 +941,6 @@ async def update_managed_job(
         status=body.status,
         conversation_id=capability.conversation_id,
         turn_id=capability.turn_id,
-        summary=body.summary,
     )
     if job is None or job["job_kind"] == "simulation":
         raise HTTPException(status_code=404, detail="managed job not found")
@@ -971,9 +953,7 @@ async def update_managed_job(
         "jobId": job_id,
         "jobKind": job["job_kind"],
         "resourceId": job["resource_id"],
-        "artifactPath": job["artifact_path"],
-        "descriptor": job["descriptor"],
-        "summary": job["summary"],
+        "analyzerResourceId": job["analyzer_resource_id"],
         "status": body.status,
     }
     store.append_turn_event(
