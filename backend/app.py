@@ -12,6 +12,7 @@ Endpoints:
   GET    /api/workspaces/{wid}/conversations/{cid}/stream -> reconnect
   POST   /api/workspaces/{wid}/conversations/{cid}/cancel -> cancel
   GET    /api/workspaces/{wid}/conversations/{cid}/experiments -> linked results
+  GET    /api/file, /api/file/meta, /api/file/list -> workspace file preview
   POST   /api/internal/managed-runs/*   -> simulation compatibility callbacks
   POST   /api/internal/managed-jobs/*   -> typed capability-gated job callbacks
   POST   /api/eval                          -> JSON single-turn eval (evaluation only)
@@ -68,7 +69,13 @@ from .analyzer_context import (
     persisted_context,
     prompt_with_analyzer_context,
 )
-from .artifacts import list_artifacts, resolve_artifact
+from .artifacts import (
+    artifact_meta,
+    list_artifacts,
+    read_text_preview,
+    resolve_artifact,
+    resolve_preview,
+)
 from .codex_runtime.config import (
     DEFAULT_CODEX_EFFORT,
     DEFAULT_CODEX_FAMILY,
@@ -1568,38 +1575,61 @@ def delete_conversation(workspace_id: str, cid: str) -> dict:
     return {"ok": True}
 
 
-# Serve image files the assistant references in markdown (e.g. generated plots under
-# ../main/logs/...). Relative paths resolve against ../main (the assistant's workdir).
-# Guarded: must stay inside the workspace, and only image extensions are served.
-_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"}
+# Serve files the assistant references in markdown or in its prose (generated
+# plots, run summaries, source it just edited). Relative paths resolve against
+# the workspace repo (the assistant's workdir); `/workspace/...` container paths
+# are accepted verbatim. These three routes are NOT token-gated, so they go
+# through `guard_preview`: workspace containment plus a build/VCS/credential
+# denylist. Reading is always bounded — see artifacts.MAX_PREVIEW_BYTES.
 
 
 @app.get("/api/file")
 def serve_file(
     path: str = Query(...), workspace_id: str = Query(default="w_main")
-) -> FileResponse:
-    requested = Path(path)
+) -> Response:
     try:
-        root = store.registry.repo_path(workspace_id)
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=404, detail="workspace not found") from exc
-    if requested == Path("/workspace") or Path("/workspace") in requested.parents:
-        requested = root / requested.relative_to("/workspace")
-    elif not requested.is_absolute():
-        requested = root / requested
-    try:
-        resolved = requested.resolve(strict=True)
-    except (OSError, RuntimeError):
-        raise HTTPException(status_code=404, detail="not found")
+        resolved, kind = resolve_preview(workspace_id, path)
+    except (ValueError, FileNotFoundError, PermissionError) as exc:
+        raise _artifact_http_error(exc) from exc
+    if kind == "image":
+        return FileResponse(str(resolved))
+    if kind == "binary":
+        return FileResponse(
+            str(resolved), filename=resolved.name, media_type="application/octet-stream"
+        )
+    text, truncated = read_text_preview(resolved)
+    return Response(
+        content=text,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "X-File-Truncated": "1" if truncated else "0",
+            "X-File-Total-Bytes": str(resolved.stat().st_size),
+        },
+    )
 
-    allowed_root = root.resolve()
-    if resolved != allowed_root and allowed_root not in resolved.parents:
-        raise HTTPException(status_code=403, detail="outside workspace")
-    if resolved.suffix.lower() not in _IMAGE_EXTS:
-        raise HTTPException(status_code=415, detail="unsupported file type")
-    if not resolved.is_file():
-        raise HTTPException(status_code=404, detail="not a file")
-    return FileResponse(str(resolved))
+
+@app.get("/api/file/meta")
+def serve_file_meta(
+    path: str = Query(...), workspace_id: str = Query(default="w_main")
+) -> dict:
+    try:
+        return artifact_meta(workspace_id, path)
+    except (ValueError, FileNotFoundError, PermissionError) as exc:
+        raise _artifact_http_error(exc) from exc
+
+
+@app.get("/api/file/list")
+def serve_file_list(
+    path: str | None = Query(default=None),
+    workspace_id: str = Query(default="w_main"),
+    limit: int = Query(default=2000, ge=1, le=20000),
+) -> dict:
+    try:
+        return list_artifacts(
+            workspace_id, subdir=path, limit=limit, recursive=False, preview=True
+        )
+    except (ValueError, FileNotFoundError, PermissionError) as exc:
+        raise _artifact_http_error(exc) from exc
 
 
 @app.post("/api/workspaces/{workspace_id}/conversations/{cid}/messages")
