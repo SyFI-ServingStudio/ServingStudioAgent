@@ -2,8 +2,11 @@ import unittest
 
 from backend.codex_runtime.prompts import (
     _implementer_prompt,
+    _orchestrator_continue_prompt,
     _orchestrator_handoff_prompt,
     _orchestrator_prompt,
+    _orchestrator_repair_prompt,
+    parse_orchestrator,
 )
 
 
@@ -66,6 +69,38 @@ class RolePromptTest(unittest.TestCase):
         self.assertIn("/workspace/conversation-123_plan.md", prompt)
         self.assertIn("Delegated task:\nChange one file.", prompt)
         self.assertIn("Implementer summary:\nImplemented and tested.", prompt)
+
+    def test_continue_prompt_reasserts_nonterminal_work(self) -> None:
+        prompt = _orchestrator_continue_prompt(
+            "Checking recovery state.",
+            conversation_id="conversation-123",
+        )
+
+        self.assertIn("previous decision was `continue_work`", prompt)
+        self.assertIn("Resume the same task", prompt)
+        self.assertIn("Checking recovery state.", prompt)
+        self.assertIn("/workspace/conversation-123_progress.md", prompt)
+
+    def test_parse_continue_work_decision(self) -> None:
+        decision = parse_orchestrator(
+            '{"action":"continue_work","message":"Checking\\nstate","task":""}'
+        )
+
+        self.assertEqual(
+            decision,
+            {"action": "continue_work", "message": "Checking\nstate"},
+        )
+
+    def test_repair_prompt_preserves_unparsed_answer(self) -> None:
+        prompt = _orchestrator_repair_prompt(
+            "Analysis complete. Throughput rises with TP.",
+            conversation_id="conversation-123",
+        )
+
+        self.assertIn("could not be parsed", prompt)
+        self.assertIn("Do not redo completed analysis", prompt)
+        self.assertIn("Analysis complete. Throughput rises with TP.", prompt)
+        self.assertIn("/workspace/conversation-123_plan.md", prompt)
 
 
 if __name__ == "__main__":

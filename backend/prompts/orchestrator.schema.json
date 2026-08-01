@@ -7,7 +7,7 @@
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["user_message", "run_implementer"]
+      "enum": ["user_message", "run_implementer", "continue_work"]
     },
     "message": { "type": "string" },
     "task": { "type": "string" }

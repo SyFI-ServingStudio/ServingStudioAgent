@@ -21,12 +21,17 @@ from .docker import container_running, ensure_container
 from .prompts import (
     _format_implementer_summaries,
     _implementer_prompt,
+    _orchestrator_continue_prompt,
     _orchestrator_handoff_prompt,
     _orchestrator_prompt,
+    _orchestrator_repair_prompt,
     compose_final_message,
     parse_orchestrator,
 )
 from .workspace import prepare_workspace
+
+MAX_ORCHESTRATOR_CONTINUATIONS = 3
+MAX_ORCHESTRATOR_DECISION_REPAIRS = 2
 
 
 async def run_turn(
@@ -123,6 +128,8 @@ async def run_turn(
     orchestrator_session = sessions.get("orchestrator")
     implementer_session = sessions.get("implementer")
     implementer_summaries: list[str] = []
+    orchestrator_continuations = 0
+    orchestrator_decision_repairs = 0
     next_orchestrator_prompt = _orchestrator_prompt(
         prompt,
         is_resume=bool(orchestrator_session),
@@ -159,13 +166,21 @@ async def run_turn(
 
         decision = parse_orchestrator(orchestrator_text)
         if decision is None:
+            orchestrator_decision_repairs += 1
             log_event(
                 LOG,
                 "orchestrator.parse_failed",
                 conversation_id=conversation_id,
                 turn_id=turn_id,
+                repair_count=orchestrator_decision_repairs,
                 text_preview=compact_text(orchestrator_text),
             )
+            if orchestrator_decision_repairs <= MAX_ORCHESTRATOR_DECISION_REPAIRS:
+                next_orchestrator_prompt = _orchestrator_repair_prompt(
+                    orchestrator_text,
+                    conversation_id=conversation_id,
+                )
+                continue
             sections = []
             if implementer_summaries:
                 sections.append(
@@ -195,6 +210,38 @@ async def run_turn(
                 ),
             }
             return
+
+        if decision["action"] == "continue_work":
+            orchestrator_continuations += 1
+            progress_message = decision["message"].strip()
+            if orchestrator_continuations > MAX_ORCHESTRATOR_CONTINUATIONS:
+                log_event(
+                    LOG,
+                    "orchestrator.continuation_limit",
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    continuation_count=orchestrator_continuations,
+                )
+                yield {
+                    "kind": "final",
+                    "text": (
+                        "The orchestrator repeatedly stopped before reaching a "
+                        "completed answer. Please continue the conversation to retry."
+                    ),
+                }
+                return
+            if progress_message:
+                yield {
+                    "kind": "intermediate_output",
+                    "role": "orchestrator",
+                    "backend": orchestrator_backend,
+                    "text": progress_message,
+                }
+            next_orchestrator_prompt = _orchestrator_continue_prompt(
+                progress_message,
+                conversation_id=conversation_id,
+            )
+            continue
 
         if mode == "read-only":
             body = (

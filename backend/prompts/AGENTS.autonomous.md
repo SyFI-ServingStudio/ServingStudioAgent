@@ -130,6 +130,18 @@ To notify the user directly:
 { "action": "user_message", "message": "...", "task": "" }
 ```
 
+This is terminal: `message` must contain the completed answer or a real blocker,
+never a progress update or a description of work you are about to do. If the
+provider requires the current call to end while local orchestration work
+remains, use:
+
+```json
+{ "action": "continue_work", "message": "Short progress update", "task": "" }
+```
+
+The runtime resumes the same orchestrator session. Prefer normal commentary and
+continuing within the current call when possible.
+
 If you ran commands yourself, still use the same final shape:
 
 ```json

@@ -60,6 +60,41 @@ def _orchestrator_handoff_prompt(
     )
 
 
+def _orchestrator_continue_prompt(
+    progress: str,
+    *,
+    conversation_id: str,
+) -> str:
+    """Resume a non-terminal orchestrator checkpoint in the same session."""
+    return (
+        f"{_orchestrator_contract(conversation_id)}\n\n"
+        "Your previous decision was `continue_work`, so the user-facing task is "
+        "not complete. Resume the same task now from the durable recovery state. "
+        "Do not merely repeat the progress update. Continue working until you can "
+        "return a completed `user_message`, a real blocker, or a concrete "
+        "`run_implementer` handoff.\n\n"
+        f"Previous progress update:\n{progress}\n"
+    )
+
+
+def _orchestrator_repair_prompt(
+    unparsed_output: str,
+    *,
+    conversation_id: str,
+) -> str:
+    """Ask a resumed orchestrator to repair only its decision envelope."""
+    return (
+        f"{_orchestrator_contract(conversation_id)}\n\n"
+        "Your previous final output could not be parsed as the required decision "
+        "JSON. Do not redo completed analysis. Return exactly one JSON object with "
+        "the fields `action`, `message`, and `task`. If the text below is the "
+        "completed answer, preserve it in `message` with action `user_message`. "
+        "If work remains, use `continue_work`; if delegation is required, use "
+        "`run_implementer`. Do not add text outside the JSON object.\n\n"
+        f"Unparsed previous output:\n{unparsed_output}\n"
+    )
+
+
 def _implementer_prompt(
     task: str,
     *,
@@ -106,6 +141,11 @@ def parse_orchestrator(text: str) -> dict[str, Any] | None:
                 "task": _normalize_orchestrator_text_field(payload["task"]),
             }
         if action == "user_message" and isinstance(payload.get("message"), str):
+            return {
+                "action": action,
+                "message": _normalize_orchestrator_text_field(payload["message"]),
+            }
+        if action == "continue_work" and isinstance(payload.get("message"), str):
             return {
                 "action": action,
                 "message": _normalize_orchestrator_text_field(payload["message"]),
