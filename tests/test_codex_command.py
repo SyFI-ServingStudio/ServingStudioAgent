@@ -2,6 +2,7 @@ import unittest
 
 from backend.codex_runtime.codex_command import build_codex_exec_command
 from backend.codex_runtime.exec_types import CodexExecRequest
+from backend.managed_context import MANAGED_CONTEXT_CONTAINER_PATH
 
 
 def _request(*, session_id: str | None = None) -> CodexExecRequest:
@@ -42,11 +43,11 @@ class CodexCommandTests(unittest.TestCase):
         )
         self.assertIn(
             "mcp_servers.analyzer.env.VIBESIM_MANAGED_RUN_CONTEXT="
-            '"/home/kanzhu/.codex/managed-run.json"',
+            f'"{MANAGED_CONTEXT_CONTAINER_PATH}"',
             command,
         )
         self.assertIn(
-            "VIBESIM_MANAGED_JOB_CONTEXT=/home/kanzhu/.codex/managed-run.json",
+            f"VIBESIM_MANAGED_JOB_CONTEXT={MANAGED_CONTEXT_CONTAINER_PATH}",
             command,
         )
 
