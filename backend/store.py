@@ -25,10 +25,39 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from .codex_runtime.config import (
+    CODEX_FAMILIES,
+    DEFAULT_CODEX_EFFORT,
+    DEFAULT_CODEX_FAMILY,
+    DEFAULT_CODEX_MODEL,
+    LEGACY_BACKEND_MODELS,
+    codex_model,
+    normalize_role_runtime,
+)
+
 WORKSPACE_ID_PATTERN = re.compile(r"^w_[a-zA-Z0-9_-]{1,64}$")
 SCHEMA_VERSION = 1
-DATABASE_SCHEMA_VERSION = 4
+DATABASE_SCHEMA_VERSION = 5
 NAMING_STATES = {"pending", "generated", "manual"}
+
+
+def _normalized_runtime(runtime: dict[str, str] | None) -> dict[str, str]:
+    return normalize_role_runtime(
+        (runtime or {}).get("model"), (runtime or {}).get("effort")
+    )
+
+
+def _imported_runtime(conversation: dict[str, Any], role: str) -> dict[str, str]:
+    """Read one role's runtime from an exported conversation, old shape or new.
+
+    Legacy exports carry ``codex_backends: {role: "traditional"}``; the backend
+    id resolves to that family's default model.
+    """
+    runtime = (conversation.get("codex_runtime") or {}).get(role)
+    if isinstance(runtime, dict):
+        return _normalized_runtime(runtime)
+    legacy = (conversation.get("codex_backends") or {}).get(role)
+    return _normalized_runtime({"model": legacy} if legacy else None)
 
 
 def default_workspaces_root() -> Path:
@@ -366,11 +395,14 @@ class Store:
     def _initialize_database(self, workspace_id: str) -> None:
         database_path = self.registry.database_path(workspace_id)
         database_path.parent.mkdir(parents=True, exist_ok=True)
+        default_model = DEFAULT_CODEX_MODEL
+        default_effort = DEFAULT_CODEX_EFFORT
+        default_family = DEFAULT_CODEX_FAMILY
         with self._lock_for(workspace_id):
             connection = sqlite3.connect(database_path)
             try:
                 connection.executescript(
-                    """
+                    f"""
                     PRAGMA journal_mode = WAL;
                     PRAGMA foreign_keys = ON;
                     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -383,8 +415,10 @@ class Store:
                         naming_state TEXT NOT NULL DEFAULT 'manual',
                         sandbox TEXT NOT NULL,
                         autonomous INTEGER NOT NULL,
-                        orchestrator_backend TEXT NOT NULL DEFAULT 'traditional',
-                        implementer_backend TEXT NOT NULL DEFAULT 'traditional',
+                        orchestrator_model TEXT NOT NULL DEFAULT '{default_model}',
+                        orchestrator_effort TEXT NOT NULL DEFAULT '{default_effort}',
+                        implementer_model TEXT NOT NULL DEFAULT '{default_model}',
+                        implementer_effort TEXT NOT NULL DEFAULT '{default_effort}',
                         prompt_fingerprint TEXT,
                         peer_workspace TEXT,
                         created_at REAL NOT NULL,
@@ -405,7 +439,7 @@ class Store:
                         conversation_id TEXT NOT NULL REFERENCES conversations(id)
                             ON DELETE CASCADE,
                         role TEXT NOT NULL,
-                        backend_id TEXT NOT NULL DEFAULT 'traditional',
+                        family TEXT NOT NULL DEFAULT '{default_family}',
                         session_id TEXT NOT NULL,
                         PRIMARY KEY (conversation_id, role)
                     );
@@ -436,7 +470,7 @@ class Store:
                         artifact_path TEXT,
                         resource_id TEXT,
                         analyzer_resource_id TEXT,
-                        descriptor_json TEXT NOT NULL DEFAULT '{}',
+                        descriptor_json TEXT NOT NULL DEFAULT '{{}}',
                         summary_json TEXT,
                         experiment_id TEXT,
                         experiment_path TEXT,
@@ -478,26 +512,65 @@ class Store:
                         ADD COLUMN naming_state TEXT NOT NULL DEFAULT 'manual'
                         """
                     )
-                for column_name in (
-                    "orchestrator_backend",
-                    "implementer_backend",
+                # Pre-registry databases stored one backend id per role. A role now
+                # picks a model plus a reasoning effort, so widen those two columns
+                # into four and carry the old ids onto their family's default model.
+                for column_name, default_value in (
+                    ("orchestrator_model", default_model),
+                    ("orchestrator_effort", default_effort),
+                    ("implementer_model", default_model),
+                    ("implementer_effort", default_effort),
                 ):
                     if column_name not in conversation_columns:
                         connection.execute(
                             f"ALTER TABLE conversations ADD COLUMN {column_name} "
-                            "TEXT NOT NULL DEFAULT 'traditional'"
+                            f"TEXT NOT NULL DEFAULT '{default_value}'"
                         )
+                for legacy_column, model_column, effort_column in (
+                    (
+                        "orchestrator_backend",
+                        "orchestrator_model",
+                        "orchestrator_effort",
+                    ),
+                    ("implementer_backend", "implementer_model", "implementer_effort"),
+                ):
+                    if legacy_column not in conversation_columns:
+                        continue
+                    for backend_id, model_id in LEGACY_BACKEND_MODELS.items():
+                        family = CODEX_FAMILIES[codex_model(model_id).family_id]
+                        connection.execute(
+                            f"UPDATE conversations SET {model_column} = ?, "
+                            f"{effort_column} = ? WHERE {legacy_column} = ?",
+                            (model_id, family.default_effort, backend_id),
+                        )
+                    connection.execute(
+                        f"ALTER TABLE conversations DROP COLUMN {legacy_column}"
+                    )
                 session_columns = {
                     row[1]
                     for row in connection.execute(
                         "PRAGMA table_info(codex_sessions)"
                     ).fetchall()
                 }
-                if "backend_id" not in session_columns:
-                    connection.execute(
-                        "ALTER TABLE codex_sessions ADD COLUMN backend_id "
-                        "TEXT NOT NULL DEFAULT 'traditional'"
-                    )
+                # A session belongs to a provider profile, not to one model: the
+                # column always meant "which auth home recorded this rollout", so
+                # it is renamed to say so and its values move onto family ids.
+                if "family" not in session_columns:
+                    if "backend_id" in session_columns:
+                        connection.execute(
+                            "ALTER TABLE codex_sessions "
+                            "RENAME COLUMN backend_id TO family"
+                        )
+                        for backend_id, model_id in LEGACY_BACKEND_MODELS.items():
+                            connection.execute(
+                                "UPDATE codex_sessions SET family = ? WHERE family = ?",
+                                (codex_model(model_id).family_id, backend_id),
+                            )
+                    else:
+                        connection.execute(
+                            "ALTER TABLE codex_sessions ADD COLUMN family "
+                            f"TEXT NOT NULL DEFAULT '{default_family}'"
+                        )
                 execution_job_columns = {
                     row[1]
                     for row in connection.execute(
@@ -676,8 +749,8 @@ class Store:
         prompt_fingerprint: str | None = None,
         *,
         autonomous: bool = False,
-        orchestrator_backend: str = "traditional",
-        implementer_backend: str = "traditional",
+        orchestrator_runtime: dict[str, str] | None = None,
+        implementer_runtime: dict[str, str] | None = None,
         peer_workspace: str | None = None,
         created_at: float | None = None,
         updated_at: float | None = None,
@@ -687,14 +760,17 @@ class Store:
         WorkspaceRegistry._validate_naming_state(naming_state)
         creation_time = created_at if created_at is not None else time.time()
         modification_time = updated_at if updated_at is not None else creation_time
+        orchestrator = _normalized_runtime(orchestrator_runtime)
+        implementer = _normalized_runtime(implementer_runtime)
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             connection.execute(
                 """
                 INSERT INTO conversations(
                     id, title, naming_state, sandbox, autonomous,
-                    orchestrator_backend, implementer_backend, prompt_fingerprint,
+                    orchestrator_model, orchestrator_effort,
+                    implementer_model, implementer_effort, prompt_fingerprint,
                     peer_workspace, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -702,8 +778,10 @@ class Store:
                     naming_state,
                     sandbox,
                     int(autonomous),
-                    orchestrator_backend,
-                    implementer_backend,
+                    orchestrator["model"],
+                    orchestrator["effort"],
+                    implementer["model"],
+                    implementer["effort"],
                     prompt_fingerprint,
                     peer_workspace,
                     creation_time,
@@ -765,26 +843,31 @@ class Store:
                 (sandbox, int(autonomous), time.time(), conversation_id),
             )
 
-    def update_codex_backends(
+    def update_codex_runtime(
         self,
         workspace_id: str,
         conversation_id: str,
         *,
-        orchestrator_backend: str,
-        implementer_backend: str,
+        orchestrator_runtime: dict[str, str],
+        implementer_runtime: dict[str, str],
     ) -> None:
-        """Change role backends only before the conversation starts.
+        """Change a role's model and effort, bounded by Codex resume compatibility.
 
-        Backend identity is part of Codex session compatibility. The API keeps
-        this create-time choice immutable once user-visible history or a turn
-        exists, so no provider can accidentally resume another provider's
-        rollout.
+        Before the conversation starts anything goes. Once it has history, a role
+        may still move to a sibling model and to any effort — both are per-call
+        Codex options and the rollout stays resumable inside one family — but it
+        may not cross families, because that rollout lives in the other family's
+        ``CODEX_HOME`` under different auth.
         """
+        orchestrator = _normalized_runtime(orchestrator_runtime)
+        implementer = _normalized_runtime(implementer_runtime)
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
-            exists = connection.execute(
-                "SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)
+            current = connection.execute(
+                "SELECT orchestrator_model, implementer_model FROM conversations "
+                "WHERE id = ?",
+                (conversation_id,),
             ).fetchone()
-            if exists is None:
+            if current is None:
                 raise KeyError(conversation_id)
             message_count = int(
                 connection.execute(
@@ -798,25 +881,43 @@ class Store:
                     (conversation_id,),
                 ).fetchone()[0]
             )
-            if message_count or turn_count:
-                raise ValueError("conversation runtime is locked")
+            started = bool(message_count or turn_count)
+            changed_families = [
+                role
+                for role, selection, stored in (
+                    ("orchestrator", orchestrator, current["orchestrator_model"]),
+                    ("implementer", implementer, current["implementer_model"]),
+                )
+                if codex_model(selection["model"]).family_id
+                != codex_model(stored).family_id
+            ]
+            if started and changed_families:
+                raise ValueError(
+                    "model family is locked after the conversation starts: "
+                    + ", ".join(changed_families)
+                )
             connection.execute(
                 """
                 UPDATE conversations
-                SET orchestrator_backend = ?, implementer_backend = ?, updated_at = ?
+                SET orchestrator_model = ?, orchestrator_effort = ?,
+                    implementer_model = ?, implementer_effort = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
-                    orchestrator_backend,
-                    implementer_backend,
+                    orchestrator["model"],
+                    orchestrator["effort"],
+                    implementer["model"],
+                    implementer["effort"],
                     time.time(),
                     conversation_id,
                 ),
             )
-            connection.execute(
-                "DELETE FROM codex_sessions WHERE conversation_id = ?",
-                (conversation_id,),
-            )
+            for role in changed_families:
+                # Only a family change orphans a rollout; a sibling model resumes it.
+                connection.execute(
+                    "DELETE FROM codex_sessions WHERE conversation_id = ? AND role = ?",
+                    (conversation_id, role),
+                )
 
     def add_message(
         self,
@@ -869,7 +970,7 @@ class Store:
         workspace_id: str,
         conversation_id: str,
         prompt_fingerprint: str,
-        backends: dict[str, str] | None = None,
+        runtimes: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, str]:
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             row = connection.execute(
@@ -888,16 +989,21 @@ class Store:
                     (prompt_fingerprint, conversation_id),
                 )
             rows = connection.execute(
-                "SELECT role, backend_id, session_id FROM codex_sessions "
+                "SELECT role, family, session_id FROM codex_sessions "
                 "WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchall()
-            selected_backends = backends or {}
+            # A rollout is resumable by any model of the family that recorded it,
+            # so the reuse test compares families, never the exact model.
+            selected_families = {
+                role: codex_model(selection["model"]).family_id
+                for role, selection in (runtimes or {}).items()
+            }
             return {
                 session["role"]: session["session_id"]
                 for session in rows
-                if session["backend_id"]
-                == selected_backends.get(session["role"], session["backend_id"])
+                if session["family"]
+                == selected_families.get(session["role"], session["family"])
             }
 
     def set_codex_session(
@@ -906,20 +1012,20 @@ class Store:
         conversation_id: str,
         role: str,
         session_id: str | None,
-        backend_id: str = "traditional",
+        family: str = DEFAULT_CODEX_FAMILY,
     ) -> None:
         if not role or not session_id:
             return
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             connection.execute(
                 """
-                INSERT INTO codex_sessions(conversation_id, role, backend_id, session_id)
+                INSERT INTO codex_sessions(conversation_id, role, family, session_id)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(conversation_id, role)
-                DO UPDATE SET backend_id = excluded.backend_id,
+                DO UPDATE SET family = excluded.family,
                               session_id = excluded.session_id
                 """,
-                (conversation_id, role, backend_id, session_id),
+                (conversation_id, role, family, session_id),
             )
 
     def delete(self, workspace_id: str, conversation_id: str) -> None:
@@ -1215,6 +1321,24 @@ class Store:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def get_experiment(
+        self,
+        workspace_id: str,
+        experiment_id: str,
+    ) -> dict[str, Any] | None:
+        """Resolve a stable Analyzer experiment inside one workspace boundary."""
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            row = connection.execute(
+                """
+                SELECT id, relative_path, status, origin_kind, job_id,
+                       created_at, updated_at
+                FROM experiments
+                WHERE id = ?
+                """,
+                (experiment_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def update_job(
         self,
         workspace_id: str,
@@ -1342,12 +1466,8 @@ class Store:
             conversation.get("sandbox", "workspace-write"),
             conversation.get("prompt_fingerprint"),
             autonomous=bool(conversation.get("autonomous", False)),
-            orchestrator_backend=(conversation.get("codex_backends") or {}).get(
-                "orchestrator", "traditional"
-            ),
-            implementer_backend=(conversation.get("codex_backends") or {}).get(
-                "implementer", "traditional"
-            ),
+            orchestrator_runtime=_imported_runtime(conversation, "orchestrator"),
+            implementer_runtime=_imported_runtime(conversation, "implementer"),
             peer_workspace=conversation.get("peer_workspace"),
             created_at=source_created_at,
             updated_at=source_updated_at,
@@ -1373,9 +1493,9 @@ class Store:
                 conversation_id,
                 role,
                 session_id,
-                backend_id=(conversation.get("codex_backends") or {}).get(
-                    role, "traditional"
-                ),
+                family=codex_model(
+                    _imported_runtime(conversation, role)["model"]
+                ).family_id,
             )
         self.restore_imported_timestamps(
             workspace_id,
@@ -1442,7 +1562,7 @@ class Store:
                 (conversation_id,),
             ).fetchall()
         session_rows = connection.execute(
-            "SELECT role, backend_id, session_id FROM codex_sessions "
+            "SELECT role, family, session_id FROM codex_sessions "
             "WHERE conversation_id = ?",
             (conversation_id,),
         ).fetchall()
@@ -1452,9 +1572,15 @@ class Store:
             "naming_state": row["naming_state"],
             "sandbox": row["sandbox"],
             "autonomous": bool(row["autonomous"]),
-            "codex_backends": {
-                "orchestrator": row["orchestrator_backend"],
-                "implementer": row["implementer_backend"],
+            "codex_runtime": {
+                "orchestrator": {
+                    "model": row["orchestrator_model"],
+                    "effort": row["orchestrator_effort"],
+                },
+                "implementer": {
+                    "model": row["implementer_model"],
+                    "effort": row["implementer_effort"],
+                },
             },
             "prompt_fingerprint": row["prompt_fingerprint"],
             "peer_workspace": row["peer_workspace"],

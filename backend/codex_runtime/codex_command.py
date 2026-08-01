@@ -19,7 +19,6 @@ from .config import (
     CODEX_DOCKER_UV_CACHE_DIR,
     CODEX_DOCKER_UV_PROJECT_ENVIRONMENT,
     MAIN_LOCK_SHA,
-    codex_backend,
     role_codex_home_in_container,
 )
 from .exec_types import CodexExecRequest
@@ -30,7 +29,12 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
     command.extend(["codex", "exec"])
 
     codex_options = [
-        *codex_backend(request.backend_id).cli_options,
+        # Model and effort are always explicit: both are per-conversation choices
+        # now, so neither may fall back to the profile's config.toml default.
+        "-m",
+        request.model_id,
+        "-c",
+        f'model_reasoning_effort="{request.effort}"',
         "-c",
         f'mcp_servers.analyzer.command="{ANALYZER_MCP_PYTHON}"',
         "-c",
@@ -48,6 +52,11 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
         "--skip-git-repo-check",
         "--json",
     ]
+    # Codex constrains every text agent message in the current tool loop, not
+    # only the final item, so fresh and resumed orchestrator calls must share
+    # the exact same progress/milestone/terminal envelope contract.
+    if request.output_schema:
+        codex_options.extend(["--output-schema", request.output_schema])
     if request.is_resume:
         # `codex exec resume` only reads stdin when the prompt argument is "-".
         command.append("resume")
@@ -55,8 +64,6 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
         command.extend([request.session_id or "", "-"])
         return command
 
-    if request.output_schema:
-        codex_options.extend(["--output-schema", request.output_schema])
     command.extend(codex_options)
     return command
 

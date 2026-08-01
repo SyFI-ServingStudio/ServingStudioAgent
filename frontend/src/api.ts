@@ -1,10 +1,10 @@
 import type {
-  CodexBackendId,
-  CodexBackendOption,
-  CodexBackendSelection,
+  CodexRuntimeCatalog,
+  CodexRuntimeSelection,
   Conversation,
   ConversationListResponse,
   SandboxMode,
+  TerminalOutcome,
   Tokens,
   TurnEvent,
 } from "./types";
@@ -14,10 +14,7 @@ export const DEFAULT_SANDBOX: SandboxMode = "workspace-write";
 export const MESSAGE_PAGE_SIZE = 20;
 const MAIN_WORKSPACE_ID = "w_main";
 
-export async function listCodexBackends(): Promise<{
-  backends: CodexBackendOption[];
-  defaults: CodexBackendSelection;
-}> {
+export async function listCodexBackends(): Promise<CodexRuntimeCatalog> {
   const response = await fetch("/api/codex-backends");
   if (!response.ok) {
     throw new Error(`failed to list Codex backends: ${response.status}`);
@@ -56,12 +53,12 @@ export async function listConversations(): Promise<ConversationListResponse> {
 export async function createConversation(
   sandbox: SandboxMode,
   autonomous: boolean,
-  codexBackends: CodexBackendSelection,
+  codexRuntime: CodexRuntimeSelection,
 ): Promise<Conversation> {
   const response = await fetch(`/api/workspaces/${MAIN_WORKSPACE_ID}/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sandbox, autonomous, codex_backends: codexBackends }),
+    body: JSON.stringify({ sandbox, autonomous, codex_runtime: codexRuntime }),
   });
   if (!response.ok) {
     throw new Error(`failed to create conversation: ${response.status}`);
@@ -92,7 +89,7 @@ export async function getConversation(
 
 export async function updateConversationRuntime(
   id: string,
-  codexBackends: CodexBackendSelection,
+  codexRuntime: CodexRuntimeSelection,
 ): Promise<Conversation> {
   const location = conversationLocation(id);
   const response = await fetch(
@@ -100,7 +97,7 @@ export async function updateConversationRuntime(
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codex_backends: codexBackends }),
+      body: JSON.stringify({ codex_runtime: codexRuntime }),
     },
   );
   if (!response.ok) throw new Error(`failed to update conversation runtime: ${response.status}`);
@@ -120,10 +117,10 @@ export async function deleteConversation(id: string): Promise<void> {
 
 export interface StreamHandlers {
   session?: (data: unknown) => void;
-  progress?: (text: string) => void;
+  toolCall?: (text: string) => void;
   /** One render-relevant turn event (intermediate_output/decision/usage/implementer/final). */
   event?: (event: TurnEvent) => void;
-  done?: (text: string) => void;
+  done?: (text: string, outcome: TerminalOutcome) => void;
 }
 
 export async function streamTurn(
@@ -184,7 +181,7 @@ async function consumeTurnStream(
   handlers: StreamHandlers,
 ): Promise<void> {
   if (!response.ok || !response.body) {
-    handlers.done?.(`(request failed: ${response.status})`);
+    handlers.done?.(`(request failed: ${response.status})`, "final_answer");
     return;
   }
 
@@ -239,14 +236,16 @@ function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
     case "session":
       handlers.session?.(data);
       break;
-    case "progress":
-      handlers.progress?.(String(data.text || ""));
+    case "tool_call":
+      handlers.toolCall?.(String(data.text || ""));
       break;
     case "intermediate_output":
       handlers.event?.({
         kind: "intermediate_output",
         role: data.role ? String(data.role) : "",
-        backend: String(data.backend || "traditional") as CodexBackendId,
+        model: data.model ? String(data.model) : undefined,
+        effort: data.effort ? String(data.effort) : undefined,
+        level: data.level === "milestone" ? "milestone" : "progress",
         text: data.text ? String(data.text) : "",
       });
       break;
@@ -261,7 +260,8 @@ function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
       handlers.event?.({
         kind: "usage",
         role: data.role ? String(data.role) : "",
-        backend: String(data.backend || "traditional") as CodexBackendId,
+        model: data.model ? String(data.model) : undefined,
+        effort: data.effort ? String(data.effort) : undefined,
         duration_ms: typeof data.duration_ms === "number" ? data.duration_ms : 0,
         tokens: parseTokens(data.tokens),
       });
@@ -270,8 +270,12 @@ function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
       handlers.event?.({ kind: "implementer", text: String(data.text || "") });
       break;
     case "done":
-      handlers.event?.({ kind: "final", text: String(data.text || "") });
-      handlers.done?.(String(data.text || ""));
+      {
+        const outcome: TerminalOutcome =
+          data.outcome === "request_user_input" ? "request_user_input" : "final_answer";
+        handlers.event?.({ kind: "final", text: String(data.text || ""), outcome });
+        handlers.done?.(String(data.text || ""), outcome);
+      }
       break;
   }
 }

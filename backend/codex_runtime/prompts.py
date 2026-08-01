@@ -49,31 +49,15 @@ def _orchestrator_handoff_prompt(
         "You do not share the implementer Codex session. Treat the text below as "
         "the explicit handoff record, review it against your own orchestration "
         "context, and return exactly one JSON object.\n\n"
-        "If the work is complete, risky, blocked, or needs a user choice, use "
-        "`user_message`. If another bounded code-change, validation, or large "
-        "exploration task is still needed, use `run_implementer` with that "
+        "If the work is complete, use `final_answer`. If clarification, "
+        "authorization, or an external choice is genuinely required, use "
+        "`request_user_input`. If another bounded code-change, validation, or "
+        "large exploration task is still needed, use `delegate` with that "
         "specific follow-up task.\n\n"
         "Delegated task:\n"
         f"{task}\n\n"
         "Implementer summary:\n"
         f"{implementer_text}\n"
-    )
-
-
-def _orchestrator_continue_prompt(
-    progress: str,
-    *,
-    conversation_id: str,
-) -> str:
-    """Resume a non-terminal orchestrator checkpoint in the same session."""
-    return (
-        f"{_orchestrator_contract(conversation_id)}\n\n"
-        "Your previous decision was `continue_work`, so the user-facing task is "
-        "not complete. Resume the same task now from the durable recovery state. "
-        "Do not merely repeat the progress update. Continue working until you can "
-        "return a completed `user_message`, a real blocker, or a concrete "
-        "`run_implementer` handoff.\n\n"
-        f"Previous progress update:\n{progress}\n"
     )
 
 
@@ -88,10 +72,29 @@ def _orchestrator_repair_prompt(
         "Your previous final output could not be parsed as the required decision "
         "JSON. Do not redo completed analysis. Return exactly one JSON object with "
         "the fields `action`, `message`, and `task`. If the text below is the "
-        "completed answer, preserve it in `message` with action `user_message`. "
-        "If work remains, use `continue_work`; if delegation is required, use "
-        "`run_implementer`. Do not add text outside the JSON object.\n\n"
+        "completed answer, preserve it in `message` with action `final_answer`. "
+        "If user input is genuinely required, use `request_user_input`; if a "
+        "separate implementer task is required, use `delegate`. Do not end with "
+        "a progress update and do not add text outside the JSON object.\n\n"
         f"Unparsed previous output:\n{unparsed_output}\n"
+    )
+
+
+def _orchestrator_continue_prompt(
+    action: str,
+    message: str,
+    *,
+    conversation_id: str,
+) -> str:
+    """Resume after a non-terminal envelope was emitted as the final item."""
+    return (
+        f"{_orchestrator_contract(conversation_id)}\n\n"
+        f"Your previous call ended with a non-terminal `{action}` update. The "
+        "runtime already showed it to the user. Continue the same work from that "
+        "checkpoint without repeating completed analysis. End this call only with "
+        "`final_answer`, `request_user_input`, or `delegate`; use `progress` and "
+        "`milestone` only for commentary emitted while you keep working.\n\n"
+        f"Last update:\n{message}\n"
     )
 
 
@@ -135,29 +138,50 @@ def parse_orchestrator(text: str) -> dict[str, Any] | None:
         if not isinstance(payload, dict):
             continue
         action = payload.get("action")
-        if action == "run_implementer" and isinstance(payload.get("task"), str):
+        message = payload.get("message")
+        task = payload.get("task")
+        message_is_empty = message is None or (
+            isinstance(message, str) and not message.strip()
+        )
+        task_is_empty = task is None or (
+            isinstance(task, str) and not task.strip()
+        )
+        if action in {"progress", "milestone"} and isinstance(
+            message, str
+        ) and message.strip() and task_is_empty:
             return {
                 "action": action,
-                "task": _normalize_orchestrator_text_field(payload["task"]),
+                "message": _normalize_orchestrator_text_field(message),
             }
-        if action == "user_message" and isinstance(payload.get("message"), str):
+        if action in {"delegate", "run_implementer"} and isinstance(
+            task, str
+        ) and task.strip() and message_is_empty:
             return {
-                "action": action,
-                "message": _normalize_orchestrator_text_field(payload["message"]),
+                "action": "delegate",
+                "task": _normalize_orchestrator_text_field(task),
             }
-        if action == "continue_work" and isinstance(payload.get("message"), str):
+        if action in {"final_answer", "respond", "user_message"} and isinstance(
+            message, str
+        ) and message.strip() and task_is_empty:
             return {
-                "action": action,
-                "message": _normalize_orchestrator_text_field(payload["message"]),
+                "action": "final_answer",
+                "message": _normalize_orchestrator_text_field(message),
+            }
+        if action == "request_user_input" and isinstance(
+            message, str
+        ) and message.strip() and task_is_empty:
+            return {
+                "action": "request_user_input",
+                "message": _normalize_orchestrator_text_field(message),
             }
         if action is None and isinstance(payload.get("message"), str):
             return {
-                "action": "user_message",
+                "action": "final_answer",
                 "message": _normalize_orchestrator_text_field(payload["message"]),
             }
         if action is None and payload:
             return {
-                "action": "user_message",
+                "action": "final_answer",
                 "message": json.dumps(payload, ensure_ascii=False, indent=2),
             }
     return None

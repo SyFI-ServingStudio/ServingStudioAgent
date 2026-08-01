@@ -32,7 +32,8 @@ unchanged and not token-gated.
 Browser turns run independently of any one HTTP connection, so a refreshed page
 can replay and continue the active SSE stream. The message endpoint streams
 Server-Sent Events: `session` (role Codex session id),
-`progress` (transient activity lines), `intermediate_output` (assistant commentary),
+`tool_call` (transient command/tool activity), `intermediate_output` (assistant
+progress or milestone commentary),
 `decision` (orchestrator→implementer delegated task), `usage` (per-call duration +
 token breakdown), `implementer` (implementer summary), then `done` (stored final
 answer). `implementer`/`decision`/`usage` can repeat inside one browser turn when the
@@ -52,7 +53,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Literal
+from typing import AsyncIterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -69,12 +70,17 @@ from .analyzer_context import (
 )
 from .artifacts import list_artifacts, resolve_artifact
 from .codex_runtime.config import (
-    DEFAULT_CODEX_BACKEND,
+    DEFAULT_CODEX_EFFORT,
+    DEFAULT_CODEX_FAMILY,
+    DEFAULT_CODEX_MODEL,
     DEFAULT_SANDBOX,
     SANDBOX_MODES,
     VIBESIM_API_TOKEN,
-    codex_backend,
-    codex_backend_catalog,
+    codex_family_catalog,
+    codex_model,
+    codex_model_catalog,
+    codex_model_registry,
+    normalize_role_runtime,
     prompt_fingerprint,
 )
 from .codex_runtime.docker import cleanup_conversation
@@ -274,7 +280,13 @@ def _recoverable_turn_activity(workspace_id: str, turn_id: str) -> list[dict]:
                 {
                     "kind": kind,
                     "role": str(payload.get("role") or "orchestrator"),
-                    "backend": str(payload.get("backend") or "traditional"),
+                    "model": str(payload.get("model") or ""),
+                    "effort": str(payload.get("effort") or ""),
+                    "level": (
+                        "milestone"
+                        if payload.get("level") == "milestone"
+                        else "progress"
+                    ),
                     "text": str(payload.get("text") or ""),
                 }
             )
@@ -293,7 +305,8 @@ def _recoverable_turn_activity(workspace_id: str, turn_id: str) -> list[dict]:
                 {
                     "kind": kind,
                     "role": str(payload.get("role") or ""),
-                    "backend": str(payload.get("backend") or "traditional"),
+                    "model": str(payload.get("model") or ""),
+                    "effort": str(payload.get("effort") or ""),
                     "duration_ms": int(payload.get("duration_ms") or 0),
                     "tokens": payload.get("tokens") or {},
                 }
@@ -369,22 +382,29 @@ def _autonomous_for_turn(conv: dict, requested_autonomous: bool) -> bool:
     return requested_autonomous
 
 
-CodexBackendId = Literal["traditional", "codexds"]
+class RoleRuntime(BaseModel):
+    """One role's Codex model plus its reasoning effort."""
+
+    model: str = DEFAULT_CODEX_MODEL
+    effort: str = DEFAULT_CODEX_EFFORT
+
+    # `model_` is Pydantic's own namespace; `model` here is a plain field name.
+    model_config = ConfigDict(protected_namespaces=())
 
 
-class RoleBackendSelection(BaseModel):
-    orchestrator: CodexBackendId = DEFAULT_CODEX_BACKEND
-    implementer: CodexBackendId = DEFAULT_CODEX_BACKEND
+class ConversationRuntime(BaseModel):
+    orchestrator: RoleRuntime = Field(default_factory=RoleRuntime)
+    implementer: RoleRuntime = Field(default_factory=RoleRuntime)
 
 
 class UpdateConversationRuntime(BaseModel):
-    codex_backends: RoleBackendSelection
+    codex_runtime: ConversationRuntime
 
 
 class NewConversation(BaseModel):
     sandbox: str = DEFAULT_SANDBOX
     autonomous: bool = False
-    codex_backends: RoleBackendSelection = Field(default_factory=RoleBackendSelection)
+    codex_runtime: ConversationRuntime = Field(default_factory=ConversationRuntime)
     # Co-evolution (used by vibe-serve): host path to the caller's candidate
     # workspace to bind read-only at /candidate in this conversation's container.
     peer_workspace: str | None = None
@@ -413,27 +433,55 @@ class RegisterManagedRun(BaseModel):
     axes: list[str] = Field(default_factory=list)
 
 
-def _backend_ids(selection: RoleBackendSelection | dict) -> dict[str, str]:
-    if isinstance(selection, RoleBackendSelection):
-        return selection.model_dump()
-    return {
-        "orchestrator": str(selection.get("orchestrator") or DEFAULT_CODEX_BACKEND),
-        "implementer": str(selection.get("implementer") or DEFAULT_CODEX_BACKEND),
-    }
+def _role_runtimes(
+    selection: ConversationRuntime | dict | None,
+) -> dict[str, dict[str, str]]:
+    """Coerce a request body or a stored conversation onto the live registry."""
+    raw = (
+        selection.model_dump()
+        if isinstance(selection, ConversationRuntime)
+        else (selection or {})
+    )
+    runtimes: dict[str, dict[str, str]] = {}
+    for role in ("orchestrator", "implementer"):
+        requested = raw.get(role)
+        requested = requested if isinstance(requested, dict) else {}
+        if requested.get("model") and requested["model"] not in codex_model_registry():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "unknown_codex_model",
+                    "model": requested["model"],
+                },
+            )
+        runtimes[role] = normalize_role_runtime(
+            requested.get("model"), requested.get("effort")
+        )
+    return runtimes
 
 
-def _require_available_backends(backends: dict[str, str]) -> None:
+def _session_family(event: dict, runtimes: dict[str, dict[str, str]]) -> str:
+    """Which auth profile recorded this rollout — the resume-compatibility key."""
+    role = str(event.get("role") or "")
+    model_id = str(event.get("model") or "") or runtimes.get(role, {}).get("model", "")
+    try:
+        return codex_model(model_id).family_id
+    except ValueError:
+        return DEFAULT_CODEX_FAMILY
+
+
+def _require_available_runtimes(runtimes: dict[str, dict[str, str]]) -> None:
     unavailable = [
-        backend_id
-        for backend_id in backends.values()
-        if not codex_backend(backend_id).available
+        codex_model(selection["model"]).family_id
+        for selection in runtimes.values()
+        if not codex_model(selection["model"]).available
     ]
     if unavailable:
         raise HTTPException(
             status_code=409,
             detail={
-                "code": "codex_backend_unavailable",
-                "backends": sorted(set(unavailable)),
+                "code": "codex_family_unavailable",
+                "families": sorted(set(unavailable)),
             },
         )
 
@@ -505,12 +553,18 @@ def list_workspaces() -> dict:
 
 @app.get("/api/codex-backends")
 def list_codex_backends() -> dict:
-    """Return the safe, server-owned backend choices shared by both UIs."""
+    """Return the safe, server-owned model choices shared by both UIs.
+
+    Models and their effort ladders come from each family's on-disk Codex model
+    catalog, so the selector cannot offer something the runtime cannot run.
+    """
+    default_runtime = {"model": DEFAULT_CODEX_MODEL, "effort": DEFAULT_CODEX_EFFORT}
     return {
-        "backends": codex_backend_catalog(),
+        "models": codex_model_catalog(),
+        "families": codex_family_catalog(),
         "defaults": {
-            "orchestrator": DEFAULT_CODEX_BACKEND,
-            "implementer": DEFAULT_CODEX_BACKEND,
+            "orchestrator": dict(default_runtime),
+            "implementer": dict(default_runtime),
         },
     }
 
@@ -659,13 +713,13 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
         store.registry.get(workspace_id)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
-    backends = _backend_ids(body.codex_backends)
-    _require_available_backends(backends)
+    runtimes = _role_runtimes(body.codex_runtime)
+    _require_available_runtimes(runtimes)
     cid = uuid.uuid4().hex[:12]
     fingerprint = prompt_fingerprint(
         autonomous=body.autonomous,
-        orchestrator_backend=backends["orchestrator"],
-        implementer_backend=backends["implementer"],
+        orchestrator_runtime=runtimes["orchestrator"],
+        implementer_runtime=runtimes["implementer"],
     )
     log_event(
         LOG,
@@ -674,7 +728,7 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
         conversation_id=cid,
         sandbox=body.sandbox,
         autonomous=body.autonomous,
-        codex_backends=backends,
+        codex_runtime=runtimes,
         prompt_fingerprint=fingerprint,
     )
     conversation = store.create(
@@ -683,8 +737,8 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
         body.sandbox,
         fingerprint,
         autonomous=body.autonomous,
-        orchestrator_backend=backends["orchestrator"],
-        implementer_backend=backends["implementer"],
+        orchestrator_runtime=runtimes["orchestrator"],
+        implementer_runtime=runtimes["implementer"],
         peer_workspace=body.peer_workspace,
         naming_state="pending",
     )
@@ -697,14 +751,14 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
 def update_conversation_runtime(
     workspace_id: str, cid: str, body: UpdateConversationRuntime
 ) -> dict:
-    backends = _backend_ids(body.codex_backends)
-    _require_available_backends(backends)
+    runtimes = _role_runtimes(body.codex_runtime)
+    _require_available_runtimes(runtimes)
     try:
-        store.update_codex_backends(
+        store.update_codex_runtime(
             workspace_id,
             cid,
-            orchestrator_backend=backends["orchestrator"],
-            implementer_backend=backends["implementer"],
+            orchestrator_runtime=runtimes["orchestrator"],
+            implementer_runtime=runtimes["implementer"],
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="conversation not found") from exc
@@ -1063,22 +1117,24 @@ def register_managed_analyzer_citations(
     capability: Capability = Depends(require_managed_capability),
 ) -> dict:
     """Register evidence discovered after an Agent-first turn has started."""
-    linked_experiment = next(
-        (
-            experiment
-            for experiment in store.list_experiments(
-                capability.workspace_id,
-                conversation_id=capability.conversation_id,
-            )
-            if experiment["id"] == body.experiment_id
-            and experiment["turn_id"] == capability.turn_id
-        ),
-        None,
+    workspace_experiment = store.get_experiment(
+        capability.workspace_id,
+        body.experiment_id,
     )
-    if linked_experiment is None:
+    if workspace_experiment is None:
+        # Direct/legacy experiments are Analyzer resources but have no managed
+        # SQLite row. Their exact payload carries the registry workspace id;
+        # managed local Analyzer payloads use an implementation-local id and
+        # therefore must take the registered-experiment path above.
+        if body.analysis.get("workspace_id") != capability.workspace_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Analyzer experiment does not belong to this workspace",
+            )
+    elif workspace_experiment["status"] != "ready":
         raise HTTPException(
-            status_code=403,
-            detail="experiment was not produced by this managed turn",
+            status_code=409,
+            detail="Analyzer experiment is not ready",
         )
     try:
         dictionary = build_aggregate_citation_dictionary(
@@ -1206,13 +1262,13 @@ def agent_create_conversation(
         store.registry.get(workspace_id)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
-    backends = _backend_ids(body.codex_backends)
-    _require_available_backends(backends)
+    runtimes = _role_runtimes(body.codex_runtime)
+    _require_available_runtimes(runtimes)
     cid = uuid.uuid4().hex[:12]
     fingerprint = prompt_fingerprint(
         autonomous=body.autonomous,
-        orchestrator_backend=backends["orchestrator"],
-        implementer_backend=backends["implementer"],
+        orchestrator_runtime=runtimes["orchestrator"],
+        implementer_runtime=runtimes["implementer"],
     )
     log_event(
         LOG,
@@ -1221,7 +1277,7 @@ def agent_create_conversation(
         conversation_id=cid,
         sandbox=body.sandbox,
         autonomous=body.autonomous,
-        codex_backends=backends,
+        codex_runtime=runtimes,
         prompt_fingerprint=fingerprint,
         peer_workspace=body.peer_workspace,
         eager=body.eager,
@@ -1232,8 +1288,8 @@ def agent_create_conversation(
         body.sandbox,
         fingerprint,
         autonomous=body.autonomous,
-        orchestrator_backend=backends["orchestrator"],
-        implementer_backend=backends["implementer"],
+        orchestrator_runtime=runtimes["orchestrator"],
+        implementer_runtime=runtimes["implementer"],
         peer_workspace=body.peer_workspace,
         naming_state="pending",
     )
@@ -1294,11 +1350,11 @@ async def agent_send_message(
         else bool(conv.get("autonomous", False))
     )
     autonomous = _autonomous_for_turn(conv, requested_autonomous)
-    backends = _backend_ids(conv.get("codex_backends") or {})
+    runtimes = _role_runtimes(conv.get("codex_runtime") or {})
     fingerprint = prompt_fingerprint(
         autonomous=autonomous,
-        orchestrator_backend=backends["orchestrator"],
-        implementer_backend=backends["implementer"],
+        orchestrator_runtime=runtimes["orchestrator"],
+        implementer_runtime=runtimes["implementer"],
     )
     turn_id = uuid.uuid4().hex[:10]
     store.update_runtime_settings(
@@ -1315,7 +1371,7 @@ async def agent_send_message(
         analyzer_context=persisted_context(body.analyzer_context),
     )
     sessions = store.sessions_for_prompt(
-        workspace_id, cid, fingerprint, backends=backends
+        workspace_id, cid, fingerprint, runtimes=runtimes
     )
     store.start_turn(workspace_id, cid, turn_id)
     log_event(
@@ -1352,8 +1408,8 @@ async def agent_send_message(
                 prompt_fingerprint=fingerprint,
                 autonomous=autonomous,
                 peer_dir=conv.get("peer_workspace"),
-                orchestrator_backend=backends["orchestrator"],
-                implementer_backend=backends["implementer"],
+                orchestrator_runtime=runtimes["orchestrator"],
+                implementer_runtime=runtimes["implementer"],
             ):
                 if ev.get("kind") == "session":
                     store.set_codex_session(
@@ -1361,10 +1417,7 @@ async def agent_send_message(
                         cid,
                         ev.get("role", ""),
                         ev.get("session_id"),
-                        backend_id=str(
-                            ev.get("backend")
-                            or backends.get(ev.get("role", ""), "traditional")
-                        ),
+                        family=_session_family(ev, runtimes),
                     )
                 store.append_turn_event(
                     workspace_id,
@@ -1393,6 +1446,8 @@ async def agent_send_message(
         result["failure"] = failure
         if not result["final"]:
             result["final"] = failure["message"] if failure else "(no answer)"
+        if failure is None and result["outcome"] is None:
+            result["outcome"] = "final_answer"
         citation_dictionary = _latest_turn_citation_dictionary(
             workspace_id, turn_id, body.analyzer_context
         )
@@ -1401,13 +1456,25 @@ async def agent_send_message(
         result["citation_dictionary_id"] = (
             citation_dictionary.identity if citation_dictionary else None
         )
+        activity = _managed_turn_activity(workspace_id, turn_id)
+        activity.append(
+            {
+                "kind": "error" if failure else "final",
+                "text": result["final"],
+                **(
+                    {"outcome": result["outcome"]}
+                    if failure is None and result["outcome"] is not None
+                    else {}
+                ),
+            }
+        )
         store.add_message(
             workspace_id,
             cid,
             "assistant",
             result["final"],
             intermediate_outputs=result["intermediate_outputs"] or None,
-            activity=_managed_turn_activity(workspace_id, turn_id) or None,
+            activity=activity,
             citations=frozen_citations or None,
             citation_dictionary_id=result["citation_dictionary_id"],
             citation_dsl_version="v2" if citation_dictionary else None,
@@ -1542,11 +1609,11 @@ async def send_message(
 
     sandbox = body.sandbox_mode
     autonomous = _autonomous_for_turn(conv, body.autonomous_mode)
-    backends = _backend_ids(conv.get("codex_backends") or {})
+    runtimes = _role_runtimes(conv.get("codex_runtime") or {})
     current_prompt_fingerprint = prompt_fingerprint(
         autonomous=autonomous,
-        orchestrator_backend=backends["orchestrator"],
-        implementer_backend=backends["implementer"],
+        orchestrator_runtime=runtimes["orchestrator"],
+        implementer_runtime=runtimes["implementer"],
     )
     turn_id = uuid.uuid4().hex[:10]
     previous_sessions = dict(conv.get("codex_sessions") or {})
@@ -1567,7 +1634,7 @@ async def send_message(
         workspace_id,
         cid,
         current_prompt_fingerprint,
-        backends=backends,
+        runtimes=runtimes,
     )
     store.start_turn(workspace_id, cid, turn_id)
     log_event(
@@ -1600,7 +1667,7 @@ async def send_message(
             autonomous=autonomous,
             analyzer_context=body.analyzer_context,
             active_turn=active_turn,
-            backends=backends,
+            runtimes=runtimes,
         )
     )
     return _turn_stream_response(active_turn)
@@ -1645,15 +1712,13 @@ async def _run_browser_turn(
     autonomous: bool,
     analyzer_context: AnalyzerTurnContext | None,
     active_turn: ActiveBrowserTurn,
-    backends: dict[str, str] | None = None,
+    runtimes: dict[str, dict[str, str]] | None = None,
 ) -> None:
-    backends = backends or {
-        "orchestrator": DEFAULT_CODEX_BACKEND,
-        "implementer": DEFAULT_CODEX_BACKEND,
-    }
+    runtimes = runtimes or _role_runtimes(None)
     lock = _lock_for(workspace_id)
     async with lock:
         final_text: str | None = None
+        final_outcome: str | None = None
         failure: dict[str, str] | None = None
         cancelled = False
         intermediate_outputs: list[dict[str, str]] = []
@@ -1670,8 +1735,8 @@ async def _run_browser_turn(
                 turn_id=turn_id,
                 prompt_fingerprint=prompt_fingerprint,
                 autonomous=autonomous,
-                orchestrator_backend=backends["orchestrator"],
-                implementer_backend=backends["implementer"],
+                orchestrator_runtime=runtimes["orchestrator"],
+                implementer_runtime=runtimes["implementer"],
             ):
                 kind = ev.get("kind")
                 if kind == "session":
@@ -1680,10 +1745,7 @@ async def _run_browser_turn(
                         cid,
                         ev.get("role", ""),
                         ev.get("session_id"),
-                        backend_id=str(
-                            ev.get("backend")
-                            or backends.get(ev.get("role", ""), "traditional")
-                        ),
+                        family=_session_family(ev, runtimes),
                     )
                     log_event(
                         LOG,
@@ -1712,7 +1774,13 @@ async def _run_browser_turn(
                 elif kind == "intermediate_output":
                     intermediate_output = {
                         "role": str(ev.get("role") or ""),
-                        "backend": str(ev.get("backend") or "traditional"),
+                        "model": str(ev.get("model") or ""),
+                        "effort": str(ev.get("effort") or ""),
+                        "level": (
+                            "milestone"
+                            if ev.get("level") == "milestone"
+                            else "progress"
+                        ),
                         "text": str(ev.get("text") or ""),
                     }
                     intermediate_outputs.append(intermediate_output)
@@ -1732,18 +1800,25 @@ async def _run_browser_turn(
                 elif kind == "usage":
                     usage = {
                         "role": str(ev.get("role") or ""),
-                        "backend": str(ev.get("backend") or "traditional"),
+                        "model": str(ev.get("model") or ""),
+                        "effort": str(ev.get("effort") or ""),
                         "duration_ms": int(ev.get("duration_ms") or 0),
                         "tokens": ev.get("tokens") or {},
                     }
                     activity.append({"kind": "usage", **usage})
                     await active_turn.publish(_sse("usage", usage))
-                elif kind in ("progress", "error"):
+                elif kind in ("tool_call", "error"):
                     await active_turn.publish(
-                        _sse("progress", {"text": ev.get("text", "")})
+                        _sse("tool_call", {"text": ev.get("text", "")})
                     )
                 elif kind == "final":
                     final_text = ev.get("text") or ""
+                    outcome = ev.get("outcome")
+                    final_outcome = (
+                        outcome
+                        if outcome in {"final_answer", "request_user_input"}
+                        else "final_answer"
+                    )
                 store.append_turn_event(
                     workspace_id,
                     turn_id,
@@ -1752,6 +1827,7 @@ async def _run_browser_turn(
                 )
             if final_text is None:
                 final_text = "(no answer)"
+                final_outcome = "final_answer"
             log_event(
                 LOG,
                 "turn.complete",
@@ -1763,6 +1839,7 @@ async def _run_browser_turn(
         except asyncio.CancelledError:
             cancelled = True
             final_text = "Stopped."
+            final_outcome = None
             log_event(
                 LOG,
                 "turn.cancelled",
@@ -1772,6 +1849,7 @@ async def _run_browser_turn(
         except Exception as exc:  # surface backend failures to the UI
             failure = _turn_failure(exc)
             final_text = failure["message"]
+            final_outcome = None
             LOG.exception(
                 "turn.error",
                 extra={
@@ -1796,6 +1874,11 @@ async def _run_browser_turn(
                     {
                         "kind": "error" if failure else "final",
                         "text": final_text,
+                        **(
+                            {"outcome": final_outcome}
+                            if not failure and final_outcome is not None
+                            else {}
+                        ),
                     }
                 )
                 managed_activity = _managed_turn_activity(workspace_id, turn_id)
@@ -1829,6 +1912,7 @@ async def _run_browser_turn(
                         "done",
                         {
                             "text": final_text,
+                            "outcome": final_outcome,
                             "citations": frozen_citations,
                             "citation_dictionary_id": citation_dictionary_id,
                             "citation_dsl_version": "v2" if analyzer_context else None,

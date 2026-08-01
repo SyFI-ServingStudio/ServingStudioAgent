@@ -20,15 +20,19 @@ from urllib.request import ProxyHandler, Request, build_opener, urlopen
 from mcp.server.fastmcp import FastMCP
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_EVIDENCE_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 20.0
 LOCAL_START_TIMEOUT_SECONDS = 15.0
 TOOL_NAME = "read_analyzer_resource"
 
 ENDPOINT_GUIDE = """Read one existing Analyzer protocol-v1 JSON resource.
 
-Start with /api/v1/sweeps, then read /api/v1/sweeps/{sweep_id}/payload to
-discover ordered axes, coordinate domains, metric keys, and opaque run_id
-values. Run resources include descriptor, summary, topology, model, workload,
+Start with /api/v1/sweeps?status=ready&limit=5 for recent candidates, or
+/api/v1/sweeps/latest for the newest ready candidate. Verify display_name,
+ordered axes, deployment, trace, status, and time against the user's request;
+latest does not by itself prove semantic relevance. Then read
+/api/v1/sweeps/{sweep_id}/payload to discover coordinate domains, metric keys,
+and opaque run_id values. Run resources include descriptor, summary, topology, model, workload,
 and subjects/{subject_id}/{report|payload}. Subject ids include concurrency,
 request-state, slo-general, throughput, utilization, batch, kv-occupancy,
 kernel-input-distribution, kernel-time-share, optimality, and
@@ -61,10 +65,11 @@ source="workspace" for simulations created inside this agent workspace.
 Only relative GET paths below /api/v1/ are accepted. Values are returned exactly
 from Analyzer; this tool does not estimate, aggregate, or reinterpret metrics.
 
-For source="workspace", reading an exact sweep payload from a managed UI turn
-also returns `_vibesim_citations`. Cite Analyzer-backed claims with the exact
-Markdown inline-code tokens in its `document`; do not omit, alter, or invent
-those tokens. They become clickable only when the user clicks the final answer."""
+In a managed UI turn, reading an exact sweep payload from either source returns
+one compact block: resource, ordered axes, metric metadata, and rows. Every raw
+value has an adjacent complete citation token. Copy that token unchanged as
+Markdown inline code beside the supported claim. Do not assemble, alter, or
+invent tokens. They become clickable only when the user clicks the final answer."""
 
 mcp = FastMCP(
     "VibeSim Analyzer",
@@ -236,11 +241,8 @@ def _managed_context() -> dict[str, Any] | None:
     return context
 
 
-def _register_workspace_citations(
-    safe_path: str,
-    payload: Any,
-) -> Any:
-    """Attach host-issued citation tokens to an exact managed sweep payload."""
+def _exact_sweep_id(safe_path: str, payload: Any) -> str | None:
+    """Return the path-bound sweep id only for an exact protocol payload read."""
     parsed_path = urlsplit(safe_path)
     path_segments = parsed_path.path.strip("/").split("/")
     if (
@@ -249,17 +251,31 @@ def _register_workspace_citations(
         or path_segments[4] != "payload"
         or not isinstance(payload, dict)
     ):
-        return payload
+        return None
+    path_sweep_id = path_segments[3]
+    payload_sweep_id = payload.get("sweep_id")
+    if payload_sweep_id != path_sweep_id:
+        raise AnalyzerToolError(
+            "Analyzer sweep payload identity does not match its path"
+        )
+    return path_sweep_id
+
+
+def _register_sweep_citations(
+    safe_path: str,
+    payload: Any,
+) -> dict[str, Any] | None:
+    """Register one exact sweep and return its host-issued dictionary."""
+    experiment_id = _exact_sweep_id(safe_path, payload)
+    if experiment_id is None:
+        return None
     context = _managed_context()
     if context is None:
-        return payload
+        return None
     backend_url = context.get("backend_url")
     capability_token = context.get("capability_token")
-    experiment_id = str(payload.get("sweep_id") or "")
     if not isinstance(backend_url, str) or not isinstance(capability_token, str):
         raise AnalyzerToolError("managed Agent context is incomplete")
-    if not experiment_id:
-        raise AnalyzerToolError("Analyzer sweep payload has no sweep_id")
     request_body = json.dumps(
         {"experimentId": experiment_id, "analysis": payload},
         ensure_ascii=False,
@@ -292,16 +308,164 @@ def _register_workspace_citations(
         ) from error
     except (URLError, json.JSONDecodeError) as error:
         raise AnalyzerToolError(f"citation registration failed: {error}") from error
-    annotated_payload = dict(payload)
-    annotated_payload["_vibesim_citations"] = {
-        "identity": dictionary.get("identity"),
-        "document": dictionary.get("document"),
-        "instruction": (
-            "Use exact inline-code tokens from document for every Analyzer-backed "
-            "claim in the final answer."
-        ),
+    if not isinstance(dictionary, dict):
+        raise AnalyzerToolError("citation registration returned an invalid dictionary")
+    return dictionary
+
+
+def _unique_dictionary_token(
+    entries: list[Any],
+    *,
+    experiment_id: str,
+    metric_key: str,
+    run_id: str | None,
+) -> str:
+    matches: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("target"), dict):
+            continue
+        target = entry["target"]
+        if (
+            target.get("kind") != "aggregate"
+            or target.get("experimentId") != experiment_id
+            or target.get("metricKey") != metric_key
+        ):
+            continue
+        target_run_id = target.get("runId")
+        if (run_id is None and target_run_id is not None) or (
+            run_id is not None and target_run_id != run_id
+        ):
+            continue
+        token = entry.get("token")
+        if isinstance(token, str) and token:
+            matches.append(token)
+    if len(matches) != 1:
+        scope = "panel" if run_id is None else f"run {run_id}"
+        raise AnalyzerToolError(
+            f"citation dictionary has {len(matches)} matches for {metric_key} at {scope}"
+        )
+    return matches[0]
+
+
+def _compact_sweep_evidence(
+    payload: dict[str, Any],
+    dictionary: dict[str, Any],
+) -> dict[str, Any]:
+    """Project one exact sweep into a bounded, citation-adjacent evidence block."""
+    axes = payload.get("axes")
+    metrics = payload.get("metrics")
+    runs = payload.get("runs")
+    entries = dictionary.get("entries")
+    experiment_id = payload.get("sweep_id")
+    display_name = payload.get("display_name")
+    if (
+        payload.get("protocol_version") != 1
+        or payload.get("schema_version") != 1
+        or not isinstance(experiment_id, str)
+        or not experiment_id
+        or not isinstance(display_name, str)
+        or not display_name
+        or not isinstance(axes, list)
+        or not all(isinstance(axis, str) and axis for axis in axes)
+        or not isinstance(metrics, list)
+        or not isinstance(runs, list)
+        or not isinstance(entries, list)
+    ):
+        raise AnalyzerToolError("Analyzer sweep or citation dictionary is invalid")
+
+    metric_projection: dict[str, Any] = {}
+    metric_keys: list[str] = []
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            raise AnalyzerToolError("Analyzer sweep metric descriptor is invalid")
+        metric_key = metric.get("key")
+        label = metric.get("label")
+        unit = metric.get("unit")
+        objective = metric.get("objective")
+        if (
+            not isinstance(metric_key, str)
+            or not metric_key
+            or not isinstance(label, str)
+            or not isinstance(unit, str)
+            or objective not in {"minimize", "maximize"}
+            or metric_key in metric_projection
+        ):
+            raise AnalyzerToolError("Analyzer sweep metric descriptor is invalid")
+        metric_keys.append(metric_key)
+        metric_projection[metric_key] = {
+            "label": label,
+            "unit": unit,
+            "objective": objective,
+            "citation": _unique_dictionary_token(
+                entries,
+                experiment_id=experiment_id,
+                metric_key=metric_key,
+                run_id=None,
+            ),
+        }
+
+    row_projection: list[dict[str, Any]] = []
+    seen_run_ids: set[str] = set()
+    for run in runs:
+        if not isinstance(run, dict) or not isinstance(run.get("coordinates"), dict):
+            raise AnalyzerToolError("Analyzer sweep row is invalid")
+        run_id = run.get("run_id")
+        raw_values = run.get("metrics")
+        if (
+            not isinstance(run_id, str)
+            or not run_id
+            or not isinstance(raw_values, dict)
+        ):
+            raise AnalyzerToolError(
+                "Analyzer sweep row has no discoverable run identity"
+            )
+        if run_id in seen_run_ids:
+            raise AnalyzerToolError("Analyzer sweep contains a duplicate run identity")
+        seen_run_ids.add(run_id)
+        coordinates = run["coordinates"]
+        if any(axis not in coordinates for axis in axes):
+            raise AnalyzerToolError("Analyzer sweep row is missing an axis coordinate")
+        values: dict[str, Any] = {}
+        for metric_key in metric_keys:
+            if metric_key not in raw_values:
+                raise AnalyzerToolError(
+                    f"Analyzer sweep row is missing metric {metric_key}"
+                )
+            values[metric_key] = {
+                "raw": raw_values[metric_key],
+                "citation": _unique_dictionary_token(
+                    entries,
+                    experiment_id=experiment_id,
+                    metric_key=metric_key,
+                    run_id=run_id,
+                ),
+            }
+        row_projection.append(
+            {
+                "coordinates": {axis: coordinates[axis] for axis in axes},
+                "values": values,
+            }
+        )
+
+    evidence = {
+        "resource": {
+            "id": experiment_id,
+            "name": display_name,
+        },
+        "axes": axes,
+        "metrics": metric_projection,
+        "rows": row_projection,
     }
-    return annotated_payload
+    encoded = json.dumps(
+        evidence,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > MAX_EVIDENCE_BYTES:
+        raise AnalyzerToolError(
+            "compact Analyzer evidence exceeded the 1 MiB tool limit"
+        )
+    return evidence
 
 
 @mcp.tool(name=TOOL_NAME, description=ENDPOINT_GUIDE)
@@ -340,8 +504,9 @@ def read_analyzer_resource(
         payload = json.loads(response_bytes)
     except json.JSONDecodeError as error:
         raise AnalyzerToolError("Analyzer returned invalid JSON") from error
-    if source == "workspace":
-        return _register_workspace_citations(safe_path, payload)
+    dictionary = _register_sweep_citations(safe_path, payload)
+    if dictionary is not None:
+        return _compact_sweep_evidence(payload, dictionary)
     return payload
 
 

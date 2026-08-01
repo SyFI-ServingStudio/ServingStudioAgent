@@ -18,6 +18,9 @@ from .config import (
 from .exec_types import CodexEvent, CodexExecRequest
 from .output_collector import CodexOutputCollector
 
+# How often the pre-first-output line refreshes its elapsed counter.
+FIRST_OUTPUT_TICK_SECONDS = 5.0
+
 
 async def run_codex(
     container: str,
@@ -27,7 +30,8 @@ async def run_codex(
     workspace_id: str,
     conversation_id: str,
     turn_id: str,
-    backend_id: str,
+    model_id: str,
+    effort: str,
     session_id: str | None = None,
     output_schema: str | None = None,
 ) -> AsyncIterator[CodexEvent]:
@@ -39,7 +43,8 @@ async def run_codex(
         workspace_id=workspace_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
-        backend_id=backend_id,
+        model_id=model_id,
+        effort=effort,
         session_id=session_id,
         output_schema=output_schema,
     )
@@ -59,9 +64,15 @@ class CodexExecCall:
         await self._write_prompt(process)
         stderr_task = asyncio.create_task(self._drain_stderr(process, output))
 
+        # Codex says nothing until its first item, so without this the UI would
+        # still read "checking Docker Codex container..." through CLI startup,
+        # session load and the model's time to first token — usually the longest
+        # stretch of the wait, and the one users most want narrated.
+        yield self._waiting_event(0.0, session_ready=False)
+
         try:
             output.prime_rollout_offset()
-            async for event in self._stream_process_output(process, output):
+            async for event in self._stream_process_output(process, output, started):
                 yield event
         except asyncio.CancelledError:
             await self._handle_cancelled(process)
@@ -78,6 +89,20 @@ class CodexExecCall:
         yield output.usage_event(duration_ms)
         yield output.final_event(process.returncode)
 
+    def _waiting_event(self, elapsed: float, session_ready: bool) -> CodexEvent:
+        """The "nothing has arrived yet" line, ticking so the wait reads as alive."""
+        model = self.request.model_id.rsplit("/", 1)[-1]
+        stage = (
+            "waiting for first output from" if session_ready else "starting Codex with"
+        )
+        age = f" ({elapsed:.0f}s)" if elapsed >= 1 else ""
+        return {
+            "kind": "tool_call",
+            "text": (
+                f"{self.request.label}: {stage} {model} · {self.request.effort}{age}..."
+            ),
+        }
+
     def _log_start(self) -> None:
         log_event(
             LOG,
@@ -85,7 +110,8 @@ class CodexExecCall:
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
-            backend=self.request.backend_id,
+            model=self.request.model_id,
+            effort=self.request.effort,
             container=self.request.container,
             resume=self.request.is_resume,
             codex_session_id=self.request.session_id,
@@ -128,11 +154,13 @@ class CodexExecCall:
         self,
         process: asyncio.subprocess.Process,
         output: CodexOutputCollector,
+        started: float,
     ) -> AsyncIterator[CodexEvent]:
         assert process.stdout is not None
         stdout_buffer = b""
         read_task = asyncio.create_task(process.stdout.read(8192))
         idle_deadline = _new_idle_deadline()
+        wait = _FirstOutputWait(started)
 
         try:
             while True:
@@ -149,8 +177,11 @@ class CodexExecCall:
                 if rollout_events:
                     idle_deadline = _new_idle_deadline()
                 for event in rollout_events:
+                    wait.note(event)
                     yield event
                 if not done:
+                    if wait.due():
+                        yield self._waiting_event(wait.tick(), wait.session_ready)
                     continue
 
                 raw = read_task.result()
@@ -161,6 +192,7 @@ class CodexExecCall:
                 complete_lines, stdout_buffer = _split_stdout_lines(stdout_buffer)
                 for raw_line in complete_lines:
                     for event in output.events_from_stdout_line(raw_line):
+                        wait.note(event)
                         yield event
                 read_task = asyncio.create_task(process.stdout.read(8192))
         finally:
@@ -223,6 +255,36 @@ class CodexExecCall:
             stderr_task.cancel()
         with contextlib.suppress(BaseException):
             await stderr_task
+
+
+class _FirstOutputWait:
+    """Ticks the waiting line until Codex produces something a user can read.
+
+    The session event is Codex answering the CLI, not the model, so it only
+    changes the wording: everything after it is time to first token.
+    """
+
+    def __init__(self, started: float) -> None:
+        self.started = started
+        self.session_ready = False
+        self.first_output_seen = False
+        self.next_tick = started + FIRST_OUTPUT_TICK_SECONDS
+
+    def note(self, event: CodexEvent) -> None:
+        if event.get("kind") == "session":
+            self.session_ready = True
+            return
+        self.first_output_seen = True
+
+    def due(self) -> bool:
+        if self.first_output_seen:
+            return False
+        return asyncio.get_event_loop().time() >= self.next_tick
+
+    def tick(self) -> float:
+        now = asyncio.get_event_loop().time()
+        self.next_tick = now + FIRST_OUTPUT_TICK_SECONDS
+        return now - self.started
 
 
 def _new_idle_deadline() -> float:

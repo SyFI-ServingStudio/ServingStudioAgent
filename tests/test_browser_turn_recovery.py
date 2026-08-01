@@ -33,7 +33,7 @@ class TurnFailureTests(unittest.TestCase):
                 "w_main",
                 "turn",
                 "decision",
-                {"kind": "decision", "action": "run_implementer", "task": "Implement"},
+                {"kind": "decision", "action": "delegate", "task": "Implement"},
             )
 
             with (
@@ -131,7 +131,11 @@ class ResumeTurnTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_browser_done_reports_background_naming_schedule(self) -> None:
         async def fake_run_turn(*args, **kwargs):
-            yield {"kind": "final", "text": "The answer"}
+            yield {
+                "kind": "final",
+                "outcome": "request_user_input",
+                "text": "Which GPU?",
+            }
 
         with TemporaryDirectory() as temporary_directory:
             main_dir = Path(temporary_directory) / "main"
@@ -174,6 +178,16 @@ class ResumeTurnTests(unittest.IsolatedAsyncioTestCase):
                 if event.startswith("event: done")
             )
             self.assertTrue(done_payload["naming_scheduled"])
+            self.assertEqual(done_payload["outcome"], "request_user_input")
+            stored = store.get("w_main", "conversation")
+            self.assertEqual(
+                stored["messages"][-1]["activity"][-1],
+                {
+                    "kind": "final",
+                    "outcome": "request_user_input",
+                    "text": "Which GPU?",
+                },
+            )
 
     async def test_agent_result_reports_background_naming_schedule(self) -> None:
         async def fake_run_turn(*args, **kwargs):
@@ -208,6 +222,7 @@ class ResumeTurnTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertTrue(result["ok"])
             self.assertTrue(result["naming_scheduled"])
+            self.assertEqual(result["outcome"], "final_answer")
 
 
 if __name__ == "__main__":

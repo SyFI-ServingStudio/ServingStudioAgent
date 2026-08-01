@@ -12,9 +12,8 @@ ARG APP_UID=1001
 ARG APP_GID=1001
 ARG APP_USER=kanzhu
 ARG RUST_TOOLCHAIN=stable
-ARG RUNNER_VERSION=prebuilt-codex-runner-v9
+ARG RUNNER_VERSION=prebuilt-codex-runner-v10
 ARG VIBESIM_LOCK_SHA=unknown
-ARG VIBESIM_BUILD_SHA=unknown
 ARG DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -22,8 +21,6 @@ ENV RUSTUP_HOME=/opt/rustup
 ENV CARGO_TOOL_HOME=/opt/cargo-tools
 ENV CARGO_HOME=/opt/vibesim-cargo-cache
 ENV DG_USE_LOCAL_VERSION=0
-ENV VIBESIM_BAKED_LOCK_SHA=${VIBESIM_LOCK_SHA}
-ENV VIBESIM_BAKED_BUILD_SHA=${VIBESIM_BUILD_SHA}
 ENV VIBESIM_BAKED_PROJECT=/opt/vibesim-prewarm
 ENV VIBESIM_BAKED_TARGET=/opt/vibesim-cache/target
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -140,6 +137,10 @@ RUN cd "${VIBESIM_BAKED_PROJECT}" \
   && DG_USE_LOCAL_VERSION=0 just sync \
   && uv run python -c "import torch, triton, deep_gemm; print('prewarmed', torch.__version__)"
 
+# The uv lock is a correctness boundary for the shared Python environment. It is
+# deliberately applied after the expensive OS/toolchain layers.
+ENV VIBESIM_BAKED_LOCK_SHA=${VIBESIM_LOCK_SHA}
+
 RUN uv venv "${ANALYZER_MCP_VENV}" \
   && uv pip install --python "${ANALYZER_MCP_VENV}/bin/python" "mcp==1.28.1"
 
@@ -157,6 +158,32 @@ RUN cd /workspace \
   && git add -A \
   && git commit -qm "VibeSim runner target seed" \
   && uv run python -c 'from launcher.exec import cargo_build; raise SystemExit(0 if cargo_build("release", build_analyzer=True) else 1)' \
+  && release_dir=/workspace/target/release \
+  && rm -f \
+    "$release_dir/analyze" \
+    "$release_dir/analyze.d" \
+    "$release_dir/simulator" \
+    "$release_dir/simulator.d" \
+    "$release_dir/libsimulator.d" \
+    "$release_dir/libsimulator.rlib" \
+  && find "$release_dir/deps" -maxdepth 1 -type f \
+    \( \
+      -name 'analyze-*' -o \
+      -name 'simulator-*' -o \
+      -name 'libsimulator-*' -o \
+      -name '*timing_kernel_derive*' -o \
+      -name '*schema_derive*' \
+    \) -delete \
+  && find "$release_dir/.fingerprint" -mindepth 1 -maxdepth 1 -type d \
+    \( \
+      -name 'analyzer-*' -o \
+      -name 'simulator-*' -o \
+      -name 'timing-kernel-derive-*' -o \
+      -name 'schema-derive-*' \
+    \) -exec rm -rf -- {} + \
+  && find "$release_dir/build" -mindepth 1 -maxdepth 1 -type d \
+    \( -name 'analyzer-*' -o -name 'simulator-*' \) \
+    -exec rm -rf -- {} + \
   && mv /workspace/target "${VIBESIM_BAKED_TARGET}"
 
 WORKDIR /workspace
@@ -165,4 +192,3 @@ WORKDIR /workspace
 # the expensive apt/node/rust/prewarm layers above.
 LABEL org.vibesim.ui.codex-runner.version="${RUNNER_VERSION}"
 LABEL org.vibesim.ui.main-lock-sha="${VIBESIM_LOCK_SHA}"
-LABEL org.vibesim.ui.main-build-sha="${VIBESIM_BUILD_SHA}"

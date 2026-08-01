@@ -12,13 +12,13 @@ export interface RoleStyle {
   Icon: Icon;
   /** icon avatar tile */
   avatar: string;
-  /** note bullet + progress dots background */
+  /** note bullet + tool-call activity dots background */
   dot: string;
   /** "working" status chip */
   chipWorking: string;
   /** working-card border + ring */
   cardWorking: string;
-  /** progress (tool-call) line text color */
+  /** tool-call activity line text color */
   progressText: string;
   /** quiet left-accent bar keyed to the role (2px, low opacity) */
   accent: string;

@@ -56,7 +56,21 @@ def _copy_tracked_file(rel_path: Path, dst_root: Path) -> None:
 
     if src.is_symlink():
         target = src.resolve(strict=False)
-        if target.exists():
+        try:
+            target.relative_to(MAIN_DIR.resolve())
+            target_is_inside_main = True
+        except ValueError:
+            target_is_inside_main = False
+
+        # Repo-internal links such as `.codex/skills -> ../skills` are part of
+        # the workspace structure and must remain links. Dereferencing them
+        # creates a stale second skill tree that no longer follows the
+        # canonical `skills/` directory. External links such as `old-doc` still
+        # need materializing because their targets are not copied into managed
+        # workspaces.
+        if target_is_inside_main:
+            os.symlink(os.readlink(src), dst)
+        elif target.exists():
             if target.is_dir():
                 shutil.copytree(target, dst, symlinks=True)
             else:

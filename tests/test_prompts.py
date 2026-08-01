@@ -1,16 +1,58 @@
+import json
 import unittest
+from pathlib import Path
 
 from backend.codex_runtime.prompts import (
     _implementer_prompt,
-    _orchestrator_continue_prompt,
     _orchestrator_handoff_prompt,
     _orchestrator_prompt,
     _orchestrator_repair_prompt,
     parse_orchestrator,
 )
+from backend.codex_runtime.codex_events import parse_commentary
 
 
 class RolePromptTest(unittest.TestCase):
+    def test_orchestrator_schema_uses_provider_supported_subset(self) -> None:
+        prompt_directory = Path(__file__).parents[1] / "backend" / "prompts"
+        schema = json.loads(
+            (prompt_directory / "orchestrator.schema.json").read_text("utf-8")
+        )
+
+        self.assertNotIn("oneOf", schema)
+        self.assertEqual(
+            schema["properties"]["action"]["enum"],
+            [
+                "progress",
+                "milestone",
+                "final_answer",
+                "request_user_input",
+                "delegate",
+            ],
+        )
+        self.assertEqual(schema["required"], ["action", "message", "task"])
+
+    def test_agent_contracts_share_analyzer_selection_and_citation_rules(self) -> None:
+        prompt_directory = Path(__file__).parents[1] / "backend" / "prompts"
+        prompts = [
+            (prompt_directory / filename).read_text("utf-8")
+            for filename in ("AGENTS.md", "AGENTS.autonomous.md")
+        ]
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt[:40]):
+                self.assertIn("operate-use-analyzer/SKILL.md", prompt)
+                self.assertIn("/api/v1/sweeps?status=ready&limit=5", prompt)
+                self.assertIn("Same-workspace results from other conversations", prompt)
+                self.assertIn("adjacent complete citation token", prompt)
+                self.assertIn("Never assemble", prompt)
+                self.assertIn('"action": "final_answer"', prompt)
+                self.assertIn('"action": "progress"', prompt)
+                self.assertIn('"action": "milestone"', prompt)
+                self.assertIn('"action": "request_user_input"', prompt)
+                self.assertIn('"action": "delegate"', prompt)
+                self.assertNotIn("continue_work", prompt)
+
     def test_initial_orchestrator_prompt_points_to_workspace_contract(self) -> None:
         prompt = _orchestrator_prompt(
             "Analyze the sweep.",
@@ -70,26 +112,81 @@ class RolePromptTest(unittest.TestCase):
         self.assertIn("Delegated task:\nChange one file.", prompt)
         self.assertIn("Implementer summary:\nImplemented and tested.", prompt)
 
-    def test_continue_prompt_reasserts_nonterminal_work(self) -> None:
-        prompt = _orchestrator_continue_prompt(
-            "Checking recovery state.",
-            conversation_id="conversation-123",
+    def test_parse_terminal_decisions_distinguishes_answer_and_user_input(self) -> None:
+        answer = parse_orchestrator(
+            '{"action":"final_answer","message":"Completed.","task":""}'
         )
-
-        self.assertIn("previous decision was `continue_work`", prompt)
-        self.assertIn("Resume the same task", prompt)
-        self.assertIn("Checking recovery state.", prompt)
-        self.assertIn("/workspace/conversation-123_progress.md", prompt)
-
-    def test_parse_continue_work_decision(self) -> None:
-        decision = parse_orchestrator(
-            '{"action":"continue_work","message":"Checking\\nstate","task":""}'
+        question = parse_orchestrator(
+            '{"action":"request_user_input","message":"Which GPU?","task":""}'
         )
 
         self.assertEqual(
-            decision,
-            {"action": "continue_work", "message": "Checking\nstate"},
+            answer,
+            {"action": "final_answer", "message": "Completed."},
         )
+        self.assertEqual(
+            question,
+            {"action": "request_user_input", "message": "Which GPU?"},
+        )
+
+    def test_parse_legacy_actions_normalizes_without_reexposing_them(self) -> None:
+        answer = parse_orchestrator(
+            '{"action":"user_message","message":"Completed.","task":""}'
+        )
+        delegation = parse_orchestrator(
+            '{"action":"run_implementer","message":"","task":"Change it."}'
+        )
+
+        self.assertEqual(
+            answer,
+            {"action": "final_answer", "message": "Completed."},
+        )
+        self.assertEqual(
+            delegation,
+            {"action": "delegate", "task": "Change it."},
+        )
+
+    def test_progress_and_milestone_parse_as_non_terminal_decisions(self) -> None:
+        self.assertEqual(
+            parse_orchestrator(
+                '{"action":"progress","message":"Still checking.","task":""}'
+            ),
+            {"action": "progress", "message": "Still checking."},
+        )
+        self.assertEqual(
+            parse_orchestrator(
+                '{"action":"milestone","message":"Sweep ready.","task":""}'
+            ),
+            {"action": "milestone", "message": "Sweep ready."},
+        )
+
+    def test_commentary_envelopes_preserve_progress_level(self) -> None:
+        self.assertEqual(
+            parse_commentary(
+                '{"action":"progress","message":"Checking.","task":""}'
+            ),
+            ("Checking.", "progress"),
+        )
+        self.assertEqual(
+            parse_commentary(
+                '{"action":"milestone","message":"Validated.","task":""}'
+            ),
+            ("Validated.", "milestone"),
+        )
+        self.assertEqual(parse_commentary("Legacy prose."), ("Legacy prose.", "progress"))
+
+    def test_parse_rejects_invalid_action_field_combinations(self) -> None:
+        invalid_decisions = [
+            '{"action":"final_answer","message":"","task":""}',
+            '{"action":"final_answer","message":"Done.","task":"More work"}',
+            '{"action":"request_user_input","message":"","task":""}',
+            '{"action":"delegate","message":"Starting.","task":"Change it."}',
+            '{"action":"delegate","message":"","task":""}',
+        ]
+
+        for decision in invalid_decisions:
+            with self.subTest(decision=decision):
+                self.assertIsNone(parse_orchestrator(decision))
 
     def test_repair_prompt_preserves_unparsed_answer(self) -> None:
         prompt = _orchestrator_repair_prompt(

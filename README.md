@@ -129,15 +129,13 @@ Rust stable (`cargo`/`rustc`), `just`, `nvcc`, Python 3.12 dev headers, native
 build tools, and a prewarmed VibeSim Python environment at `/opt/vibesim-venv`.
 The image build copies the tracked `main` tree, prewarms the default profiling
 stack (including pinned DeepGEMM), and compiles the full Cargo release target for
-the simulator and analyzer. That target is stored at
-`/opt/vibesim-cache/target`. A new conversation copies this seed into its empty
-`/workspace/target` before Codex starts, so the launcher's ordinary Cargo build
-still performs its freshness checks while reusing the expensive dependency
-artifacts. The analyzer intentionally tracks the workspace Git HEAD for embedded
-provenance, so a fresh conversation may rerun its build script and final link;
-it should not recompile DataFusion/Arrow from scratch. The source is compiled at
-the runtime path `/workspace`, and the image is invalidated by a fingerprint of
-the tracked Cargo/simulator/analyzer inputs.
+the simulator and analyzer once to populate third-party dependency artifacts.
+Before the target is stored at `/opt/vibesim-cache/target`, the image removes all
+first-party VibeSim crate artifacts and final binaries. A new conversation copies
+this dependency-only seed into its empty `/workspace/target`; Cargo then compiles
+that workspace's exact VibeSim revision while reusing heavyweight dependencies
+such as DataFusion and Arrow. The runner image is therefore coupled to its
+toolchain version and Python `uv.lock`, not to a mutable source SHA.
 The Docker container and `codex exec` both run as the host UID/GID with `HOME`
 set to the matching `/home/<user>` path.
 
@@ -220,16 +218,24 @@ browser
      - when host HF_HOME is set, mount it read-only at /model and set container HF_HOME=/model
      using the prebuilt CODEX_DOCKER_IMAGE
   -> codex exec/resume as orchestrator
-       action=user_message   -> return ask/notify text to the user
-       action=run_implementer -> codex exec/resume as implementer
+       action=progress           -> emit a concise user-facing update and continue
+       action=milestone          -> emit a completed checkpoint and continue
+       action=final_answer       -> return completed results to the user
+       action=request_user_input -> return a blocking question to the user
+       action=delegate           -> codex exec/resume as implementer
   -> explicit handoff of implementer summary back to orchestrator
-       action=user_message   -> return reviewed result to the user
-       action=run_implementer -> continue with another bounded implementer task
+       action=final_answer       -> return reviewed result to the user
+       action=request_user_input -> request genuinely required user input
+       action=delegate           -> continue with another bounded implementer task
   -> retain the active turn independently of the browser connection
        GET .../stream -> replay and continue after refresh
        GET .../stream -> 204 when the conversation is idle
        POST .../cancel -> send SIGINT to Codex and stop the whole turn
-  -> stream progress + final text back to browser
+  -> stream tool-call activity, semantic commentary, and one terminal response
+       outcome=final_answer       -> render the completed Answer state
+       outcome=request_user_input -> render Input needed and focus the composer
+     Historical activity without an outcome remains compatible and defaults to
+     final_answer.
   -> when Launcher sees the managed capability context:
        simulations register through the compatible managed-runs protocol
        timing-predict and kernel profiling register typed managed jobs
@@ -359,7 +365,9 @@ A turn is **synchronous** and may take minutes (profiling/sim) — set a generou
 client timeout of at least 30 minutes and wait for the same request to return;
 do not replace it with manual GET polling. The turn response includes `final`,
 `ok`, `conversation_id`,
-`implementer_summaries`, `intermediate_outputs`, `progress`, and `sessions`.
+`implementer_summaries`, `intermediate_outputs`, `tool_calls`, and `sessions`.
+Each intermediate output has `level: progress | milestone`; `tool_calls` is the
+separate transient command/container/tool activity channel.
 `scripts/agent_conversation_smoke.sh` exercises this whole path.
 
 Calling agents must leave conversations intact on success and failure so a
@@ -397,7 +405,7 @@ Useful request fields:
   do not accumulate Docker containers.
 
 The response includes `workspace_id`, `conversation_id`, `final`, `ok`,
-`implementer_summaries`, `progress`, and `workspace`.
+`implementer_summaries`, `intermediate_outputs`, `tool_calls`, and `workspace`.
 
 ### Artifact retrieval
 
@@ -483,12 +491,18 @@ Docker GPU forwarding.
   `/api/agent/workspaces*`). Unset → those endpoints are open
   (local dev). Set → they require `Authorization: Bearer <token>`. `/api/agent/skill`
   is public regardless.
-- `CODEX_MODEL` — Codex model, default `gpt-5.6-sol`.
-- `CODEX_REASONING_EFFORT` — Codex reasoning effort passed as
-  `-c model_reasoning_effort=...`, default `xhigh`.
-- `CODEX_DOCKER_IMAGE` — Docker image, default `vibesim-ui-codex-runner:latest`.
-  On shared Docker hosts, set a stable user-specific tag such as
-  `vibesim-ui-codex-runner:${USER}` for both image build and backend startup.
+- `CODEX_MODEL` — default model of the `gpt` family, default `gpt-5.6-sol`.
+- `CODEX_REASONING_EFFORT` — default reasoning effort of the `gpt` family, passed
+  per call as `-c model_reasoning_effort=...`, default `xhigh`.
+- `CODEXDS_MODEL` / `CODEXDS_REASONING_EFFORT` — the same two defaults for the
+  `deepseek` family, default `deepseek-ai/DeepSeek-V4-Flash-0731` and `max`.
+- `CODEX_TRADITIONAL_HOME` / `CODEXDS_HOME` — each family's host Codex home
+  (auth profile plus model catalog), default `~/.codex` and `~/.codex-ds`.
+- `CODEX_DOCKER_IMAGE` — Docker image. By default it uses the current OS user as
+  a stable tag, for example `vibesim-ui-codex-runner:kanzhu`. This prevents one
+  user on a shared Docker host from replacing another user's UID/GID-specific
+  runner image. Override the same value for both image build and backend startup
+  when a deployment needs a different tag.
 - `CODEX_CUDA_IMAGE` — CUDA devel base image baked into the runner image,
   default `nvidia/cuda:12.8.1-devel-ubuntu24.04`.
 - `CODEX_UV_IMAGE` — source image copied for the `uv`/`uvx` binaries, default
@@ -498,9 +512,10 @@ Docker GPU forwarding.
 - `RUST_TOOLCHAIN` — Rust toolchain baked into the image by the build script,
   default `stable`.
 - `CODEX_RUNNER_IMAGE_VERSION` — expected image label, default
-  `prebuilt-codex-runner-v9`. `run.sh` rebuilds when this label differs, when
-  the baked `main/uv.lock` hash differs, or when the tracked Cargo workspace,
-  simulator, or analyzer build-input fingerprint differs from the checkout.
+  `prebuilt-codex-runner-v10`. `run.sh` rebuilds when this label differs or when
+  the baked `main/uv.lock` hash differs. Ordinary VibeSim source changes do not
+  rebuild the image; Cargo compiles first-party crates inside each workspace
+  against the dependency-only target seed.
 - `CODEX_SKIP_RUNNER_IMAGE_TEST=1` — skip the post-build non-GPU runner
   acceptance gate for an explicitly incomplete development build.
 - `CODEX_FORCE_IMAGE_BUILD=1` — force `run.sh` to rebuild the runner image.
@@ -540,10 +555,11 @@ Docker GPU forwarding.
 - `VIBESIM_MANAGED_BACKEND_URL` — callback origin written into short-lived
   managed Launcher capabilities, default
   `http://host.docker.internal:8765`. It must resolve from the Codex container.
-- `ANALYZER_MCP_SOURCE` — default evidence ownership mode, `external`. The MCP
-  tool exposes the clearer per-call names `source="host"` for a pre-existing
-  experiment selected in the Analyzer UI and `source="workspace"` for a
-  simulation created inside the managed workspace.
+- `ANALYZER_MCP_SOURCE` — default Analyzer transport mode, `external`. The MCP
+  tool exposes the clearer per-call names `source="host"` for the shared host
+  Analyzer and `source="workspace"` for a workspace-local Analyzer. Source
+  chooses where data is read; citation authorization remains workspace-scoped,
+  so a ready result from another conversation in the same workspace is valid.
 - `ANALYZER_MCP_BASE_URL` — host Analyzer origin, default
   `http://host.docker.internal:8787`. Bind the host Analyzer only to the Docker
   bridge address rather than all interfaces. The container receives an

@@ -39,7 +39,9 @@ def dictionary() -> CitationDictionarySnapshot:
 
 
 class AnalyzerContextTests(unittest.TestCase):
-    def test_builds_managed_aggregate_dictionary_with_authoritative_identity(self) -> None:
+    def test_builds_managed_aggregate_dictionary_with_authoritative_identity(
+        self,
+    ) -> None:
         snapshot = build_aggregate_citation_dictionary(
             {
                 "protocol_version": 1,
@@ -138,7 +140,7 @@ class AnalyzerContextTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             CitationDictionarySnapshot.model_validate(payload)
 
-    def test_prompt_exposes_literal_selection_and_bounded_dictionary(self) -> None:
+    def test_prompt_exposes_selection_without_the_verbose_dictionary(self) -> None:
         context = AnalyzerTurnContext.model_validate(
             {
                 "protocol": "vibesim.conversation-context/v2",
@@ -155,8 +157,9 @@ class AnalyzerContextTests(unittest.TestCase):
 
         self.assertTrue(prompt.startswith("Explain this result."))
         self.assertIn('"panelId":"total_tps"', prompt)
-        self.assertIn("exp.tp2.rate20.throughput", prompt)
-        self.assertIn("Do not invent tokens", prompt)
+        self.assertNotIn("exp.tp2.rate20.throughput", prompt)
+        self.assertIn("Analyzer MCP", prompt)
+        self.assertIn("do not invent tokens", prompt)
 
 
 if __name__ == "__main__":

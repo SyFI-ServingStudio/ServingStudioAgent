@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -29,12 +30,18 @@ ANALYZER_MCP_BASE_URL = os.environ.get(
     "http://host.docker.internal:8787",
 ).rstrip("/")
 
+_default_image_owner = re.sub(
+    r"[^a-z0-9_.-]+", "-", (os.environ.get("USER") or "codex").lower()
+).strip("-.")
 CODEX_DOCKER_IMAGE = os.environ.get(
-    "CODEX_DOCKER_IMAGE", "vibesim-ui-codex-runner:latest"
+    "CODEX_DOCKER_IMAGE",
+    f"vibesim-ui-codex-runner:{_default_image_owner or 'codex'}",
 )
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "gpt-5.6-sol")
 # Codex reasoning effort, passed per call as `-c model_reasoning_effort=...`.
 CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "xhigh")
+CODEXDS_MODEL = os.environ.get("CODEXDS_MODEL", "deepseek-ai/DeepSeek-V4-Flash-0731")
+CODEXDS_REASONING_EFFORT = os.environ.get("CODEXDS_REASONING_EFFORT", "max")
 # Bearer token gating the agent-facing HTTP API (/api/agent/*, /api/eval).
 # Unset -> no auth, so local dev and the same-host eval harness keep working.
 # Set it when exposing the backend to cross-machine agents.
@@ -64,7 +71,7 @@ _host_hf_home = os.environ.get("HF_HOME", "").strip()
 HOST_HF_HOME = Path(_host_hf_home).expanduser() if _host_hf_home else None
 CODEX_DOCKER_HF_HOME = "/model"
 CONTAINER_RUNTIME_VERSION = os.environ.get(
-    "CODEX_RUNNER_IMAGE_VERSION", "prebuilt-codex-runner-v9"
+    "CODEX_RUNNER_IMAGE_VERSION", "prebuilt-codex-runner-v10"
 )
 ORCHESTRATOR_SCHEMA_IN_CONTAINER = f"{PROMPTS_CONTAINER_DIR}/orchestrator.schema.json"
 AGENTS_PROMPT_DEFAULT = "AGENTS.md"
@@ -73,21 +80,30 @@ AGENTS_PROMPT_AUTONOMOUS = "AGENTS.autonomous.md"
 EXECUTION_MODES = ("read-only", "workspace-write", "danger-full-access")
 SANDBOX_MODES = EXECUTION_MODES
 DEFAULT_SANDBOX = "workspace-write"
-DEFAULT_CODEX_BACKEND = "traditional"
 
 LOG = logging.getLogger("vibesim_ui.codex_runtime")
 
 
 @dataclass(frozen=True, slots=True)
-class CodexBackendSpec:
-    """Allowlisted model-provider profile selectable by a conversation role."""
+class CodexFamilySpec:
+    """One provider profile: an auth home, its models, and its env prerequisites.
 
-    backend_id: str
+    The family is the Codex session-compatibility boundary. Every model in a
+    family shares the same ``CODEX_HOME``, so a rollout recorded by one model can
+    be resumed by a sibling (verified against codex-cli 0.144.6: resuming a
+    ``gpt-5.6-sol`` thread with ``gpt-5.6-luna`` succeeds and only emits a
+    non-fatal advisory). Crossing families cannot resume: the session file lives
+    in the other home and the provider and auth differ.
+    """
+
+    family_id: str
     label: str
-    model: str
     host_codex_home: Path
+    catalog_filenames: tuple[str, ...]
+    default_model: str
+    default_effort: str
+    fallback_efforts: tuple[str, ...]
     required_environment: tuple[str, ...] = ()
-    cli_options: tuple[str, ...] = ()
 
     @property
     def available(self) -> bool:
@@ -96,50 +112,197 @@ class CodexBackendSpec:
         )
 
 
-CODEX_BACKENDS: dict[str, CodexBackendSpec] = {
-    "traditional": CodexBackendSpec(
-        backend_id="traditional",
-        label="Traditional Codex",
-        model=CODEX_MODEL,
+@dataclass(frozen=True, slots=True)
+class CodexModelSpec:
+    """One selectable model, resolved from its family's on-disk model catalog."""
+
+    model_id: str
+    label: str
+    family_id: str
+    efforts: tuple[str, ...]
+    default_effort: str
+
+    @property
+    def family(self) -> CodexFamilySpec:
+        return CODEX_FAMILIES[self.family_id]
+
+    @property
+    def available(self) -> bool:
+        return self.family.available
+
+
+CODEX_FAMILIES: dict[str, CodexFamilySpec] = {
+    "gpt": CodexFamilySpec(
+        family_id="gpt",
+        label="GPT-5.6",
         host_codex_home=Path(
             os.environ.get("CODEX_TRADITIONAL_HOME", Path.home() / ".codex")
         ).expanduser(),
-        # Preserve the pre-registry invocation contract for the default backend.
-        cli_options=(
-            "-m",
-            CODEX_MODEL,
-            "-c",
-            f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"',
-        ),
+        catalog_filenames=("models_cache.json", "models_catalog.json"),
+        default_model=CODEX_MODEL,
+        default_effort=CODEX_REASONING_EFFORT,
+        fallback_efforts=("low", "medium", "high", "xhigh"),
     ),
-    "codexds": CodexBackendSpec(
-        backend_id="codexds",
-        label="CodexDS",
-        model=os.environ.get("CODEXDS_MODEL", "deepseek-ai/DeepSeek-V4-Flash-0731"),
+    "deepseek": CodexFamilySpec(
+        family_id="deepseek",
+        label="DeepSeek",
         host_codex_home=Path(
             os.environ.get("CODEXDS_HOME", Path.home() / ".codex-ds")
         ).expanduser(),
+        catalog_filenames=("models_catalog.json", "models_cache.json"),
+        default_model=CODEXDS_MODEL,
+        default_effort=CODEXDS_REASONING_EFFORT,
+        fallback_efforts=("high", "xhigh", "max"),
         required_environment=("VLLM_API_KEY",),
     ),
 }
 
+# Which catalog entries a conversation may actually pick. The catalogs carry far
+# more (older generations, hidden internal models); this keeps the selector to
+# the models this deployment is meant to run.
+MODEL_ALLOWLIST: dict[str, tuple[str, ...]] = {
+    "gpt": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
+    "deepseek": (CODEXDS_MODEL,),
+}
 
-def codex_backend(backend_id: str) -> CodexBackendSpec:
+DEFAULT_CODEX_FAMILY = "gpt"
+DEFAULT_CODEX_MODEL = CODEX_FAMILIES[DEFAULT_CODEX_FAMILY].default_model
+DEFAULT_CODEX_EFFORT = CODEX_FAMILIES[DEFAULT_CODEX_FAMILY].default_effort
+
+# Pre-registry conversations stored a backend id. Reads map them onto models.
+LEGACY_BACKEND_MODELS: dict[str, str] = {
+    "traditional": CODEX_FAMILIES["gpt"].default_model,
+    "codexds": CODEX_FAMILIES["deepseek"].default_model,
+}
+
+_MODEL_REGISTRY_CACHE: dict[str, tuple[tuple[float, ...], dict[str, CodexModelSpec]]] = {}
+
+
+def _catalog_models(family: CodexFamilySpec) -> dict[str, dict]:
+    """Read one family's on-disk catalog, keyed by model slug.
+
+    Both catalog formats (`models_cache.json` written by the OpenAI client and
+    the hand-authored `models_catalog.json` used by the vLLM profile) share the
+    same ``models: [{slug, display_name, supported_reasoning_levels, ...}]``
+    shape, so a single reader covers both.
+    """
+    for filename in family.catalog_filenames:
+        path = family.host_codex_home / filename
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            LOG.warning("unreadable Codex model catalog: %s", path)
+            continue
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, list):
+            continue
+        return {
+            str(entry["slug"]): entry
+            for entry in models
+            if isinstance(entry, dict) and entry.get("slug")
+        }
+    return {}
+
+
+def _family_registry(family: CodexFamilySpec) -> dict[str, CodexModelSpec]:
+    catalog = _catalog_models(family)
+    registry: dict[str, CodexModelSpec] = {}
+    for model_id in MODEL_ALLOWLIST.get(family.family_id, ()):
+        entry = catalog.get(model_id)
+        efforts = tuple(
+            str(level["effort"])
+            for level in (entry or {}).get("supported_reasoning_levels", [])
+            if isinstance(level, dict) and level.get("effort")
+        )
+        # A missing or stale catalog must not remove a configured model from the
+        # UI; fall back to the family's conservative effort ladder instead.
+        efforts = efforts or family.fallback_efforts
+        default_effort = (
+            family.default_effort
+            if family.default_effort in efforts
+            else str((entry or {}).get("default_reasoning_level") or efforts[-1])
+        )
+        registry[model_id] = CodexModelSpec(
+            model_id=model_id,
+            label=str((entry or {}).get("display_name") or model_id),
+            family_id=family.family_id,
+            efforts=efforts,
+            default_effort=(
+                default_effort if default_effort in efforts else efforts[-1]
+            ),
+        )
+    return registry
+
+
+def codex_model_registry() -> dict[str, CodexModelSpec]:
+    """All selectable models, refreshed when a family's catalog file changes."""
+    registry: dict[str, CodexModelSpec] = {}
+    for family in CODEX_FAMILIES.values():
+        stamp = tuple(
+            family.host_codex_home.joinpath(name).stat().st_mtime
+            if family.host_codex_home.joinpath(name).is_file()
+            else 0.0
+            for name in family.catalog_filenames
+        )
+        cached = _MODEL_REGISTRY_CACHE.get(family.family_id)
+        if cached is None or cached[0] != stamp:
+            cached = (stamp, _family_registry(family))
+            _MODEL_REGISTRY_CACHE[family.family_id] = cached
+        registry.update(cached[1])
+    return registry
+
+
+def codex_family(family_id: str) -> CodexFamilySpec:
     try:
-        return CODEX_BACKENDS[backend_id]
+        return CODEX_FAMILIES[family_id]
     except KeyError as exc:
-        raise ValueError(f"unsupported Codex backend: {backend_id!r}") from exc
+        raise ValueError(f"unsupported Codex family: {family_id!r}") from exc
 
 
-def codex_backend_catalog() -> list[dict[str, object]]:
+def codex_model(model_id: str) -> CodexModelSpec:
+    resolved = LEGACY_BACKEND_MODELS.get(model_id, model_id)
+    try:
+        return codex_model_registry()[resolved]
+    except KeyError as exc:
+        raise ValueError(f"unsupported Codex model: {model_id!r}") from exc
+
+
+def normalize_role_runtime(model_id: str | None, effort: str | None) -> dict[str, str]:
+    """Coerce one role's stored or requested selection onto the live registry."""
+    try:
+        model = codex_model(model_id or DEFAULT_CODEX_MODEL)
+    except ValueError:
+        model = codex_model(DEFAULT_CODEX_MODEL)
+    chosen_effort = effort if effort in model.efforts else model.default_effort
+    return {"model": model.model_id, "effort": chosen_effort}
+
+
+def codex_model_catalog() -> list[dict[str, object]]:
     return [
         {
-            "id": backend.backend_id,
-            "label": backend.label,
-            "model": backend.model,
-            "available": backend.available,
+            "id": model.model_id,
+            "label": model.label,
+            "family": model.family_id,
+            "familyLabel": model.family.label,
+            "efforts": list(model.efforts),
+            "defaultEffort": model.default_effort,
+            "available": model.available,
         }
-        for backend in CODEX_BACKENDS.values()
+        for model in codex_model_registry().values()
+    ]
+
+
+def codex_family_catalog() -> list[dict[str, object]]:
+    return [
+        {
+            "id": family.family_id,
+            "label": family.label,
+            "available": family.available,
+            "requiredEnvironment": list(family.required_environment),
+        }
+        for family in CODEX_FAMILIES.values()
     ]
 
 
@@ -154,7 +317,6 @@ def _sha256_file(path: Path) -> str:
 MAIN_LOCK_SHA = os.environ.get("CODEX_MAIN_LOCK_SHA") or _sha256_file(
     MAIN_DIR / "uv.lock"
 )
-MAIN_BUILD_SHA = os.environ.get("CODEX_MAIN_BUILD_SHA", "").strip()
 
 
 def agents_prompt_name(autonomous: bool) -> str:
@@ -164,10 +326,14 @@ def agents_prompt_name(autonomous: bool) -> str:
 def prompt_fingerprint(
     *,
     autonomous: bool = False,
-    orchestrator_backend: str = DEFAULT_CODEX_BACKEND,
-    implementer_backend: str = DEFAULT_CODEX_BACKEND,
+    orchestrator_runtime: dict[str, str] | None = None,
+    implementer_runtime: dict[str, str] | None = None,
 ) -> str:
-    """Hash the effective role contract for diagnostics and provenance."""
+    """Hash the effective role contract for diagnostics and provenance.
+
+    Reasoning effort is part of the hash: it is a per-call Codex option, so two
+    turns of one conversation can legitimately carry different fingerprints.
+    """
     digest = hashlib.sha256()
     for name in (
         agents_prompt_name(autonomous),
@@ -179,16 +345,21 @@ def prompt_fingerprint(
         digest.update(b"\0")
         digest.update((PROMPTS_DIR / name).read_bytes())
         digest.update(b"\0")
-    for role, backend_id in (
-        ("orchestrator", orchestrator_backend),
-        ("implementer", implementer_backend),
+    for role, runtime in (
+        ("orchestrator", orchestrator_runtime),
+        ("implementer", implementer_runtime),
     ):
-        backend = codex_backend(backend_id)
+        selection = normalize_role_runtime(
+            (runtime or {}).get("model"), (runtime or {}).get("effort")
+        )
+        model = codex_model(selection["model"])
         digest.update(role.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(backend.backend_id.encode("utf-8"))
+        digest.update(model.family_id.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(backend.model.encode("utf-8"))
+        digest.update(model.model_id.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(selection["effort"].encode("utf-8"))
     digest.update(b"\0autonomous=")
     digest.update(str(autonomous).encode("utf-8"))
     return digest.hexdigest()[:16]

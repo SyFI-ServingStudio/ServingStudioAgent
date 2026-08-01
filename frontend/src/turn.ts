@@ -1,4 +1,4 @@
-import type { CodexBackendId, Role, RolePhase, TurnCard, TurnEvent } from "./types";
+import type { CodexRoleRuntime, CommentaryLevel, Role, RoleNote, RolePhase, TurnCard, TurnEvent } from "./types";
 
 function asRole(value: string): Role {
   return value === "implementer" ? "implementer" : "orchestrator";
@@ -11,26 +11,29 @@ function asRole(value: string): Role {
  * envelope (surfaced as its own card), otherwise leave the text as-is. Mirrors
  * the backend `unwrap_commentary` so already-persisted notes reload cleanly too.
  */
-export function cleanNote(text: string): string {
+export function cleanNote(text: string, level?: CommentaryLevel): RoleNote | null {
   const stripped = text.trim();
   if (!(stripped.startsWith("{") && stripped.endsWith("}"))) {
-    return text;
+    return { text, level: level ?? "progress" };
   }
   try {
     const payload = JSON.parse(stripped) as Record<string, unknown>;
     if (payload && typeof payload === "object") {
       const message = payload.message;
       if (typeof message === "string" && message.trim()) {
-        return message.trim();
+        return {
+          text: message.trim(),
+          level: payload.action === "milestone" ? "milestone" : (level ?? "progress"),
+        };
       }
       if ("action" in payload || "task" in payload) {
-        return "";
+        return null;
       }
     }
   } catch {
-    return text;
+    return { text, level: level ?? "progress" };
   }
-  return text;
+  return { text, level: level ?? "progress" };
 }
 
 /**
@@ -52,12 +55,15 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
   const round: Record<Role, number> = { orchestrator: 0, implementer: 0 };
   let current: RolePhase | null = null;
 
-  const openPhase = (role: Role, backend: CodexBackendId = "traditional"): RolePhase => {
+  const runtimeFrom = (event: { model?: string; effort?: string }): CodexRoleRuntime | undefined =>
+    event.model ? { model: event.model, effort: event.effort ?? "" } : undefined;
+
+  const openPhase = (role: Role, runtime?: CodexRoleRuntime): RolePhase => {
     round[role] += 1;
     const phase: RolePhase = {
       type: "role",
       role,
-      backend,
+      runtime,
       round: round[role],
       notes: [],
       durationMs: null,
@@ -82,7 +88,7 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
   for (const event of events) {
     switch (event.kind) {
       case "intermediate_output": {
-        const clean = cleanNote(event.text);
+        const clean = cleanNote(event.text, event.level);
         if (!clean) {
           break;
         }
@@ -90,8 +96,8 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
         const phase: RolePhase =
           current && current.role === role && !current.done
             ? current
-            : openPhase(role, event.backend);
-        phase.backend = event.backend || phase.backend;
+            : openPhase(role, runtimeFrom(event));
+        phase.runtime = runtimeFrom(event) ?? phase.runtime;
         phase.notes.push(clean);
         current = phase;
         break;
@@ -101,8 +107,8 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
         const target: RolePhase =
           (current && current.role === role && !current.done ? current : null) ??
           lastOpenPhase(role) ??
-          openPhase(role, event.backend);
-        target.backend = event.backend || target.backend;
+          openPhase(role, runtimeFrom(event));
+        target.runtime = runtimeFrom(event) ?? target.runtime;
         target.durationMs = event.duration_ms;
         target.tokens = event.tokens;
         target.done = true;
@@ -122,7 +128,11 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
         break;
       }
       case "final": {
-        cards.push({ type: "answer", text: event.text });
+        cards.push({
+          type: "response",
+          text: event.text,
+          outcome: event.outcome ?? "final_answer",
+        });
         current = null;
         break;
       }
@@ -157,7 +167,7 @@ export function formatTokens(value: number): string {
   return String(value);
 }
 
-/** Strip the leading "orchestrator: " / "implementer: " role tag on a progress line. */
+/** Strip the leading role tag from one transient tool-call line. */
 export function stripRolePrefix(text: string): string {
   return text.replace(/^(orchestrator|implementer):\s*/i, "");
 }

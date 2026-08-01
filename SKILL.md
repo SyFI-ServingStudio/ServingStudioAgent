@@ -142,6 +142,14 @@ Body: `{"sandbox": "workspace-write", "autonomous": false}` (both optional;
 `autonomous` defaults **false** so the assistant will ask you questions).
 Returns the conversation object, including its `id`.
 
+Optional `codex_runtime` picks the model and reasoning effort per role, e.g.
+`{"codex_runtime": {"orchestrator": {"model": "gpt-5.6-terra", "effort": "high"}}}`.
+`GET /api/codex-backends` lists the selectable models with the efforts each one
+supports. `PATCH .../conversations/{cid}/runtime` changes the choice later:
+effort and sibling models are always allowed, but once the conversation has
+history it cannot cross model families (`409 conversation_runtime_locked`) —
+only the family that recorded a Codex session can resume it.
+
 ```bash
 curl -sS http://<host>:8765/api/agent/workspaces/$workspace_id/conversations \
   -H 'Content-Type: application/json' \
@@ -174,8 +182,8 @@ Response fields:
 | `ok` | `true` if a final answer was produced with no error. |
 | `conversation_id` | Echoes `cid`; also the `cid` for artifact retrieval (§6). |
 | `implementer_summaries` | Summaries of any delegated implementer work this turn. |
-| `intermediate_outputs` | Assistant commentary emitted mid-turn. |
-| `progress` | Transient activity lines (workspace/container setup, etc.). |
+| `intermediate_outputs` | Assistant commentary emitted mid-turn. Each item has `level: progress | milestone`. |
+| `tool_calls` | Transient command/tool activity (workspace/container setup, shell commands, etc.). |
 | `sessions` | Role → Codex session ids resumed across turns (informational). |
 | `error` | Error text if the turn failed. |
 

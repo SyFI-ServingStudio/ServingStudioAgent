@@ -1,18 +1,32 @@
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 export type Role = "orchestrator" | "implementer";
-export type CodexBackendId = "traditional" | "codexds";
-
-export interface CodexBackendSelection {
-  orchestrator: CodexBackendId;
-  implementer: CodexBackendId;
+export type CommentaryLevel = "progress" | "milestone";
+/** One role's Codex choice: which model runs it, and at what reasoning effort. */
+export interface CodexRoleRuntime {
+  model: string;
+  effort: string;
 }
 
-export interface CodexBackendOption {
-  id: CodexBackendId;
+export interface CodexRuntimeSelection {
+  orchestrator: CodexRoleRuntime;
+  implementer: CodexRoleRuntime;
+}
+
+export interface CodexModelOption {
+  id: string;
   label: string;
-  model: string;
+  /** Session-compatibility boundary: a started conversation may only move within it. */
+  family: string;
+  familyLabel: string;
+  efforts: string[];
+  defaultEffort: string;
   available: boolean;
+}
+
+export interface CodexRuntimeCatalog {
+  models: CodexModelOption[];
+  defaults: CodexRuntimeSelection;
 }
 
 export interface ConversationSummary {
@@ -24,6 +38,7 @@ export interface ConversationSummary {
 
 export interface IntermediateOutput {
   role?: string;
+  level?: CommentaryLevel;
   text: string;
 }
 
@@ -33,17 +48,19 @@ export interface Tokens {
   output: number;
 }
 
+export type TerminalOutcome = "final_answer" | "request_user_input";
+
 /**
  * Render-relevant turn events. Mirrors the backend `activity` list persisted on
  * an assistant message and the SSE events streamed during a live turn, so the
  * same `reduceTurn` reducer drives both playback and reload.
  */
 export type TurnEvent =
-  | { kind: "intermediate_output"; role: string; backend?: CodexBackendId; text: string }
+  | { kind: "intermediate_output"; role: string; model?: string; effort?: string; level?: CommentaryLevel; text: string }
   | { kind: "decision"; action: string; task: string }
   | { kind: "implementer"; text: string }
-  | { kind: "usage"; role: string; backend?: CodexBackendId; duration_ms: number; tokens: Tokens }
-  | { kind: "final"; text: string };
+  | { kind: "usage"; role: string; model?: string; effort?: string; duration_ms: number; tokens: Tokens }
+  | { kind: "final"; text: string; outcome?: TerminalOutcome };
 
 export interface ChatMessage {
   role: "user" | "assistant" | string;
@@ -64,7 +81,7 @@ export interface Conversation {
   title: string;
   sandbox?: SandboxMode | string;
   autonomous?: boolean;
-  codex_backends?: CodexBackendSelection;
+  codex_runtime?: CodexRuntimeSelection;
   messages: ChatMessage[];
   message_page?: MessagePage;
   codex_sessions?: Record<string, string>;
@@ -79,12 +96,17 @@ export interface ConversationListResponse {
 export interface RolePhase {
   type: "role";
   role: Role;
-  backend: CodexBackendId;
+  runtime?: CodexRoleRuntime;
   round: number;
-  notes: string[];
+  notes: RoleNote[];
   durationMs: number | null;
   tokens: Tokens | null;
   done: boolean;
+}
+
+export interface RoleNote {
+  level: CommentaryLevel;
+  text: string;
 }
 
 export interface Handoff {
@@ -93,9 +115,10 @@ export interface Handoff {
   text: string;
 }
 
-export interface Answer {
-  type: "answer";
+export interface TerminalResponse {
+  type: "response";
   text: string;
+  outcome: TerminalOutcome;
 }
 
-export type TurnCard = RolePhase | Handoff | Answer;
+export type TurnCard = RolePhase | Handoff | TerminalResponse;

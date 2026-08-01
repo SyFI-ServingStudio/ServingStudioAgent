@@ -26,9 +26,7 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             app_module._valid_analyzer_resource_id("kernel_profile", "km_measure")
         )
-        self.assertFalse(
-            app_module._valid_analyzer_resource_id("kernel_measure", None)
-        )
+        self.assertFalse(app_module._valid_analyzer_resource_id("kernel_measure", None))
 
     @staticmethod
     def _sweep_payload(experiment_id: str) -> dict:
@@ -277,9 +275,7 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                     registration["resourceId"],
                 )
 
-            self.assertEqual(
-                registration["analyzerResourceId"], "p_prediction_test"
-            )
+            self.assertEqual(registration["analyzerResourceId"], "p_prediction_test")
             self.assertEqual(resource["analyzerResourceId"], "p_prediction_test")
             self.assertNotIn("files", resource)
             self.assertNotIn("iterBreakdown", resource)
@@ -287,7 +283,9 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                 (registry.repo_path("w_managed") / "logs" / "predict_llama").exists()
             )
 
-    async def test_registers_dynamic_citations_only_for_the_current_turn(self) -> None:
+    async def test_registers_dynamic_citations_for_ready_workspace_experiments(
+        self,
+    ) -> None:
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             main_dir = root / "main"
@@ -314,6 +312,19 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                         runCount=1,
                         axes=["request_rate"],
                     ),
+                    capability,
+                )
+                with self.assertRaisesRegex(Exception, "experiment is not ready"):
+                    app_module.register_managed_analyzer_citations(
+                        app_module.RegisterManagedCitationDictionary(
+                            experimentId=registration["experimentId"],
+                            analysis=self._sweep_payload(registration["experimentId"]),
+                        ),
+                        capability,
+                    )
+                await app_module.update_managed_run(
+                    registration["jobId"],
+                    app_module.UpdateManagedRun(status="ready"),
                     capability,
                 )
                 snapshot = app_module.register_managed_analyzer_citations(
@@ -343,24 +354,66 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                 "w_managed",
             )
 
-            wrong_capability = Capability(
-                token="wrong",
+            store.create("w_managed", "other-conversation", "workspace-write")
+            store.start_turn("w_managed", "other-conversation", "other-turn")
+            other_turn_capability = Capability(
+                token="other-turn",
                 workspace_id="w_managed",
-                conversation_id="conversation",
+                conversation_id="other-conversation",
                 turn_id="other-turn",
+                role="orchestrator",
+                expires_at=time.time() + 60,
+            )
+            with patch.object(app_module, "store", store):
+                reused_snapshot = app_module.register_managed_analyzer_citations(
+                    app_module.RegisterManagedCitationDictionary(
+                        experimentId=registration["experimentId"],
+                        analysis=self._sweep_payload(registration["experimentId"]),
+                    ),
+                    other_turn_capability,
+                )
+            self.assertEqual(reused_snapshot["identity"], snapshot["identity"])
+            reused_events = store.list_turn_events(
+                "w_managed", "other-turn", kinds={"citation.dictionary"}
+            )
+            self.assertEqual(len(reused_events), 1)
+
+            direct_payload = self._sweep_payload("s_direct_workspace_result")
+            direct_payload["workspace_id"] = "w_managed"
+            with patch.object(app_module, "store", store):
+                direct_snapshot = app_module.register_managed_analyzer_citations(
+                    app_module.RegisterManagedCitationDictionary(
+                        experimentId="s_direct_workspace_result",
+                        analysis=direct_payload,
+                    ),
+                    other_turn_capability,
+                )
+            self.assertIn(
+                "exp.rate20.throughput",
+                {entry["token"] for entry in direct_snapshot["entries"]},
+            )
+
+            registry.create("Other", workspace_id="w_other")
+            store.create("w_other", "conversation", "workspace-write")
+            store.start_turn("w_other", "conversation", "turn")
+            cross_workspace_capability = Capability(
+                token="cross-workspace",
+                workspace_id="w_other",
+                conversation_id="conversation",
+                turn_id="turn",
                 role="orchestrator",
                 expires_at=time.time() + 60,
             )
             with (
                 patch.object(app_module, "store", store),
-                self.assertRaisesRegex(Exception, "not produced by this managed turn"),
+                self.assertRaisesRegex(Exception, "does not belong to this workspace"),
             ):
                 app_module.register_managed_analyzer_citations(
                     app_module.RegisterManagedCitationDictionary(
                         experimentId=registration["experimentId"],
                         analysis=self._sweep_payload(registration["experimentId"]),
                     ),
-                    wrong_capability,
+                    cross_workspace_capability,
                 )
 
 

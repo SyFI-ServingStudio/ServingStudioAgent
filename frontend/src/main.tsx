@@ -28,9 +28,9 @@ import { markdownHtml } from "./markdown";
 import { reduceTurn } from "./turn";
 import type {
   ChatMessage,
-  CodexBackendId,
-  CodexBackendOption,
-  CodexBackendSelection,
+  CodexModelOption,
+  CodexRoleRuntime,
+  CodexRuntimeSelection,
   Conversation,
   ConversationSummary,
   SandboxMode,
@@ -41,7 +41,7 @@ import "./index.css";
 
 interface LiveTurn {
   events: TurnEvent[];
-  progress: string;
+  toolCall: string;
   stopped: boolean;
 }
 
@@ -50,7 +50,7 @@ interface PendingScrollRestore {
   scrollTop: number;
 }
 
-const EMPTY_LIVE: LiveTurn = { events: [], progress: "", stopped: false };
+const EMPTY_LIVE: LiveTurn = { events: [], toolCall: "", stopped: false };
 
 const SUGGESTIONS = [
   {
@@ -66,6 +66,14 @@ const SUGGESTIONS = [
     fill: "What presets are available to run a simulation, and how do I dry-run one?",
   },
 ];
+
+/** `Sol·xhigh` — short enough for the runtime line under the composer. */
+function runtimeSummary(runtime: CodexRoleRuntime): string {
+  const name = runtime.model.includes("DeepSeek")
+    ? "DS"
+    : runtime.model.replace(/^gpt-5\.6-/i, "").replace(/^gpt-/i, "");
+  return runtime.effort ? `${name}\u00b7${runtime.effort}` : name;
+}
 
 function App() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -83,10 +91,11 @@ function App() {
   const [autonomous, setAutonomous] = useState(
     localStorage.getItem("vibesim_autonomous") === "1",
   );
-  const [backendOptions, setBackendOptions] = useState<CodexBackendOption[]>([]);
-  const [codexBackends, setCodexBackends] = useState<CodexBackendSelection>({
-    orchestrator: "traditional",
-    implementer: "traditional",
+  const [modelOptions, setModelOptions] = useState<CodexModelOption[]>([]);
+  // Replaced by the server catalog's defaults as soon as it answers.
+  const [codexRuntime, setCodexRuntime] = useState<CodexRuntimeSelection>({
+    orchestrator: { model: "", effort: "" },
+    implementer: { model: "", effort: "" },
   });
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -110,8 +119,8 @@ function App() {
   useEffect(() => {
     void (async () => {
       const catalog = await listCodexBackends();
-      setBackendOptions(catalog.backends);
-      setCodexBackends(catalog.defaults);
+      setModelOptions(catalog.models);
+      setCodexRuntime(catalog.defaults);
       const items = await refreshSidebar();
       if (items.length) await selectConversation(items[0].id);
     })();
@@ -229,8 +238,8 @@ function App() {
       setSandbox(conversation.sandbox as SandboxMode);
     }
     setAutonomous(Boolean(conversation.autonomous));
-    if (conversation.codex_backends) {
-      setCodexBackends(conversation.codex_backends);
+    if (conversation.codex_runtime) {
+      setCodexRuntime(conversation.codex_runtime);
     }
     setTitle(
       conversation.title && conversation.title !== "New chat"
@@ -298,7 +307,7 @@ function App() {
     if (streaming) {
       return;
     }
-    const conversation = await createConversation(sandbox, autonomous, codexBackends);
+    const conversation = await createConversation(sandbox, autonomous, codexRuntime);
     shouldAutoScrollRef.current = true;
     olderMessagesRequestSequenceRef.current += 1;
     loadingOlderMessagesRef.current = false;
@@ -345,12 +354,14 @@ function App() {
 
     let conversationId = currentId;
     if (!conversationId) {
-      const conversation = await createConversation(sandbox, autonomous, codexBackends);
+      const conversation = await createConversation(sandbox, autonomous, codexRuntime);
       conversationId = conversation.id;
       setCurrentId(conversation.id);
       await refreshSidebar();
-    } else if (messages.length === 0) {
-      await updateConversationRuntime(conversationId, codexBackends);
+    } else {
+      // Effort, and a sibling model, stay changeable mid-conversation; the
+      // server rejects only a family change once the conversation has history.
+      await updateConversationRuntime(conversationId, codexRuntime);
     }
 
     setInput("");
@@ -404,11 +415,11 @@ function App() {
 
   function liveTurnHandlers() {
     return {
-      progress: (line: string) => {
+      toolCall: (line: string) => {
         if (!line) {
           return;
         }
-        setLive((current) => ({ ...(current || EMPTY_LIVE), progress: line }));
+        setLive((current) => ({ ...(current || EMPTY_LIVE), toolCall: line }));
       },
       event: (turnEvent: TurnEvent) => {
         setLive((current) => ({
@@ -437,7 +448,7 @@ function App() {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
         setLive((current) => ({
           ...(current || EMPTY_LIVE),
-          progress: `(error reconnecting to backend: ${String(error)})`,
+          toolCall: `(error reconnecting to backend: ${String(error)})`,
         }));
       }
     } finally {
@@ -467,7 +478,7 @@ function App() {
     } catch (error) {
       setLive((current) => ({
         ...(current || EMPTY_LIVE),
-        progress: `(error stopping backend turn: ${String(error)})`,
+        toolCall: `(error stopping backend turn: ${String(error)})`,
       }));
     } finally {
       controller.abort();
@@ -518,7 +529,7 @@ function App() {
           onNewConversation={newConversation}
           onSelect={selectConversation}
           onDelete={removeConversation}
-          backendSummary={`${codexBackends.orchestrator === "codexds" ? "DS" : "Traditional"} / ${codexBackends.implementer === "codexds" ? "DS" : "Traditional"}`}
+          backendSummary={`${runtimeSummary(codexRuntime.orchestrator)} / ${runtimeSummary(codexRuntime.implementer)}`}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -607,31 +618,72 @@ function App() {
                 </button>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-3 text-[12.5px] text-zinc-500">
-                {(["orchestrator", "implementer"] as const).map((role) => (
-                  <label key={role} className="flex items-center gap-1.5">
-                    <span className={role === "orchestrator" ? "text-orch-soft" : "text-impl-soft"}>
-                      {role === "orchestrator" ? "Orchestrator" : "Implementer"}
-                    </span>
-                    <select
-                      aria-label={`${role} Codex backend`}
-                      value={codexBackends[role]}
-                      disabled={streaming || messages.length > 0}
-                      onChange={(nativeEvent) =>
-                        setCodexBackends((current) => ({
-                          ...current,
-                          [role]: nativeEvent.target.value as CodexBackendId,
-                        }))
-                      }
-                      className="cursor-pointer rounded-md border border-hair bg-panel px-2 py-1 text-[12.5px] text-zinc-300 outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {backendOptions.map((backend) => (
-                        <option key={backend.id} value={backend.id} disabled={!backend.available}>
-                          {backend.label}{backend.available ? "" : " (unavailable)"}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
+                {(["orchestrator", "implementer"] as const).map((role) => {
+                  const selected = modelOptions.find(
+                    (model) => model.id === codexRuntime[role].model,
+                  );
+                  // A started conversation keeps its Codex session, which only a
+                  // model of the recording family can resume. Effort stays free.
+                  const familyLocked = messages.length > 0;
+                  const selectableModels = modelOptions.filter(
+                    (model) => !familyLocked || model.family === selected?.family,
+                  );
+                  return (
+                    <label key={role} className="flex items-center gap-1.5">
+                      <span
+                        className={role === "orchestrator" ? "text-orch-soft" : "text-impl-soft"}
+                      >
+                        {role === "orchestrator" ? "Orchestrator" : "Implementer"}
+                      </span>
+                      <select
+                        aria-label={`${role} Codex model`}
+                        value={codexRuntime[role].model}
+                        disabled={streaming}
+                        onChange={(nativeEvent) => {
+                          const model = modelOptions.find(
+                            (option) => option.id === nativeEvent.target.value,
+                          );
+                          if (!model) return;
+                          setCodexRuntime((current) => ({
+                            ...current,
+                            [role]: {
+                              model: model.id,
+                              effort: model.efforts.includes(current[role].effort)
+                                ? current[role].effort
+                                : model.defaultEffort,
+                            },
+                          }));
+                        }}
+                        className="cursor-pointer rounded-md border border-hair bg-panel px-2 py-1 text-[12.5px] text-zinc-300 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {selectableModels.map((model) => (
+                          <option key={model.id} value={model.id} disabled={!model.available}>
+                            {model.label}
+                            {model.available ? "" : " (unavailable)"}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        aria-label={`${role} reasoning effort`}
+                        value={codexRuntime[role].effort}
+                        disabled={streaming}
+                        onChange={(nativeEvent) =>
+                          setCodexRuntime((current) => ({
+                            ...current,
+                            [role]: { ...current[role], effort: nativeEvent.target.value },
+                          }))
+                        }
+                        className="cursor-pointer rounded-md border border-hair bg-panel px-2 py-1 text-[12.5px] text-zinc-300 outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {(selected?.efforts ?? []).map((effort) => (
+                          <option key={effort} value={effort}>
+                            {effort}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  );
+                })}
                 <label
                   className="flex cursor-pointer items-center gap-2"
                   title="How much this turn is allowed to do in the copied Docker workspace"
@@ -852,7 +904,7 @@ function StreamingTurn({
     <TurnTimeline
       cards={cards}
       streaming={streaming}
-      progress={live.progress}
+      toolCall={live.toolCall}
       conversationId={conversationId}
     />
   );

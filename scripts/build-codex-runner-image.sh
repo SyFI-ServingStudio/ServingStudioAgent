@@ -6,7 +6,9 @@ workspace_dir="$(cd "$ui_dir/.." && pwd)"
 main_dir="$workspace_dir/main"
 cd "$ui_dir"
 
-image="${CODEX_DOCKER_IMAGE:-vibesim-ui-codex-runner:latest}"
+default_image_owner="$(id -un | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_.-' '-')"
+default_image_owner="${default_image_owner%-}"
+image="${CODEX_DOCKER_IMAGE:-vibesim-ui-codex-runner:${default_image_owner:-codex}}"
 cuda_image="${CODEX_CUDA_IMAGE:-nvidia/cuda:12.8.1-devel-ubuntu24.04}"
 uv_image="${CODEX_UV_IMAGE:-ghcr.io/astral-sh/uv:python3.12-bookworm}"
 codex_package="${CODEX_NPM_PACKAGE:-@openai/codex@0.144.0}"
@@ -16,12 +18,8 @@ app_uid="${CODEX_DOCKER_UID:-$(id -u)}"
 app_gid="${CODEX_DOCKER_GID:-$(id -g)}"
 app_user="${CODEX_DOCKER_USER:-${USER:-kanzhu}}"
 rust_toolchain="${RUST_TOOLCHAIN:-stable}"
-runner_version="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v9}"
+runner_version="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v10}"
 lock_sha="$(sha256sum "$main_dir/uv.lock" | awk '{print $1}')"
-build_sha="$({
-  git -C "$main_dir" rev-parse HEAD
-  git -C "$main_dir" diff --binary HEAD -- Cargo.toml Cargo.lock .cargo simulator analyzer
-} | sha256sum | awk '{print $1}')"
 build_context="$(mktemp -d "${TMPDIR:-/tmp}/vibesim-ui-runner-build.XXXXXX")"
 trap 'rm -rf "$build_context"' EXIT
 
@@ -50,7 +48,6 @@ docker build \
   --build-arg "RUST_TOOLCHAIN=$rust_toolchain" \
   --build-arg "RUNNER_VERSION=$runner_version" \
   --build-arg "VIBESIM_LOCK_SHA=$lock_sha" \
-  --build-arg "VIBESIM_BUILD_SHA=$build_sha" \
   "$build_context"
 
 if [ "${CODEX_SKIP_RUNNER_IMAGE_TEST:-0}" != "1" ]; then

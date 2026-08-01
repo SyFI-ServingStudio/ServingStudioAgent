@@ -22,6 +22,11 @@ def _describe_item(item: dict[str, Any]) -> str:
         return "editing files..."
     if itype == "mcp_tool_call":
         return f"tool: {item.get('tool') or item.get('name') or ''}"
+    if itype == "error":
+        # Codex reports advisories as error items too — notably the non-fatal
+        # "recorded with model X but resuming with Y" note a within-family model
+        # switch produces. Without the message these render as a bare "error".
+        return f"note: {str(item.get('message') or 'error')[:240]}"
     text = item.get("text") or item.get("summary") or itype
     return str(text)[:240]
 
@@ -102,30 +107,35 @@ def _scan_rollout_agent_messages(
         return [], offset
 
 
-def unwrap_commentary(text: str) -> str:
-    """Clean an orchestrator commentary note for display.
+def parse_commentary(text: str) -> tuple[str, str]:
+    """Return ``(text, level)`` for one user-visible commentary message.
 
-    The orchestrator sometimes narrates by emitting its whole decision envelope
-    (``{"action": ..., "message": ..., "task": ...}``) into the commentary
-    channel instead of plain prose. Show the human ``message`` when present; drop
-    a bare decision envelope (its task/decision is surfaced as its own card);
-    otherwise leave the text untouched.
+    Schema-constrained orchestrators use progress/milestone envelopes. Historical
+    sessions may contain plain prose or a terminal envelope in commentary; both
+    remain reloadable, while a bare decision envelope stays hidden because its
+    task is surfaced by the dedicated handoff card.
     """
     stripped = text.strip()
     if not (stripped.startswith("{") and stripped.endswith("}")):
-        return text
+        return text, "progress"
     try:
         payload = json.loads(stripped)
     except ValueError:
-        return text
+        return text, "progress"
     if not isinstance(payload, dict):
-        return text
+        return text, "progress"
     message = payload.get("message")
     if isinstance(message, str) and message.strip():
-        return message.strip()
+        level = "milestone" if payload.get("action") == "milestone" else "progress"
+        return message.strip(), level
     if "action" in payload or "task" in payload:
-        return ""
-    return text
+        return "", "progress"
+    return text, "progress"
+
+
+def unwrap_commentary(text: str) -> str:
+    """Backward-compatible text-only view used by older callers and tests."""
+    return parse_commentary(text)[0]
 
 
 def _scan_rollout_last_token_usage(rollout_file: Path) -> dict[str, int] | None:
@@ -188,10 +198,10 @@ def _translate(ev: dict[str, Any]) -> list[dict[str, str]]:
                 ]
             return []
         if etype == "item.completed":
-            return [{"kind": "progress", "text": _describe_item(item)}]
+            return [{"kind": "tool_call", "text": _describe_item(item)}]
     if etype == "error":
         message = str(ev.get("message") or ev.get("error") or "error")
-        return [{"kind": "progress", "text": f"warning: {message}"}]
+        return [{"kind": "tool_call", "text": f"warning: {message}"}]
     return []
 
 

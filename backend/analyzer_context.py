@@ -216,13 +216,17 @@ def build_aggregate_citation_dictionary(
     axes = analysis.get("axes")
     metrics = analysis.get("metrics")
     runs = analysis.get("runs")
-    if not isinstance(axes, list) or not all(isinstance(axis, str) and axis for axis in axes):
+    if not isinstance(axes, list) or not all(
+        isinstance(axis, str) and axis for axis in axes
+    ):
         raise ValueError("Analyzer sweep axes are invalid")
     if not isinstance(metrics, list) or not isinstance(runs, list):
         raise ValueError("Analyzer sweep metrics or runs are invalid")
 
     used_aliases: set[str] = set()
-    axis_dictionaries: list[tuple[str, str, dict[str, tuple[str, CoordinateValue]]]] = []
+    axis_dictionaries: list[
+        tuple[str, str, dict[str, tuple[str, CoordinateValue]]]
+    ] = []
     for axis in axes:
         preferred = _AXIS_ALIASES.get(axis, _safe_segment(axis))
         alias = preferred
@@ -234,7 +238,9 @@ def build_aggregate_citation_dictionary(
         values: dict[str, tuple[str, CoordinateValue]] = {}
         used_segments: dict[str, str] = {}
         for run in runs:
-            if not isinstance(run, dict) or not isinstance(run.get("coordinates"), dict):
+            if not isinstance(run, dict) or not isinstance(
+                run.get("coordinates"), dict
+            ):
                 raise ValueError("Analyzer sweep run is invalid")
             if axis not in run["coordinates"]:
                 continue
@@ -384,7 +390,7 @@ def build_aggregate_citation_dictionary(
 
 
 def prompt_with_analyzer_context(text: str, context: AnalyzerTurnContext | None) -> str:
-    """Attach a bounded machine snapshot without changing stored user prose."""
+    """Attach only the active selection; MCP supplies current evidence tokens."""
     if context is None:
         return text
     selection_json = json.dumps(
@@ -401,11 +407,11 @@ def prompt_with_analyzer_context(text: str, context: AnalyzerTurnContext | None)
         f"{text}\n\n"
         "## Active Analyzer context\n"
         f"Selection (literal JSON): `{selection_json}`\n\n"
-        f"{context.citation_dictionary.document.strip()}\n\n"
-        "When a claim is supported by Analyzer evidence, cite only an exact token "
-        "listed above as Markdown inline code. Do not invent tokens, write Analyzer "
-        "URLs, opaque ids, percent encoding, or JSON citations. Writing a citation "
-        "does not navigate the Analyzer; the user decides whether to open it."
+        "Read this exact resource through the Analyzer MCP before reporting its "
+        "values. The exact sweep response places a complete citation token beside "
+        "each raw value. Copy the matching token unchanged as Markdown inline code; "
+        "do not invent tokens or write navigation JSON. A citation navigates only "
+        "after the user clicks it."
     )
 
 

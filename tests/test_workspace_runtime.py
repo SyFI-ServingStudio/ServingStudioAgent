@@ -1,3 +1,4 @@
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -9,6 +10,78 @@ from backend.store import WorkspaceRegistry
 
 
 class WorkspaceRuntimeTest(unittest.TestCase):
+    def test_prepare_materializes_external_symlink_target(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            main_dir = temporary_root / "main"
+            external_docs = temporary_root / "ref" / "docs"
+            main_dir.mkdir()
+            external_docs.mkdir(parents=True)
+            (external_docs / "design.md").write_text("# Design\n", "utf-8")
+            os.symlink("../ref/docs", main_dir / "old-doc")
+            workspace_repo = temporary_root / "managed" / "repo"
+
+            with (
+                patch("backend.codex_runtime.workspace.MAIN_DIR", main_dir),
+                patch(
+                    "backend.codex_runtime.workspace.workspace_main_for",
+                    return_value=workspace_repo,
+                ),
+                patch(
+                    "backend.codex_runtime.workspace._tracked_entries",
+                    return_value=([Path("old-doc")], []),
+                ),
+            ):
+                prepared = prepare_workspace("w_test")
+
+            copied_docs = prepared / "old-doc"
+            self.assertFalse(copied_docs.is_symlink())
+            self.assertEqual(
+                (copied_docs / "design.md").read_text("utf-8"),
+                "# Design\n",
+            )
+
+    def test_prepare_preserves_internal_skill_symlink(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            temporary_root = Path(temporary_directory)
+            main_dir = temporary_root / "main"
+            (main_dir / "skills" / "example").mkdir(parents=True)
+            (main_dir / "skills" / "example" / "SKILL.md").write_text(
+                "# Example\n",
+                "utf-8",
+            )
+            (main_dir / ".codex").mkdir()
+            os.symlink("../skills", main_dir / ".codex" / "skills")
+            workspace_repo = temporary_root / "managed" / "repo"
+
+            with (
+                patch("backend.codex_runtime.workspace.MAIN_DIR", main_dir),
+                patch(
+                    "backend.codex_runtime.workspace.workspace_main_for",
+                    return_value=workspace_repo,
+                ),
+                patch(
+                    "backend.codex_runtime.workspace._tracked_entries",
+                    return_value=(
+                        [
+                            Path("skills/example/SKILL.md"),
+                            Path(".codex/skills"),
+                        ],
+                        [],
+                    ),
+                ),
+            ):
+                prepared = prepare_workspace("w_test")
+
+            copied_link = prepared / ".codex" / "skills"
+            self.assertTrue(copied_link.is_symlink())
+            self.assertEqual(os.readlink(copied_link), "../skills")
+            self.assertEqual(copied_link.resolve(), (prepared / "skills").resolve())
+            self.assertEqual(
+                (copied_link / "example" / "SKILL.md").read_text("utf-8"),
+                "# Example\n",
+            )
+
     def test_prepare_preserves_tracked_deletions_in_dirty_main(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)

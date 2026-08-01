@@ -4,11 +4,56 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from backend.codex_runtime.config import CODEXDS_MODEL as DEEPSEEK_MODEL
 from backend.migrate_workspaces import (
     execute_migration,
     repair_completed_timestamps,
 )
 from backend.store import Store, WorkspaceRegistry
+
+
+def _write_legacy_conversation_database(database_path: Path) -> None:
+    """One conversation in the pre-registry schema: a backend id per role."""
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                naming_state TEXT NOT NULL DEFAULT 'manual',
+                sandbox TEXT NOT NULL,
+                autonomous INTEGER NOT NULL,
+                orchestrator_backend TEXT NOT NULL DEFAULT 'traditional',
+                implementer_backend TEXT NOT NULL DEFAULT 'traditional',
+                prompt_fingerprint TEXT,
+                peer_workspace TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE codex_sessions (
+                conversation_id TEXT NOT NULL REFERENCES conversations(id)
+                    ON DELETE CASCADE,
+                role TEXT NOT NULL,
+                backend_id TEXT NOT NULL DEFAULT 'traditional',
+                session_id TEXT NOT NULL,
+                PRIMARY KEY (conversation_id, role)
+            );
+            INSERT INTO conversations(
+                id, title, naming_state, sandbox, autonomous,
+                orchestrator_backend, implementer_backend, prompt_fingerprint,
+                peer_workspace, created_at, updated_at
+            ) VALUES (
+                'legacy', 'Legacy chat', 'manual', 'workspace-write', 0,
+                'codexds', 'traditional', 'contract', NULL, 1.0, 1.0
+            );
+            INSERT INTO codex_sessions(conversation_id, role, backend_id, session_id)
+            VALUES ('legacy', 'orchestrator', 'codexds', 'legacy-session');
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 class WorkspaceStoreTest(unittest.TestCase):
@@ -122,7 +167,7 @@ class WorkspaceStoreTest(unittest.TestCase):
                 "new-contract",
             )
 
-    def test_role_backends_are_persisted_and_lock_after_first_message(self) -> None:
+    def test_role_runtimes_are_persisted_and_sessions_key_on_family(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             registry = self.make_registry(temporary_directory)
             store = Store(registry)
@@ -130,29 +175,32 @@ class WorkspaceStoreTest(unittest.TestCase):
                 "w_main",
                 "conversation",
                 "workspace-write",
-                orchestrator_backend="codexds",
-                implementer_backend="traditional",
+                orchestrator_runtime={"model": DEEPSEEK_MODEL, "effort": "high"},
+                implementer_runtime={"model": "gpt-5.6-sol", "effort": "xhigh"},
             )
             store.set_codex_session(
                 "w_main",
                 "conversation",
                 "orchestrator",
                 "deepseek-session",
-                backend_id="codexds",
+                family="deepseek",
             )
 
             self.assertEqual(
-                store.get("w_main", "conversation")["codex_backends"],
-                {"orchestrator": "codexds", "implementer": "traditional"},
+                store.get("w_main", "conversation")["codex_runtime"],
+                {
+                    "orchestrator": {"model": DEEPSEEK_MODEL, "effort": "high"},
+                    "implementer": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                },
             )
             self.assertEqual(
                 store.sessions_for_prompt(
                     "w_main",
                     "conversation",
                     "contract",
-                    backends={
-                        "orchestrator": "codexds",
-                        "implementer": "traditional",
+                    runtimes={
+                        "orchestrator": {"model": DEEPSEEK_MODEL, "effort": "max"},
+                        "implementer": {"model": "gpt-5.6-sol", "effort": "xhigh"},
                     },
                 ),
                 {"orchestrator": "deepseek-session"},
@@ -162,22 +210,86 @@ class WorkspaceStoreTest(unittest.TestCase):
                     "w_main",
                     "conversation",
                     "contract",
-                    backends={
-                        "orchestrator": "traditional",
-                        "implementer": "traditional",
+                    runtimes={
+                        "orchestrator": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                        "implementer": {"model": "gpt-5.6-sol", "effort": "xhigh"},
                     },
                 ),
                 {},
             )
 
+    def test_started_conversation_locks_family_but_not_model_or_effort(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            store = Store(registry)
+            store.create(
+                "w_main",
+                "conversation",
+                "workspace-write",
+                orchestrator_runtime={"model": "gpt-5.6-sol", "effort": "xhigh"},
+                implementer_runtime={"model": "gpt-5.6-sol", "effort": "xhigh"},
+            )
+            store.set_codex_session(
+                "w_main", "conversation", "orchestrator", "sol-session", family="gpt"
+            )
             store.add_message("w_main", "conversation", "user", "start")
-            with self.assertRaisesRegex(ValueError, "runtime is locked"):
-                store.update_codex_backends(
+
+            # A sibling model resumes the same rollout, so the session survives.
+            store.update_codex_runtime(
+                "w_main",
+                "conversation",
+                orchestrator_runtime={"model": "gpt-5.6-luna", "effort": "low"},
+                implementer_runtime={"model": "gpt-5.6-sol", "effort": "max"},
+            )
+            self.assertEqual(
+                store.get("w_main", "conversation")["codex_runtime"],
+                {
+                    "orchestrator": {"model": "gpt-5.6-luna", "effort": "low"},
+                    "implementer": {"model": "gpt-5.6-sol", "effort": "max"},
+                },
+            )
+            self.assertEqual(
+                store.get("w_main", "conversation")["codex_sessions"],
+                {"orchestrator": "sol-session"},
+            )
+
+            with self.assertRaisesRegex(ValueError, "family is locked"):
+                store.update_codex_runtime(
                     "w_main",
                     "conversation",
-                    orchestrator_backend="traditional",
-                    implementer_backend="traditional",
+                    orchestrator_runtime={"model": DEEPSEEK_MODEL, "effort": "max"},
+                    implementer_runtime={"model": "gpt-5.6-sol", "effort": "max"},
                 )
+
+    def test_legacy_backend_columns_migrate_onto_models(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            database_path = registry.database_path("w_main")
+            database_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_legacy_conversation_database(database_path)
+
+            store = Store(registry)
+            conversation = store.get("w_main", "legacy")
+
+            self.assertEqual(
+                conversation["codex_runtime"],
+                {
+                    "orchestrator": {"model": DEEPSEEK_MODEL, "effort": "max"},
+                    "implementer": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                },
+            )
+            # The old rollout is still reusable: its backend id became a family.
+            self.assertEqual(
+                store.sessions_for_prompt(
+                    "w_main",
+                    "legacy",
+                    "contract",
+                    runtimes={
+                        "orchestrator": {"model": DEEPSEEK_MODEL, "effort": "max"},
+                    },
+                ),
+                {"orchestrator": "legacy-session"},
+            )
 
     def test_generated_names_use_pending_compare_and_set(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -349,7 +461,7 @@ class WorkspaceStoreTest(unittest.TestCase):
             store.append_turn_event(
                 "w_main",
                 "turn",
-                "progress",
+                "tool_call",
                 {"text": "not persisted in the rendered story"},
             )
             store.append_turn_event(

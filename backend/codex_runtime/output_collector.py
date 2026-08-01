@@ -13,7 +13,7 @@ from .codex_events import (
     _scan_rollout_agent_messages,
     _scan_rollout_last_token_usage,
     _translate,
-    unwrap_commentary,
+    parse_commentary,
 )
 from .config import CODEX_IDLE_TIMEOUT, LOG
 from .exec_types import CodexEvent, CodexExecRequest
@@ -30,7 +30,7 @@ class CodexOutputCollector:
         self.rollout_file: Path | None = None
         self.rollout_offset = 0
         self.stderr_chunks: list[str] = []
-        self.seen_intermediate_outputs: set[tuple[str, str]] = set()
+        self.seen_intermediate_outputs: set[tuple[str, str, str]] = set()
         # Cumulative token usage recorded just before this call, so the per-call
         # delta is `end - baseline` (the Codex session is reused across rounds).
         self.tokens_baseline: dict[str, int] | None = None
@@ -115,7 +115,8 @@ class CodexOutputCollector:
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
-            backend=self.request.backend_id,
+            model=self.request.model_id,
+            effort=self.request.effort,
             duration_ms=duration_ms,
             read_tokens=tokens["read"],
             prefill_tokens=tokens["prefill"],
@@ -124,7 +125,8 @@ class CodexOutputCollector:
         return {
             "kind": "usage",
             "role": self.request.label,
-            "backend": self.request.backend_id,
+            "model": self.request.model_id,
+            "effort": self.request.effort,
             "duration_ms": duration_ms,
             "tokens": tokens,
         }
@@ -197,7 +199,7 @@ class CodexOutputCollector:
             return self._session_event(translated_event["session_id"])
         if kind == "agent_text":
             return self._capture_agent_text(translated_event)
-        return self._progress_event(translated_event.get("text", ""))
+        return self._tool_call_event(translated_event.get("text", ""))
 
     def _session_event(self, session_id: str) -> CodexEvent:
         self.current_session_id = session_id
@@ -207,13 +209,15 @@ class CodexOutputCollector:
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
-            backend=self.request.backend_id,
+            model=self.request.model_id,
+            effort=self.request.effort,
             codex_session_id=session_id,
         )
         return {
             "kind": "session",
             "role": self.request.label,
-            "backend": self.request.backend_id,
+            "model": self.request.model_id,
+            "effort": self.request.effort,
             "session_id": session_id,
         }
 
@@ -229,10 +233,12 @@ class CodexOutputCollector:
     def _intermediate_output_event(
         self, note_text: str, *, source: str
     ) -> CodexEvent | None:
-        note_text = unwrap_commentary(note_text)
+        note_text, level = parse_commentary(note_text)
         if not note_text:
             return None
-        note_key = (self.request.label, note_text)
+        # The same words may intentionally be promoted from a small progress
+        # note to a completed milestone. Keep the semantic level in the key.
+        note_key = (self.request.label, level, note_text)
         if note_key in self.seen_intermediate_outputs:
             return None
         self.seen_intermediate_outputs.add(note_key)
@@ -242,27 +248,33 @@ class CodexOutputCollector:
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
-            backend=self.request.backend_id,
+            model=self.request.model_id,
+            effort=self.request.effort,
             text=note_text,
             source=source,
         )
         return {
             "kind": "intermediate_output",
             "role": self.request.label,
-            "backend": self.request.backend_id,
+            "model": self.request.model_id,
+            "effort": self.request.effort,
+            "level": level,
             "text": note_text,
         }
 
-    def _progress_event(self, progress_text: str) -> CodexEvent:
+    def _tool_call_event(self, tool_call_text: str) -> CodexEvent:
         log_event(
             LOG,
-            "codex.progress",
+            "codex.tool_call",
             conversation_id=self.request.conversation_id,
             turn_id=self.request.turn_id,
             role=self.request.label,
-            text=progress_text,
+            text=tool_call_text,
         )
-        return {"kind": "progress", "text": f"{self.request.label}: {progress_text}"}
+        return {
+            "kind": "tool_call",
+            "text": f"{self.request.label}: {tool_call_text}",
+        }
 
     def _fallback_final_text(self, returncode: int | None, stderr_text: str) -> str:
         if returncode not in (0, None) and stderr_text:

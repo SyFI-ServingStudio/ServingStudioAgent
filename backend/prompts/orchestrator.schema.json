@@ -7,7 +7,13 @@
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["user_message", "run_implementer", "continue_work"]
+      "enum": [
+        "progress",
+        "milestone",
+        "final_answer",
+        "request_user_input",
+        "delegate"
+      ]
     },
     "message": { "type": "string" },
     "task": { "type": "string" }

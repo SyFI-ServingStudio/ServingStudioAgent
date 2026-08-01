@@ -8,7 +8,9 @@ ui_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workspace_dir="$(cd "$ui_dir/.." && pwd)"
 main_dir="$workspace_dir/main"
 
-image="${CODEX_DOCKER_IMAGE:-vibesim-ui-codex-runner:latest}"
+default_image_owner="$(id -un | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_.-' '-')"
+default_image_owner="${default_image_owner%-}"
+image="${CODEX_DOCKER_IMAGE:-vibesim-ui-codex-runner:${default_image_owner:-codex}}"
 app_uid="${CODEX_DOCKER_UID:-$(id -u)}"
 app_gid="${CODEX_DOCKER_GID:-$(id -g)}"
 app_user="${CODEX_DOCKER_USER:-${USER:-kanzhu}}"
@@ -112,16 +114,22 @@ cc -fuse-ld=mold "$native_smoke_dir/main.c" -o "$native_smoke_dir/main"
 "$native_smoke_dir/main"
 
 # Seed exactly as container startup does, then exercise the same launcher build
-# environment used by an agent. Only the analyzer Git-provenance relink is allowed;
-# recompiling simulator or third-party crates means the seed fingerprint drifted.
+# environment used by an agent. The image intentionally excludes first-party
+# VibeSim artifacts so any workspace revision is safe; only those local packages
+# may compile here. Recompiling a third-party crate means the dependency seed
+# drifted or was incomplete.
 test -d "${VIBESIM_BAKED_TARGET:?}/release" || fail "Cargo target seed is missing"
+test ! -e "${VIBESIM_BAKED_TARGET}/release/simulator" \
+  || fail "Cargo target seed contains a stale simulator binary"
+test ! -e "${VIBESIM_BAKED_TARGET}/release/analyze" \
+  || fail "Cargo target seed contains a stale analyzer binary"
 mkdir -p target
 cp -a --reflink=auto "$VIBESIM_BAKED_TARGET/." target/
 launcher_log="$(mktemp /workspace/.runner-launcher-smoke.XXXXXX.log)"
 uv run python -m launcher --cache-report presets/unified_smoke.yaml 2>&1 | tee "$launcher_log"
 if grep -E "^[[:space:]]*Compiling " "$launcher_log" \
-  | grep -Ev "^[[:space:]]*Compiling analyzer "; then
-  fail "Cargo target seed caused unexpected recompilation"
+  | grep -Ev "^[[:space:]]*Compiling (simulator|analyzer|timing-kernel-derive|schema-derive) "; then
+  fail "Cargo target seed caused a third-party dependency to recompile"
 fi
 
 if [ "'"$smoke_level"'" = timing ]; then

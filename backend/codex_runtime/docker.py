@@ -28,15 +28,15 @@ from .config import (
     CODEX_DOCKER_UV_CACHE_DIR,
     CODEX_DOCKER_UV_PROJECT_ENVIRONMENT,
     CONTAINER_RUNTIME_VERSION,
+    DEFAULT_CODEX_FAMILY,
     HOST_HF_HOME,
     LOG,
-    MAIN_BUILD_SHA,
     MAIN_DIR,
     MAIN_LOCK_SHA,
     PROMPTS_CONTAINER_DIR,
     PROMPTS_DIR,
     agents_prompt_name,
-    codex_backend,
+    codex_family,
     codex_home_for,
     container_name,
     role_codex_home_for,
@@ -214,28 +214,29 @@ def _prepare_role_codex_home(
     workspace_id: str,
     conversation_id: str,
     role: str,
-    backend_id: str,
+    family_id: str,
 ) -> Path:
-    """Prepare one role's durable Codex home from its selected backend profile.
+    """Prepare one role's durable Codex home from its family's auth profile.
 
-    Runtime state is never copied from the source profile. Keeping role homes
-    separate prevents a session created against one provider from being resumed
-    by the other role after a backend selection change.
+    Keyed by family, not model: sibling models share one auth home, which is what
+    lets a rollout recorded by one of them resume under another. Runtime state is
+    never copied from the source profile, and keeping role homes separate stops a
+    session created against one provider from being resumed by the other role.
     """
-    backend = codex_backend(backend_id)
-    host_codex_home = backend.host_codex_home
+    family = codex_family(family_id)
+    host_codex_home = family.host_codex_home
     if not host_codex_home.exists():
         raise RuntimeError(
-            f"Codex backend {backend_id!r} home not found: {host_codex_home}"
+            f"Codex family {family_id!r} home not found: {host_codex_home}"
         )
     missing_environment = [
         name
-        for name in backend.required_environment
+        for name in family.required_environment
         if not os.environ.get(name, "").strip()
     ]
     if missing_environment:
         raise RuntimeError(
-            f"Codex backend {backend_id!r} is missing environment: "
+            f"Codex family {family_id!r} is missing environment: "
             + ", ".join(missing_environment)
         )
 
@@ -283,7 +284,6 @@ RUNTIME_VERSION={shlex.quote(CONTAINER_RUNTIME_VERSION)}
 RUNTIME_IMAGE={shlex.quote(CODEX_DOCKER_IMAGE)}
 EXPECTED_DG_USE_LOCAL_VERSION={shlex.quote(CODEX_DOCKER_DG_USE_LOCAL_VERSION)}
 EXPECTED_LOCK_SHA={shlex.quote(MAIN_LOCK_SHA)}
-EXPECTED_BUILD_SHA={shlex.quote(MAIN_BUILD_SHA)}
 GPU_REQUEST={shlex.quote(CODEX_DOCKER_GPUS)}
 MODEL_HOME={shlex.quote(CODEX_DOCKER_HF_HOME)}
 MODEL_MOUNT_REQUIRED={"1" if HOST_HF_HOME is not None else "0"}
@@ -309,11 +309,6 @@ fi
 
 if [ "${{VIBESIM_BAKED_LOCK_SHA:-}}" != "$EXPECTED_LOCK_SHA" ]; then
   echo "Docker runner was prewarmed for lock ${{VIBESIM_BAKED_LOCK_SHA:-unset}}, expected $EXPECTED_LOCK_SHA" >&2
-  exit 127
-fi
-
-if [ -n "$EXPECTED_BUILD_SHA" ] && [ "${{VIBESIM_BAKED_BUILD_SHA:-}}" != "$EXPECTED_BUILD_SHA" ]; then
-  echo "Docker runner has build seed ${{VIBESIM_BAKED_BUILD_SHA:-unset}}, expected $EXPECTED_BUILD_SHA" >&2
   exit 127
 fi
 
@@ -362,7 +357,6 @@ echo "$RUNTIME_VERSION" > /tmp/vibesim_ui_runtime_version
 echo "$RUNTIME_IMAGE" > /tmp/vibesim_ui_runtime_image
 echo "$GPU_REQUEST" > /tmp/vibesim_ui_gpu_request
 echo "$EXPECTED_LOCK_SHA" > /tmp/vibesim_ui_main_lock_sha
-echo "$EXPECTED_BUILD_SHA" > /tmp/vibesim_ui_main_build_sha
 echo "$BACKEND_FINGERPRINT" > /tmp/vibesim_ui_backend_fingerprint
 touch /tmp/vibesim_ui_codex_ready
 """
@@ -386,19 +380,21 @@ def ensure_container(
     peer_dir: str | None = None,
     *,
     autonomous: bool = False,
-    orchestrator_backend: str = "traditional",
-    implementer_backend: str = "traditional",
+    orchestrator_family: str = DEFAULT_CODEX_FAMILY,
+    implementer_family: str = DEFAULT_CODEX_FAMILY,
 ) -> str:
     container = container_name(workspace_id, conversation_id)
-    backend_selection = {
-        "orchestrator": orchestrator_backend,
-        "implementer": implementer_backend,
+    family_selection = {
+        "orchestrator": orchestrator_family,
+        "implementer": implementer_family,
     }
+    # Fingerprinted by family, not model: switching to a sibling model reuses the
+    # same auth home, so tearing the container down would buy nothing.
     backend_fingerprint = ",".join(
-        f"{role}:{backend_id}" for role, backend_id in backend_selection.items()
+        f"{role}:{family_id}" for role, family_id in family_selection.items()
     )
-    for role, backend_id in backend_selection.items():
-        _prepare_role_codex_home(workspace_id, conversation_id, role, backend_id)
+    for role, family_id in family_selection.items():
+        _prepare_role_codex_home(workspace_id, conversation_id, role, family_id)
     codex_root = codex_home_for(workspace_id, conversation_id)
     selected_agents_prompt = agents_prompt_name(autonomous)
     log_event(
@@ -416,7 +412,6 @@ def ensure_container(
         runtime_version=CONTAINER_RUNTIME_VERSION,
         image=CODEX_DOCKER_IMAGE,
         main_lock_sha=MAIN_LOCK_SHA,
-        main_build_sha=MAIN_BUILD_SHA,
     )
     if container_running(container):
         gpu_ready_clause = (
@@ -450,11 +445,9 @@ def ensure_container(
                     f'&& test "$(cat /tmp/vibesim_ui_runtime_image 2>/dev/null)" = {CODEX_DOCKER_IMAGE!r} '
                     f'&& test "$(cat /tmp/vibesim_ui_gpu_request 2>/dev/null)" = {CODEX_DOCKER_GPUS!r} '
                     f'&& test "$(cat /tmp/vibesim_ui_main_lock_sha 2>/dev/null)" = {MAIN_LOCK_SHA!r} '
-                    f'&& test "$(cat /tmp/vibesim_ui_main_build_sha 2>/dev/null)" = {MAIN_BUILD_SHA!r} '
                     f'&& test "$(cat /tmp/vibesim_ui_backend_fingerprint 2>/dev/null)" = {backend_fingerprint!r} '
                     f'&& test "${{DG_USE_LOCAL_VERSION:-}}" = {CODEX_DOCKER_DG_USE_LOCAL_VERSION!r} '
                     f'&& test "${{VIBESIM_BAKED_LOCK_SHA:-}}" = {MAIN_LOCK_SHA!r} '
-                    f'&& test "${{VIBESIM_BAKED_BUILD_SHA:-}}" = {MAIN_BUILD_SHA!r} '
                     f"&& test -d {CODEX_DOCKER_UV_PROJECT_ENVIRONMENT!r} "
                     f"&& test -w {CODEX_DOCKER_UV_PROJECT_ENVIRONMENT!r} "
                     "&& command -v bash >/dev/null 2>&1 "
@@ -514,7 +507,7 @@ def ensure_container(
         conversation_id=conversation_id,
         container=container,
         codex_home=str(codex_root),
-        backends=backend_selection,
+        families=family_selection,
     )
 
     cmd = [
@@ -571,8 +564,8 @@ def ensure_container(
     ]
     required_environment = {
         environment_name
-        for backend_id in backend_selection.values()
-        for environment_name in codex_backend(backend_id).required_environment
+        for family_id in family_selection.values()
+        for environment_name in codex_family(family_id).required_environment
     }
     for environment_name in sorted(required_environment):
         # Passing only the name keeps the secret value out of command logs;

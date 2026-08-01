@@ -7,14 +7,25 @@ import {
   FlagCheckered,
   GearSix,
   PaperPlaneRight,
+  Question,
   Sparkle,
 } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/cn";
 import { markdownHtml, normalizeBackendText } from "@/markdown";
 import { formatDuration, formatTokens, stripRolePrefix } from "@/turn";
-import type { IntermediateOutput, RolePhase, Tokens, TurnCard } from "@/types";
+import type { IntermediateOutput, RoleNote, RolePhase, TerminalOutcome, Tokens, TurnCard } from "@/types";
 import { ROLE_STYLE } from "./roleStyles";
+
+/** Which model actually ran this phase, shrunk for the card subtitle. */
+function phaseRuntimeLabel(phase: RolePhase): string {
+  const model = phase.runtime?.model;
+  if (!model) return "codex";
+  const name = model.includes("DeepSeek")
+    ? "DeepSeek"
+    : model.replace(/^gpt-5\.6-/i, "").replace(/^gpt-/i, "");
+  return phase.runtime?.effort ? `${name}\u00b7${phase.runtime.effort}` : name;
+}
 
 function LoadingDots({ className }: { className: string }) {
   return (
@@ -35,7 +46,7 @@ function ToolCallLine({ text, dotClass, textClass }: { text: string; dotClass: s
   );
 }
 
-function NoteList({ notes, dotClass }: { notes: string[]; dotClass: string }) {
+function NoteList({ notes, dotClass }: { notes: RoleNote[]; dotClass: string }) {
   if (!notes.length) {
     return null;
   }
@@ -44,10 +55,18 @@ function NoteList({ notes, dotClass }: { notes: string[]; dotClass: string }) {
       {notes.map((note, index) => (
         <li
           key={index}
-          className="animate-noteIn flex gap-2 text-[13px] leading-snug text-zinc-300"
+          className={cn(
+            "animate-noteIn flex gap-2 text-[13px] leading-snug text-zinc-300",
+            note.level === "milestone" &&
+              "rounded-md border border-emerald-400/15 bg-emerald-400/[0.045] px-2 py-1.5 text-zinc-200",
+          )}
         >
-          <span className={cn("mt-[7px] h-1 w-1 shrink-0 rounded-full", dotClass)} />
-          <span>{normalizeBackendText(note)}</span>
+          {note.level === "milestone" ? (
+            <FlagCheckered className="mt-0.5 shrink-0 text-emerald-300/75" size={12} weight="fill" />
+          ) : (
+            <span className={cn("mt-[7px] h-1 w-1 shrink-0 rounded-full", dotClass)} />
+          )}
+          <span>{normalizeBackendText(note.text)}</span>
         </li>
       ))}
     </ul>
@@ -153,11 +172,11 @@ function Card({ avatar, avatarClass, title, sub, chip, working, workingClass, ac
 function RoleCard({
   phase,
   working,
-  progress,
+  toolCall,
 }: {
   phase: RolePhase;
   working: boolean;
-  progress: string;
+  toolCall: string;
 }) {
   const style = ROLE_STYLE[phase.role];
   const RoleIcon = style.Icon;
@@ -183,7 +202,7 @@ function RoleCard({
       avatar={<RoleIcon size={13} weight="fill" />}
       avatarClass={style.avatar}
       title={style.label}
-      sub={`${phase.backend === "codexds" ? "CodexDS" : "Traditional"} · round ${phase.round}`}
+      sub={`${phaseRuntimeLabel(phase)} · round ${phase.round}`}
       chip={chip}
       working={working}
       workingClass={style.cardWorking}
@@ -194,7 +213,7 @@ function RoleCard({
       <NoteList notes={phase.notes} dotClass={style.dot} />
       {working ? (
         <ToolCallLine
-          text={stripRolePrefix(progress)}
+          text={stripRolePrefix(toolCall)}
           dotClass={style.dot}
           textClass={style.progressText}
         />
@@ -235,22 +254,31 @@ function HandoffCard({
   );
 }
 
-function AnswerCard({ text, conversationId }: { text: string; conversationId: string | null }) {
+function TerminalResponseCard({
+  text,
+  outcome = "final_answer",
+  conversationId,
+}: {
+  text: string;
+  outcome?: TerminalOutcome;
+  conversationId: string | null;
+}) {
+  const needsInput = outcome === "request_user_input";
   return (
     <Card
-      avatar={<CheckCircle size={13} weight="fill" />}
-      avatarClass="border-ans-line bg-ans-bg text-ans"
-      title="Answer"
-      accent="border-l-2 border-l-ans/70"
-      tint="tint-answer"
-      bodyLabel="final answer"
+      avatar={needsInput ? <Question size={13} weight="bold" /> : <CheckCircle size={13} weight="fill" />}
+      avatarClass={needsInput ? "border-orch-line bg-orch-bg text-orch-soft" : "border-ans-line bg-ans-bg text-ans"}
+      title={needsInput ? "Input needed" : "Answer"}
+      accent={needsInput ? "border-l-2 border-l-orch/70" : "border-l-2 border-l-ans/70"}
+      tint={needsInput ? "tint-orch" : "tint-answer"}
+      bodyLabel={needsInput ? "clarification" : "final answer"}
     >
       <MarkdownBody source={text} conversationId={conversationId} />
     </Card>
   );
 }
 
-function PreparingCard({ progress }: { progress: string }) {
+function PreparingCard({ toolCall }: { toolCall: string }) {
   return (
     <Card
       avatar={<GearSix size={13} weight="fill" />}
@@ -264,31 +292,31 @@ function PreparingCard({ progress }: { progress: string }) {
         </span>
       }
     >
-      <ToolCallLine text={progress} dotClass="bg-zinc-500" textClass="text-zinc-400" />
+      <ToolCallLine text={toolCall} dotClass="bg-zinc-500" textClass="text-zinc-400" />
     </Card>
   );
 }
 
 /**
  * The full assistant turn as a role timeline. `streaming` marks the last open
- * role phase as working (and surfaces the tool-call `progress` line); on reload
+ * role phase as working (and surfaces the transient `toolCall` line); on reload
  * everything is settled.
  */
 export function TurnTimeline({
   cards,
   streaming = false,
-  progress = "",
+  toolCall = "",
   conversationId,
 }: {
   cards: TurnCard[];
   streaming?: boolean;
-  progress?: string;
+  toolCall?: string;
   conversationId: string | null;
 }) {
   if (streaming && cards.length === 0) {
     return (
       <div className="animate-rise w-full space-y-2.5">
-        <PreparingCard progress={progress} />
+        <PreparingCard toolCall={toolCall} />
       </div>
     );
   }
@@ -302,7 +330,7 @@ export function TurnTimeline({
               key={index}
               phase={card}
               working={streaming && !card.done}
-              progress={progress}
+              toolCall={toolCall}
             />
           );
         }
@@ -316,7 +344,14 @@ export function TurnTimeline({
             />
           );
         }
-        return <AnswerCard key={index} text={card.text} conversationId={conversationId} />;
+        return (
+          <TerminalResponseCard
+            key={index}
+            text={card.text}
+            outcome={card.outcome}
+            conversationId={conversationId}
+          />
+        );
       })}
     </div>
   );
@@ -345,10 +380,16 @@ export function LegacyAssistant({
           title="Process"
           bodyLabel={`intermediate output · ${notes.length}`}
         >
-          <NoteList notes={notes.map((output) => output.text)} dotClass="bg-zinc-500" />
+          <NoteList
+            notes={notes.map((output) => ({
+              text: output.text,
+              level: output.level === "milestone" ? "milestone" : "progress",
+            }))}
+            dotClass="bg-zinc-500"
+          />
         </Card>
       ) : null}
-      <AnswerCard text={content} conversationId={conversationId} />
+      <TerminalResponseCard text={content} conversationId={conversationId} />
     </div>
   );
 }
