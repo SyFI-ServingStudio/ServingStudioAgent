@@ -88,6 +88,13 @@ Answer the end user in English. Keep responses concise and practical.
   the orchestrator rather than improvising.
 - If a generated figure or plot is relevant, embed it with Markdown image syntax
   so the UI can serve it from the workspace.
+- Refer to a file the user may want to open with a Markdown link whose target is
+  its workspace-relative path, e.g. `[the summary](logs/20260728_run/summary.json)`.
+  The UI turns that into a file preview beside the conversation. A bare path in
+  backticks also becomes a link when it carries a directory and a known
+  extension, and `path.rs:42` opens at that line — so prefer a real path over
+  prose like "the summary file in the run directory". Do not rewrite paths as
+  URLs, and do not paste a file's contents when a link will do.
 - `profiling/profile.db` is a workspace-local working copy, not protected shared
   state. Treat schema migration, cache updates, and performance-row writes as
   normal in-scope mutations when the selected skill workflow needs them. Do not
