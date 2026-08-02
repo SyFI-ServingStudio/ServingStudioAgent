@@ -256,6 +256,53 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
         self.assertNotIn("runs", evidence)
         self.assertNotIn("_vibesim_citations", evidence)
 
+    def test_singleton_row_reuses_panel_citation(self) -> None:
+        payload = {
+            "protocol_version": 1,
+            "schema_version": 1,
+            "sweep_id": "e_singleton",
+            "display_name": "glm52_ctx8k_c64",
+            "axes": [],
+            "metrics": [
+                {
+                    "key": "total_tps",
+                    "label": "Total throughput",
+                    "unit": "tok/s",
+                    "objective": "maximize",
+                }
+            ],
+            "runs": [
+                {
+                    "run_id": "r_singleton",
+                    "coordinates": {},
+                    "metrics": {"total_tps": 4110.69},
+                }
+            ],
+        }
+        dictionary = {
+            "entries": [
+                {
+                    "token": "exp.throughput",
+                    "target": {
+                        "kind": "aggregate",
+                        "experimentId": "e_singleton",
+                        "metricKey": "total_tps",
+                    },
+                }
+            ]
+        }
+
+        evidence = server._compact_sweep_evidence(payload, dictionary)
+
+        self.assertEqual(
+            evidence["metrics"]["total_tps"]["citation"],
+            "exp.throughput",
+        )
+        self.assertEqual(
+            evidence["rows"][0]["values"]["total_tps"],
+            {"raw": 4110.69, "citation": "exp.throughput"},
+        )
+
     def test_host_exact_sweep_uses_the_same_managed_registration_path(self) -> None:
         payload = {
             "protocol_version": 1,

@@ -358,6 +358,12 @@ def build_aggregate_citation_dictionary(
 
     member_rows: list[str] = []
     for run in runs:
+        if not isinstance(run, dict) or not isinstance(run.get("coordinates"), dict):
+            raise ValueError("Analyzer sweep run is invalid")
+        # A zero-axis aggregate is a singleton: its panel citation already
+        # identifies the only run, and there is no coordinate segment to add.
+        if not axis_dictionaries:
+            continue
         run_id = run.get("run_id")
         if not isinstance(run_id, str) or not run_id:
             continue
@@ -433,7 +439,11 @@ def build_aggregate_citation_dictionary(
             *(f"  - `{member}`" for member in member_rows),
             "- metrics:",
             *metric_rows,
-            "- forms: `exp.<metric>` and `exp.<member>.<metric>`",
+            (
+                "- forms: `exp.<metric>` and `exp.<member>.<metric>`"
+                if axis_dictionaries
+                else "- form: `exp.<metric>`"
+            ),
         ]
     )
     identity_source = "|".join(

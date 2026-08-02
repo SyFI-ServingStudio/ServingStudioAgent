@@ -650,14 +650,22 @@ def _compact_sweep_evidence(
                 raise AnalyzerToolError(
                     f"Analyzer sweep row is missing metric {metric_key}"
                 )
-            values[metric_key] = {
-                "raw": raw_values[metric_key],
-                "citation": _unique_dictionary_token(
+            # With no axes, the panel and its only row are the same evidence
+            # scope. Reuse the panel token instead of requiring an impossible
+            # coordinate-qualified citation from the dictionary.
+            citation = (
+                metric_projection[metric_key]["citation"]
+                if not axes
+                else _unique_dictionary_token(
                     entries,
                     experiment_id=experiment_id,
                     metric_key=metric_key,
                     run_id=run_id,
-                ),
+                )
+            )
+            values[metric_key] = {
+                "raw": raw_values[metric_key],
+                "citation": citation,
             }
         row_projection.append(
             {

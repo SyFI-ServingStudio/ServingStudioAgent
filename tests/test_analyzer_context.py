@@ -96,6 +96,44 @@ class AnalyzerContextTests(unittest.TestCase):
         self.assertEqual(target.experiment_id, "e_test")
         self.assertEqual(target.run_id, "r_test")
 
+    def test_builds_singleton_dictionary_without_empty_coordinate_token(self) -> None:
+        snapshot = build_aggregate_citation_dictionary(
+            {
+                "protocol_version": 1,
+                "schema_version": 1,
+                "sweep_id": "e_singleton",
+                "axes": [],
+                "metrics": [
+                    {
+                        "key": "total_tps",
+                        "label": "Total throughput",
+                        "group": "throughput",
+                        "unit": "token/s",
+                        "objective": "maximize",
+                    }
+                ],
+                "runs": [
+                    {
+                        "run_id": "r_singleton",
+                        "coordinates": {},
+                        "labels": {},
+                    }
+                ],
+            },
+            workspace_id="w_managed",
+            experiment_id="e_singleton",
+        )
+
+        self.assertEqual(
+            [entry.token for entry in snapshot.entries],
+            ["exp.throughput"],
+        )
+        target = snapshot.entries[0].target
+        self.assertEqual(target.experiment_id, "e_singleton")
+        self.assertIsNone(target.run_id)
+        self.assertIn("- form: `exp.<metric>`", snapshot.document)
+        self.assertNotIn("exp..", snapshot.document)
+
     def test_freeze_citations_only_accepts_exact_inline_allowlist_tokens(self) -> None:
         markdown = (
             "Prose exp.tp2.rate20.throughput is not linked. "
