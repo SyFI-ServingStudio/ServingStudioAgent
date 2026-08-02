@@ -44,7 +44,12 @@ class RolePromptTest(unittest.TestCase):
                 self.assertIn("operate-use-analyzer/SKILL.md", prompt)
                 self.assertIn("/api/v1/sweeps?status=ready&limit=5", prompt)
                 self.assertIn("Same-workspace results from other conversations", prompt)
-                self.assertIn("adjacent complete citation token", prompt)
+                self.assertIn(
+                    "sweep, run, timing prediction, kernel profile, or kernel",
+                    prompt,
+                )
+                self.assertIn("`citations` map", prompt)
+                self.assertIn("Copy the matching token unchanged", prompt)
                 self.assertIn("Never assemble", prompt)
                 self.assertIn('"action": "final_answer"', prompt)
                 self.assertIn('"action": "progress"', prompt)

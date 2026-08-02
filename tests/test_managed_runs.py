@@ -404,17 +404,56 @@ class ManagedRunApiTests(unittest.IsolatedAsyncioTestCase):
                 role="orchestrator",
                 expires_at=time.time() + 60,
             )
-            with (
-                patch.object(app_module, "store", store),
-                self.assertRaisesRegex(Exception, "does not belong to this workspace"),
-            ):
-                app_module.register_managed_analyzer_citations(
+            with patch.object(app_module, "store", store):
+                cross_workspace_snapshot = app_module.register_managed_analyzer_citations(
                     app_module.RegisterManagedCitationDictionary(
                         experimentId=registration["experimentId"],
                         analysis=self._sweep_payload(registration["experimentId"]),
                     ),
                     cross_workspace_capability,
                 )
+                prediction_snapshot = app_module.register_managed_analyzer_citations(
+                    app_module.RegisterManagedCitationDictionary(
+                        resourceKind="prediction",
+                        predictionId="p_test",
+                        resourcePath=(
+                            "/api/v1/predictions/p_test/cases/40/"
+                            "optimality-waterfall?mode=unlocked"
+                        ),
+                    ),
+                    cross_workspace_capability,
+                )
+
+            self.assertEqual(
+                cross_workspace_snapshot["entries"][0]["target"]["workspaceId"],
+                "w_other",
+            )
+            prediction_entries = {
+                entry["token"]: entry for entry in prediction_snapshot["entries"]
+            }
+            self.assertEqual(
+                prediction_entries["pred.casev40.optimality-breakdown"]["target"][
+                    "predictionId"
+                ],
+                "p_test",
+            )
+            prediction_target = prediction_entries[
+                "pred.casev40.optimality-breakdown"
+            ]["target"]
+            self.assertIsNone(prediction_target["operationId"])
+            self.assertIsNone(prediction_target["leafId"])
+            self.assertIsNone(prediction_target["parallelId"])
+            with patch.object(app_module, "store", store):
+                restored_dictionary = app_module._latest_turn_citation_dictionary(
+                    "w_other",
+                    "turn",
+                    None,
+                )
+            self.assertIsNotNone(restored_dictionary)
+            self.assertIn(
+                "pred.casev40.optimality-breakdown",
+                {entry.token for entry in restored_dictionary.entries},
+            )
 
 
 if __name__ == "__main__":

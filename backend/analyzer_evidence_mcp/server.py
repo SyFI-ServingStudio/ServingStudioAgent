@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urljoin, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 from mcp.server.fastmcp import FastMCP
@@ -67,15 +67,22 @@ from Analyzer; this tool does not estimate, aggregate, or reinterpret metrics.
 
 In a managed UI turn, reading an exact sweep payload from either source returns
 one compact block: resource, ordered axes, metric metadata, and rows. Every raw
-value has an adjacent complete citation token. Copy that token unchanged as
-Markdown inline code beside the supported claim. Do not assemble, alter, or
-invent tokens. They become clickable only when the user clicks the final answer."""
+value has an adjacent complete citation token. Reading an exact timing-prediction
+resource and exact run endpoint return one {citation, result} block. Kernel profile
+and measurement resources return {result, citations}, keyed by the metric or plot
+shown in the result. Copy the complete citation token
+unchanged as Markdown inline code beside the supported claim. Do not assemble,
+alter, or invent tokens. They become clickable only when the user clicks the
+final answer."""
 
 mcp = FastMCP(
     "VibeSim Analyzer",
     instructions=(
-        "Use the read_analyzer_resource tool to discover and inspect existing "
-        "simulation results. Never guess resource identifiers or metric values."
+        "Use read_analyzer_resource to discover and inspect Analyzer-owned "
+        "simulation sweeps, runs, timing predictions, kernel profiles, and "
+        "kernel measurements. Exact typed reads return complete citation tokens; "
+        "copy the matching token unchanged beside each supported claim. Never "
+        "guess resource identifiers, metric values, or citation tokens."
     ),
 )
 
@@ -313,6 +320,218 @@ def _register_sweep_citations(
     return dictionary
 
 
+def _prediction_target_from_path(safe_path: str) -> dict[str, Any] | None:
+    parsed_path = urlsplit(safe_path)
+    segments = parsed_path.path.strip("/").split("/")
+    if len(segments) < 5 or segments[:3] != ["api", "v1", "predictions"]:
+        return None
+    prediction_id = segments[3]
+    suffix = segments[4:]
+    target: dict[str, Any] = {
+        "predictionId": prediction_id,
+        "caseId": None,
+        "operationId": None,
+        "leafId": None,
+        "panelId": None,
+        "optimalityMode": "unlocked",
+    }
+    query = parse_qs(parsed_path.query)
+    requested_mode = query.get("mode", ["unlocked"])[0]
+    if requested_mode in {"unlocked", "batch_locked"}:
+        target["optimalityMode"] = requested_mode
+    if suffix in (["descriptor"], ["cases"]):
+        return target
+    if len(suffix) == 3 and suffix[0] == "cases" and suffix[2] in {
+        "optimality-waterfall",
+        "optimality-kernel-ladder",
+    }:
+        target["caseId"] = suffix[1]
+        target["panelId"] = (
+            "optimality-breakdown"
+            if suffix[2] == "optimality-waterfall"
+            else "optimality-kernel-ladder"
+        )
+        return target
+    if (
+        len(suffix) == 5
+        and suffix[0] == "cases"
+        and suffix[2] == "operations"
+        and suffix[4] == "cost-tree"
+    ):
+        target.update(
+            {"caseId": suffix[1], "operationId": suffix[3], "panelId": "cost-tree"}
+        )
+        return target
+    if (
+        len(suffix) == 7
+        and suffix[0] == "cases"
+        and suffix[2] == "operations"
+        and suffix[4] == "cost-tree"
+        and suffix[5].isdigit()
+        and suffix[6] == "kernel-throughput-analysis"
+    ):
+        target.update(
+            {
+                "caseId": suffix[1],
+                "operationId": suffix[3],
+                "leafId": int(suffix[5]),
+                "panelId": "kernel-throughput",
+            }
+        )
+        return target
+    if suffix == ["subjects", "kernel-input-distribution", "payload"]:
+        target["panelId"] = "kernel-input-distribution"
+        return target
+    return None
+
+
+def _register_managed_dictionary(request_payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Use the current turn capability to freeze one Analyzer resource."""
+    context = _managed_context()
+    if context is None:
+        return None
+    backend_url = context.get("backend_url")
+    capability_token = context.get("capability_token")
+    if not isinstance(backend_url, str) or not isinstance(capability_token, str):
+        raise AnalyzerToolError("managed Agent context is incomplete")
+    request_body = json.dumps(
+        request_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    registration_request = Request(
+        urljoin(
+            f"{backend_url.rstrip('/')}/",
+            "api/internal/analyzer-citations/register",
+        ),
+        data=request_body,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {capability_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(registration_request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            dictionary = json.loads(response.read(MAX_RESPONSE_BYTES + 1))
+    except HTTPError as error:
+        detail = error.read(2048).decode("utf-8", errors="replace")
+        raise AnalyzerToolError(
+            f"citation registration returned HTTP {error.code}: {detail}"
+        ) from error
+    except (URLError, json.JSONDecodeError) as error:
+        raise AnalyzerToolError(f"citation registration failed: {error}") from error
+    if not isinstance(dictionary, dict):
+        raise AnalyzerToolError("citation registration returned an invalid dictionary")
+    return dictionary
+
+
+def _register_prediction_citations(
+    safe_path: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    target = _prediction_target_from_path(safe_path)
+    if target is None:
+        return None
+    dictionary = _register_managed_dictionary(
+        {
+            "resourceKind": "prediction",
+            "predictionId": target["predictionId"],
+            "resourcePath": safe_path,
+        }
+    )
+    if dictionary is None:
+        return None
+    return dictionary, target
+
+
+def _prediction_citation_token(
+    dictionary: dict[str, Any], target: dict[str, Any]
+) -> str:
+    entries = dictionary.get("entries")
+    if not isinstance(entries, list):
+        raise AnalyzerToolError("prediction citation dictionary has no entries")
+    matches = []
+    for entry in entries:
+        candidate = entry.get("target") if isinstance(entry, dict) else None
+        if not isinstance(candidate, dict):
+            continue
+        if all(candidate.get(key) == value for key, value in target.items()):
+            token = entry.get("token")
+            if isinstance(token, str):
+                matches.append(token)
+    if len(matches) != 1:
+        raise AnalyzerToolError(
+            f"prediction citation dictionary has {len(matches)} matches for this resource"
+        )
+    return matches[0]
+
+
+def _register_kernel_citations(
+    safe_path: str,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Register exact profile/measurement JSON without exposing job identity."""
+    segments = urlsplit(safe_path).path.strip("/").split("/")
+    if len(segments) != 5 or segments[:2] != ["api", "v1"]:
+        return None
+    if segments[2] == "kernel-profiles" and segments[4] in {"descriptor", "curve"}:
+        resource_kind = "kernel_profile"
+        identifier_key = "profileId"
+    elif segments[2] == "kernel-measurements" and segments[4] in {
+        "descriptor",
+        "summary",
+    }:
+        resource_kind = "kernel_measurement"
+        identifier_key = "measurementId"
+    else:
+        return None
+    dictionary = _register_managed_dictionary(
+        {
+            "resourceKind": resource_kind,
+            identifier_key: segments[3],
+            "resourcePath": safe_path,
+            "analysis": payload,
+        }
+    )
+    if dictionary is None:
+        return None
+    if not isinstance(dictionary.get("entries"), list):
+        raise AnalyzerToolError("citation registration returned an invalid dictionary")
+    citations: dict[str, str] = {}
+    for entry in dictionary["entries"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("target"), dict):
+            continue
+        token = entry.get("token")
+        target = entry["target"]
+        detail = target.get("metricKey") or target.get("plotName") or target.get("panelId")
+        if isinstance(token, str) and isinstance(detail, str):
+            citations[detail] = token
+    return {"result": payload, "citations": citations}
+
+
+def _register_run_citations(safe_path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    segments = urlsplit(safe_path).path.strip("/").split("/")
+    if len(segments) < 5 or segments[:3] != ["api", "v1", "runs"]:
+        return None
+    dictionary = _register_managed_dictionary(
+        {
+            "resourceKind": "run",
+            "runId": segments[3],
+            "resourcePath": safe_path,
+        }
+    )
+    if dictionary is None:
+        return None
+    entries = dictionary.get("entries")
+    if not isinstance(entries, list) or len(entries) != 1 or not isinstance(entries[0], dict):
+        raise AnalyzerToolError("run citation registration returned an invalid dictionary")
+    token = entries[0].get("token")
+    if not isinstance(token, str):
+        raise AnalyzerToolError("run citation registration returned no token")
+    return {"citation": token, "result": payload}
+
+
 def _unique_dictionary_token(
     entries: list[Any],
     *,
@@ -507,6 +726,21 @@ def read_analyzer_resource(
     dictionary = _register_sweep_citations(safe_path, payload)
     if dictionary is not None:
         return _compact_sweep_evidence(payload, dictionary)
+    prediction_registration = _register_prediction_citations(safe_path)
+    if prediction_registration is not None:
+        prediction_dictionary, prediction_target = prediction_registration
+        return {
+            "citation": _prediction_citation_token(
+                prediction_dictionary, prediction_target
+            ),
+            "result": payload,
+        }
+    kernel_result = _register_kernel_citations(safe_path, payload)
+    if kernel_result is not None:
+        return kernel_result
+    run_result = _register_run_citations(safe_path, payload)
+    if run_result is not None:
+        return run_result
     return payload
 
 

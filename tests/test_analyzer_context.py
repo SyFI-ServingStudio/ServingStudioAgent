@@ -7,6 +7,10 @@ from backend.analyzer_context import (
     AnalyzerTurnContext,
     CitationDictionarySnapshot,
     build_aggregate_citation_dictionary,
+    build_kernel_measurement_citation_dictionary,
+    build_kernel_profile_citation_dictionary,
+    build_prediction_citation_dictionary,
+    build_run_citation_dictionary,
     freeze_citations,
     prompt_with_analyzer_context,
 )
@@ -107,6 +111,65 @@ class AnalyzerContextTests(unittest.TestCase):
         )
         self.assertEqual(citations[0]["target"]["runId"], "r_test")
         self.assertNotIn("statistic", citations[0]["target"])
+
+    def test_builds_exact_prediction_dictionary_from_analyzer_path(self) -> None:
+        snapshot = build_prediction_citation_dictionary(
+            workspace_id="w_managed",
+            prediction_id="p_test",
+            resource_path=(
+                "/api/v1/predictions/p_test/cases/40/"
+                "optimality-waterfall?mode=batch_locked"
+            ),
+        )
+
+        self.assertEqual(len(snapshot.entries), 1)
+        entry = snapshot.entries[0]
+        self.assertEqual(
+            entry.token,
+            "pred.casev40.batch_locked.optimality-breakdown",
+        )
+        self.assertEqual(entry.target.kind, "prediction")
+        self.assertEqual(entry.target.prediction_id, "p_test")
+        self.assertEqual(entry.target.case_id, "40")
+        self.assertEqual(entry.target.panel_id, "optimality-breakdown")
+        self.assertEqual(entry.target.optimality_mode, "batch_locked")
+        self.assertFalse(hasattr(entry.target, "run_id"))
+
+        citations = freeze_citations(
+            f"Evidence `{entry.token}`.",
+            snapshot,
+        )
+        self.assertEqual(citations[0]["target"]["predictionId"], "p_test")
+        self.assertNotIn("runId", citations[0]["target"])
+
+    def test_builds_run_and_kernel_resource_dictionaries(self) -> None:
+        run = build_run_citation_dictionary(
+            workspace_id="w_managed",
+            run_id="r_test",
+            resource_path="/api/v1/runs/r_test/subjects/utilization/payload",
+        )
+        profile = build_kernel_profile_citation_dictionary(
+            workspace_id="w_managed",
+            profile_id="kp_test",
+            resource_path="/api/v1/kernel-profiles/kp_test/curve",
+            analysis={"series": [{"metric": "time_ms"}, {"metric": "tflops"}]},
+        )
+        measurement = build_kernel_measurement_citation_dictionary(
+            workspace_id="w_managed",
+            measurement_id="km_test",
+            resource_path="/api/v1/kernel-measurements/km_test/summary",
+            analysis={"runtime_ms": {"median": 1.2, "p99": 1.8}},
+        )
+
+        self.assertEqual(run.entries[0].token, "run.cluster.utilization")
+        self.assertEqual(
+            [entry.token for entry in profile.entries],
+            ["kprof.curve.time_ms", "kprof.curve.tflops"],
+        )
+        self.assertEqual(
+            [entry.token for entry in measurement.entries],
+            ["kmeasure.summary.median", "kmeasure.summary.p99"],
+        )
 
     def test_dictionary_rejects_duplicate_or_non_dsl_tokens(self) -> None:
         payload = dictionary().model_dump(by_alias=True)

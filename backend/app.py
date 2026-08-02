@@ -54,7 +54,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator
+from typing import AsyncIterator, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -65,7 +65,12 @@ from .analyzer_context import (
     AnalyzerTurnContext,
     CitationDictionarySnapshot,
     build_aggregate_citation_dictionary,
+    build_kernel_measurement_citation_dictionary,
+    build_kernel_profile_citation_dictionary,
+    build_prediction_citation_dictionary,
+    build_run_citation_dictionary,
     freeze_citations,
+    merge_citation_dictionaries,
     persisted_context,
     prompt_with_analyzer_context,
 )
@@ -521,8 +526,18 @@ class UpdateManagedJob(BaseModel):
 class RegisterManagedCitationDictionary(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    experiment_id: str = Field(alias="experimentId", min_length=1)
-    analysis: dict
+    resource_kind: Literal[
+        "aggregate", "run", "prediction", "kernel_profile", "kernel_measurement"
+    ] = Field(
+        default="aggregate", alias="resourceKind"
+    )
+    experiment_id: str | None = Field(default=None, alias="experimentId")
+    prediction_id: str | None = Field(default=None, alias="predictionId")
+    run_id: str | None = Field(default=None, alias="runId")
+    profile_id: str | None = Field(default=None, alias="profileId")
+    measurement_id: str | None = Field(default=None, alias="measurementId")
+    resource_path: str | None = Field(default=None, alias="resourcePath")
+    analysis: dict | None = None
 
 
 class SendMessage(BaseModel):
@@ -1137,40 +1152,108 @@ def register_managed_analyzer_citations(
     capability: Capability = Depends(require_managed_capability),
 ) -> dict:
     """Register evidence discovered after an Agent-first turn has started."""
-    workspace_experiment = store.get_experiment(
-        capability.workspace_id,
-        body.experiment_id,
-    )
-    if workspace_experiment is None:
-        # Direct/legacy experiments are Analyzer resources but have no managed
-        # SQLite row. Their exact payload carries the registry workspace id;
-        # managed local Analyzer payloads use an implementation-local id and
-        # therefore must take the registered-experiment path above.
-        if body.analysis.get("workspace_id") != capability.workspace_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Analyzer experiment does not belong to this workspace",
-            )
-    elif workspace_experiment["status"] != "ready":
-        raise HTTPException(
-            status_code=409,
-            detail="Analyzer experiment is not ready",
-        )
     try:
-        dictionary = build_aggregate_citation_dictionary(
-            body.analysis,
-            workspace_id=capability.workspace_id,
-            experiment_id=body.experiment_id,
-        )
+        if body.resource_kind == "run":
+            if body.run_id is None or body.resource_path is None:
+                raise ValueError("run citation registration requires runId and resourcePath")
+            dictionary = build_run_citation_dictionary(
+                workspace_id=capability.workspace_id,
+                run_id=body.run_id,
+                resource_path=body.resource_path,
+            )
+            resource_id = body.run_id
+        elif body.resource_kind == "prediction":
+            if body.prediction_id is None or body.resource_path is None:
+                raise ValueError(
+                    "prediction citation registration requires predictionId and resourcePath"
+                )
+            dictionary = build_prediction_citation_dictionary(
+                workspace_id=capability.workspace_id,
+                prediction_id=body.prediction_id,
+                resource_path=body.resource_path,
+            )
+            resource_id = body.prediction_id
+        elif body.resource_kind == "kernel_profile":
+            if body.profile_id is None or body.resource_path is None or body.analysis is None:
+                raise ValueError(
+                    "kernel profile citation registration requires profileId, "
+                    "resourcePath, and analysis"
+                )
+            dictionary = build_kernel_profile_citation_dictionary(
+                workspace_id=capability.workspace_id,
+                profile_id=body.profile_id,
+                resource_path=body.resource_path,
+                analysis=body.analysis,
+            )
+            resource_id = body.profile_id
+        elif body.resource_kind == "kernel_measurement":
+            if (
+                body.measurement_id is None
+                or body.resource_path is None
+                or body.analysis is None
+            ):
+                raise ValueError(
+                    "kernel measurement citation registration requires measurementId, "
+                    "resourcePath, and analysis"
+                )
+            dictionary = build_kernel_measurement_citation_dictionary(
+                workspace_id=capability.workspace_id,
+                measurement_id=body.measurement_id,
+                resource_path=body.resource_path,
+                analysis=body.analysis,
+            )
+            resource_id = body.measurement_id
+        else:
+            if body.experiment_id is None or body.analysis is None:
+                raise ValueError(
+                    "aggregate citation registration requires experimentId and analysis"
+                )
+            workspace_experiment = store.get_experiment(
+                capability.workspace_id,
+                body.experiment_id,
+            )
+            if workspace_experiment is not None and workspace_experiment["status"] != "ready":
+                raise HTTPException(
+                    status_code=409,
+                    detail="Analyzer experiment is not ready",
+                )
+            # Analyzer catalogs are shared read-only evidence. Conversation or
+            # workspace ownership controls mutation, not whether a ready result
+            # may be cited from another managed turn.
+            dictionary = build_aggregate_citation_dictionary(
+                body.analysis,
+                workspace_id=capability.workspace_id,
+                experiment_id=body.experiment_id,
+            )
+            resource_id = body.experiment_id
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    snapshot = dictionary.model_dump(by_alias=True, exclude_none=True)
+    dictionary = merge_citation_dictionaries(
+        _latest_turn_citation_dictionary(
+            capability.workspace_id,
+            capability.turn_id,
+            None,
+        ),
+        dictionary,
+    )
+    # EvidenceRef nullable selectors are required protocol fields. Keep their
+    # explicit nulls in the response/event so the final-answer freezer can
+    # validate the persisted dictionary again after the MCP call returns.
+    snapshot = dictionary.model_dump(by_alias=True)
     store.append_turn_event(
         capability.workspace_id,
         capability.turn_id,
         "citation.dictionary",
         {
-            "experimentId": body.experiment_id,
+            "resourceKind": body.resource_kind,
+            "resourceId": resource_id,
+            **{
+                "aggregate": {"experimentId": resource_id},
+                "run": {"runId": resource_id},
+                "prediction": {"predictionId": resource_id},
+                "kernel_profile": {"profileId": resource_id},
+                "kernel_measurement": {"measurementId": resource_id},
+            }[body.resource_kind],
             "dictionary": snapshot,
         },
     )

@@ -25,6 +25,138 @@ class _JsonResponse(BytesIO):
 
 
 class AnalyzerEvidenceMcpTests(unittest.TestCase):
+    def test_managed_kernel_curve_returns_metric_citation_map(self) -> None:
+        resource_path = "/api/v1/kernel-profiles/kp_test/curve"
+        curve_payload = {
+            "series": [{"metric": "time_ms"}, {"metric": "tflops"}],
+            "rows": [{"metrics": {"time_ms": 0.5, "tflops": 100.0}}],
+        }
+        citation_dictionary = {
+            "entries": [
+                {
+                    "token": "kprof.curve.time_ms",
+                    "target": {"kind": "kernel_profile", "metricKey": "time_ms"},
+                },
+                {
+                    "token": "kprof.curve.tflops",
+                    "target": {"kind": "kernel_profile", "metricKey": "tflops"},
+                },
+            ]
+        }
+
+        def open_request(request, timeout):
+            if request.full_url.endswith(resource_path):
+                return _JsonResponse(curve_payload)
+            posted = json.loads(request.data)
+            self.assertEqual(posted["resourceKind"], "kernel_profile")
+            self.assertEqual(posted["profileId"], "kp_test")
+            self.assertEqual(posted["analysis"], curve_payload)
+            return _JsonResponse(citation_dictionary)
+
+        with TemporaryDirectory() as temporary_directory:
+            context_path = Path(temporary_directory) / "managed-run.json"
+            context_path.write_text(
+                json.dumps(
+                    {
+                        "backend_url": "http://backend.test:8765",
+                        "capability_token": "token",
+                    }
+                ),
+                "utf-8",
+            )
+            with (
+                patch.dict(
+                    "os.environ",
+                    {"VIBESIM_MANAGED_RUN_CONTEXT": str(context_path)},
+                ),
+                patch.object(
+                    server, "_base_url", return_value="http://analyzer.test:8787"
+                ),
+                patch.object(server, "urlopen", open_request),
+            ):
+                evidence = server.read_analyzer_resource(resource_path, source="host")
+
+        self.assertEqual(evidence["result"], curve_payload)
+        self.assertEqual(
+            evidence["citations"],
+            {
+                "time_ms": "kprof.curve.time_ms",
+                "tflops": "kprof.curve.tflops",
+            },
+        )
+
+    def test_managed_prediction_returns_one_citation_adjacent_result(self) -> None:
+        resource_path = (
+            "/api/v1/predictions/p_test/cases/40/"
+            "optimality-waterfall?mode=batch_locked"
+        )
+        prediction_payload = {
+            "scope": "iteration",
+            "rows": [{"name": "hardware_gap", "gpu_seconds": 1.25}],
+        }
+        citation_dictionary = {
+            "identity": "prediction-test",
+            "entries": [
+                {
+                    "token": "pred.casev40.batch_locked.optimality-breakdown",
+                    "target": {
+                        "kind": "prediction",
+                        "predictionId": "p_test",
+                        "caseId": "40",
+                        "operationId": None,
+                        "leafId": None,
+                        "panelId": "optimality-breakdown",
+                        "optimalityMode": "batch_locked",
+                    },
+                }
+            ],
+        }
+
+        def open_request(request, timeout):
+            if "/api/v1/predictions/p_test/cases/40/optimality-waterfall" in request.full_url:
+                return _JsonResponse(prediction_payload)
+            posted = json.loads(request.data)
+            self.assertEqual(
+                posted,
+                {
+                    "resourceKind": "prediction",
+                    "predictionId": "p_test",
+                    "resourcePath": resource_path,
+                },
+            )
+            return _JsonResponse(citation_dictionary)
+
+        with TemporaryDirectory() as temporary_directory:
+            context_path = Path(temporary_directory) / "managed-run.json"
+            context_path.write_text(
+                json.dumps(
+                    {
+                        "backend_url": "http://backend.test:8765",
+                        "capability_token": "token",
+                    }
+                ),
+                "utf-8",
+            )
+            with (
+                patch.dict(
+                    "os.environ",
+                    {"VIBESIM_MANAGED_RUN_CONTEXT": str(context_path)},
+                ),
+                patch.object(
+                    server, "_base_url", return_value="http://analyzer.test:8787"
+                ),
+                patch.object(server, "urlopen", open_request),
+            ):
+                evidence = server.read_analyzer_resource(resource_path, source="host")
+
+        self.assertEqual(
+            evidence,
+            {
+                "citation": "pred.casev40.batch_locked.optimality-breakdown",
+                "result": prediction_payload,
+            },
+        )
+
     def test_managed_sweep_returns_compact_citation_adjacent_evidence(self) -> None:
         sweep_payload = {
             "protocol_version": 1,
