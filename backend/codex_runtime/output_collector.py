@@ -31,6 +31,10 @@ class CodexOutputCollector:
         self.rollout_offset = 0
         self.stderr_chunks: list[str] = []
         self.seen_intermediate_outputs: set[tuple[str, str, str]] = set()
+        # Some Responses-compatible providers omit Codex's commentary phase.
+        # Keep their assistant text pending until the next event establishes
+        # whether work continued (intermediate) or the call ended (final).
+        self.pending_unphased_text: str | None = None
         # Cumulative token usage recorded just before this call, so the per-call
         # delta is `end - baseline` (the Codex session is reused across rounds).
         self.tokens_baseline: dict[str, int] | None = None
@@ -58,6 +62,10 @@ class CodexOutputCollector:
     def events_from_stdout_line(self, raw_line: bytes) -> list[CodexEvent]:
         events: list[CodexEvent] = []
         for translated_event in _translate_stdout_line(raw_line):
+            if translated_event["kind"] == "tool_call":
+                pending_event = self._flush_pending_unphased_text()
+                if pending_event is not None:
+                    events.append(pending_event)
             event = self._event_from_translated_event(translated_event)
             if event is not None:
                 events.append(event)
@@ -167,6 +175,9 @@ class CodexOutputCollector:
         }
 
     def final_event(self, returncode: int | None) -> CodexEvent:
+        if self.pending_unphased_text:
+            self.final_text = self.pending_unphased_text
+            self.pending_unphased_text = None
         raw_stderr_text = "".join(self.stderr_chunks).strip()
         stderr_text = _codex_stderr_for_error(
             raw_stderr_text,
@@ -227,8 +238,16 @@ class CodexOutputCollector:
         if phase == "commentary":
             return self._intermediate_output_event(text.strip(), source="stdout")
         if text.strip():
-            self.final_text = text.strip()
+            self.pending_unphased_text = text.strip()
         return None
+
+    def _flush_pending_unphased_text(self) -> CodexEvent | None:
+        """Promote pending assistant text once later tool activity proves it non-final."""
+        if not self.pending_unphased_text:
+            return None
+        note_text = self.pending_unphased_text
+        self.pending_unphased_text = None
+        return self._intermediate_output_event(note_text, source="stdout-unphased")
 
     def _intermediate_output_event(
         self, note_text: str, *, source: str

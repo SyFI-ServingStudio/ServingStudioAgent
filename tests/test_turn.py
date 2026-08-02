@@ -6,9 +6,68 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from backend.codex_runtime import turn as turn_module
+from backend.codex_runtime.config import CODEXDS_MODEL
 
 
 class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_deepseek_omits_schema_while_gpt_keeps_it(self) -> None:
+        async def run_for(model_id: str) -> str | None:
+            captured_schema: str | None = None
+
+            async def fake_to_thread(function, *args, **kwargs):
+                return function(*args, **kwargs)
+
+            async def fake_run_codex(container, prompt, **kwargs):
+                nonlocal captured_schema
+                del container, prompt
+                captured_schema = kwargs["output_schema"]
+                yield {
+                    "kind": "final",
+                    "text": (
+                        '{"action":"final_answer","message":"Done.",'
+                        '"task":""}'
+                    ),
+                }
+
+            with TemporaryDirectory() as temporary_directory:
+                workspace = Path(temporary_directory)
+                with (
+                    patch.object(
+                        turn_module, "workspace_main_for", return_value=workspace
+                    ),
+                    patch.object(
+                        turn_module, "prepare_workspace", return_value=workspace
+                    ),
+                    patch.object(turn_module, "container_running", return_value=True),
+                    patch.object(
+                        turn_module, "ensure_container", return_value="container"
+                    ),
+                    patch.object(turn_module, "write_managed_context"),
+                    patch.object(turn_module, "run_codex", fake_run_codex),
+                    patch.object(turn_module.asyncio, "to_thread", fake_to_thread),
+                ):
+                    events = [
+                        event
+                        async for event in turn_module.run_turn(
+                            "w_test",
+                            "conversation-1",
+                            "Analyze the sweep.",
+                            sandbox="workspace-write",
+                            orchestrator_runtime={
+                                "model": model_id,
+                                "effort": "max" if model_id == CODEXDS_MODEL else "high",
+                            },
+                        )
+                    ]
+            self.assertEqual(events[-1]["text"], "Done.")
+            return captured_schema
+
+        deepseek_schema = await run_for(CODEXDS_MODEL)
+        gpt_schema = await run_for("gpt-5.6-terra")
+
+        self.assertIsNone(deepseek_schema)
+        self.assertEqual(gpt_schema, turn_module.ORCHESTRATOR_SCHEMA_IN_CONTAINER)
+
     async def test_final_progress_checkpoint_resumes_same_session(self) -> None:
         prompts: list[tuple[str, str | None]] = []
 

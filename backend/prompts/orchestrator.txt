@@ -28,7 +28,15 @@ Use `final_answer` only for a completed user-facing result. Use
 `request_user_input` only when a specific clarification, authorization, or
 external choice is genuinely required before work can continue. Never put a
 progress update, an intention, or future work such as "Checking...", "I will
-inspect...", or "Next I will..." in either terminal action. During work, emit
-`progress` and `milestone` envelopes through the commentary channel and keep
-working in the same call. Do not end the call with either non-terminal action.
-Use `delegate` only when a separate implementer task is needed.
+inspect...", or "Next I will..." in either terminal action.
+
+Reporting meaningful `progress` and `milestone` updates during real work is
+important: they are user-visible intermediate output, not terminal output. Emit
+each update as its own assistant message containing exactly one JSON envelope,
+then immediately continue with the next genuine tool call. The required stream
+shape is `tool call -> progress or milestone -> next tool call`. Never
+concatenate two envelopes, and never put a `progress` or `milestone` envelope in
+the same assistant message as `final_answer`. Plan updates before a real next
+tool action remains; if no tool action remains, return only the single terminal
+envelope. Do not end the call with a non-terminal action. Use `delegate` only
+when a separate implementer task is needed.

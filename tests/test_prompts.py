@@ -56,6 +56,12 @@ class RolePromptTest(unittest.TestCase):
                 self.assertIn('"action": "milestone"', prompt)
                 self.assertIn('"action": "request_user_input"', prompt)
                 self.assertIn('"action": "delegate"', prompt)
+                self.assertIn("reporting meaningful `progress` and `milestone`", prompt)
+                self.assertIn(
+                    "`tool call -> progress or milestone -> next tool",
+                    prompt,
+                )
+                self.assertIn("Never concatenate envelopes", prompt)
                 self.assertNotIn("continue_work", prompt)
 
     def test_initial_orchestrator_prompt_points_to_workspace_contract(self) -> None:
@@ -70,6 +76,9 @@ class RolePromptTest(unittest.TestCase):
         self.assertIn("`conversation-123`", prompt)
         self.assertIn("/workspace/conversation-123_plan.md", prompt)
         self.assertIn("/workspace/conversation-123_progress.md", prompt)
+        self.assertIn("user-visible intermediate output", prompt)
+        self.assertIn("then immediately continue with the next genuine tool call", prompt)
+        self.assertIn("Never\nconcatenate two envelopes", prompt)
         self.assertTrue(prompt.endswith("Newest user message:\nAnalyze the sweep.\n"))
 
     def test_initial_implementer_prompt_points_to_workspace_contract(self) -> None:

@@ -142,6 +142,15 @@ async def run_turn(
     implementer_summaries: list[str] = []
     orchestrator_decision_repairs = 0
     orchestrator_continuations = 0
+    # vLLM's constrained text branch can terminate a CodexDS turn at a
+    # progress envelope before the model selects its next tool. Keep the
+    # existing prompt/parser repair contract, but do not enable constrained
+    # decoding for the DeepSeek family.
+    orchestrator_output_schema = (
+        None
+        if codex_model(orchestrator_selection["model"]).family_id == "deepseek"
+        else ORCHESTRATOR_SCHEMA_IN_CONTAINER
+    )
     next_orchestrator_prompt = _orchestrator_prompt(
         prompt,
         is_resume=bool(orchestrator_session),
@@ -167,7 +176,7 @@ async def run_turn(
             effort=orchestrator_selection["effort"],
             service_tier=orchestrator_selection["service_tier"],
             session_id=orchestrator_session,
-            output_schema=ORCHESTRATOR_SCHEMA_IN_CONTAINER,
+            output_schema=orchestrator_output_schema,
         ):
             if ev["kind"] == "session":
                 orchestrator_session = ev["session_id"]
