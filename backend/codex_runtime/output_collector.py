@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 from pathlib import Path
+from typing import Any
 
 from ..logging_config import compact_text, log_event
 from .codex_events import (
@@ -14,6 +15,7 @@ from .codex_events import (
     _scan_rollout_last_token_usage,
     _translate,
     parse_commentary,
+    transport_failure,
 )
 from .config import CODEX_IDLE_TIMEOUT, LOG
 from .exec_types import CodexEvent, CodexExecRequest
@@ -38,6 +40,10 @@ class CodexOutputCollector:
         # Cumulative token usage recorded just before this call, so the per-call
         # delta is `end - baseline` (the Codex session is reused across rounds).
         self.tokens_baseline: dict[str, int] | None = None
+        # The upstream status last seen on this call, if any. Reconnect notices
+        # set it too, so it only means "this call failed" once the call has also
+        # ended without assistant text — see `final_event`.
+        self.transport_failure: dict[str, Any] | None = None
 
     def prime_rollout_offset(self) -> None:
         if not self.current_session_id:
@@ -98,6 +104,11 @@ class CodexOutputCollector:
         return events
 
     def timeout_event(self) -> CodexEvent:
+        # An idle timeout is the same class of failure as an upstream outage:
+        # the call ends with no decision to parse. Marking it here stops the
+        # turn loop from spending its repair rounds — three more idle timeouts —
+        # on a call that never reached the model.
+        self.transport_failure = {"code": "codex_call_timeout", "status": 0}
         log_event(
             LOG,
             "codex.timeout",
@@ -184,8 +195,16 @@ class CodexOutputCollector:
             returncode=returncode,
             has_final_text=self.final_text is not None,
         )
+        # A status seen mid-call means nothing if the call still produced an
+        # answer — the CLI reconnected. Only a call that ended empty is a
+        # transport failure, and only then is stderr worth scanning: on a
+        # successful call any status text there is incidental (a sandboxed
+        # command's own output), not the cause.
+        failure = self.transport_failure if self.final_text is None else None
+        if failure is None and self.final_text is None:
+            failure = transport_failure(raw_stderr_text)
         final_text = self.final_text or self._fallback_final_text(
-            returncode, stderr_text
+            returncode, stderr_text, failure
         )
         log_event(
             LOG,
@@ -199,8 +218,13 @@ class CodexOutputCollector:
             stderr_len=len(stderr_text),
             stderr_tail=stderr_text[-500:] if stderr_text else "",
             raw_stderr_len=len(raw_stderr_text),
+            failure_code=failure["code"] if failure else "",
+            failure_status=failure["status"] if failure else 0,
         )
-        return {"kind": "final", "text": final_text}
+        event: CodexEvent = {"kind": "final", "text": final_text}
+        if failure is not None:
+            event["failure"] = dict(failure)
+        return event
 
     def _event_from_translated_event(
         self, translated_event: CodexEvent
@@ -210,6 +234,9 @@ class CodexOutputCollector:
             return self._session_event(translated_event["session_id"])
         if kind == "agent_text":
             return self._capture_agent_text(translated_event)
+        failure = translated_event.get("transport_failure")
+        if failure:
+            self.transport_failure = failure
         return self._tool_call_event(translated_event.get("text", ""))
 
     def _session_event(self, session_id: str) -> CodexEvent:
@@ -295,7 +322,24 @@ class CodexOutputCollector:
             "text": f"{self.request.label}: {tool_call_text}",
         }
 
-    def _fallback_final_text(self, returncode: int | None, stderr_text: str) -> str:
+    def _fallback_final_text(
+        self,
+        returncode: int | None,
+        stderr_text: str,
+        failure: dict[str, Any] | None = None,
+    ) -> str:
+        # A known cause is the whole explanation, so state it instead of echoing
+        # stderr — that text carries the gateway URL and request id.
+        if failure is not None:
+            if failure["status"]:
+                return (
+                    f"({self.request.label} produced no output: "
+                    f"upstream returned {failure['status']})"
+                )
+            return (
+                f"({self.request.label} produced no output before the "
+                f"{CODEX_IDLE_TIMEOUT:.0f}s idle timeout)"
+            )
         if returncode not in (0, None) and stderr_text:
             return f"({self.request.label} exited {returncode})\n\n```\n{stderr_text[-1500:]}\n```"
         if stderr_text:

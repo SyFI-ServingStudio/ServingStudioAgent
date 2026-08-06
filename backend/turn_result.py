@@ -41,6 +41,7 @@ def new_turn_result(
         "outcome": None,
         "ok": False,
         "error": "",
+        "failure_code": "",
     }
     result.update(extra)
     return result
@@ -89,6 +90,14 @@ def collect_turn_event(result: dict[str, Any], event: dict[str, str]) -> None:
         )
     elif kind == "final":
         result["final"] = str(event.get("text") or "")
+        failure = event.get("failure")
+        if isinstance(failure, dict):
+            # The turn ended without an orchestrator decision, so it has no
+            # outcome. `failure_code` is what the caller maps to the same
+            # {code, message} contract the browser path publishes.
+            result["failure_code"] = str(failure.get("code") or "")
+            result["outcome"] = None
+            return
         outcome = event.get("outcome")
         result["outcome"] = (
             outcome

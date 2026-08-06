@@ -65,7 +65,11 @@ async def run_eval(
             autonomous=autonomous,
         ):
             collect_turn_event(result, event)
-        result["ok"] = bool(result["final"]) and not bool(result["error"])
+        result["ok"] = (
+            bool(result["final"])
+            and not bool(result["error"])
+            and not bool(result["failure_code"])
+        )
     except Exception as exc:
         result["error"] = str(exc)
     finally:

@@ -9,12 +9,21 @@ import {
   PaperPlaneRight,
   Question,
   Sparkle,
+  Warning,
 } from "@phosphor-icons/react";
 
 import { cn } from "@/lib/cn";
 import { markdownHtml, normalizeBackendText } from "@/markdown";
 import { formatDuration, formatTokens, stripRolePrefix } from "@/turn";
-import type { IntermediateOutput, RoleNote, RolePhase, TerminalOutcome, Tokens, TurnCard } from "@/types";
+import type {
+  IntermediateOutput,
+  RoleNote,
+  RolePhase,
+  TerminalOutcome,
+  Tokens,
+  TurnCard,
+  TurnFailure,
+} from "@/types";
 import { ROLE_STYLE } from "./roleStyles";
 
 /** Which model actually ran this phase, shrunk for the card subtitle. */
@@ -278,6 +287,33 @@ function TerminalResponseCard({
   );
 }
 
+/**
+ * A turn that ended without an answer. Deliberately not styled as a response:
+ * a failure rendered in the answer card reads as though the agent replied.
+ */
+function FailureCard({
+  text,
+  code,
+  conversationId,
+}: {
+  text: string;
+  code?: string;
+  conversationId: string | null;
+}) {
+  return (
+    <Card
+      avatar={<Warning size={13} weight="fill" />}
+      avatarClass="border-fail-line bg-fail-bg text-fail"
+      title="Turn failed"
+      accent="border-l-2 border-l-fail/70"
+      tint="tint-fail"
+      bodyLabel={code || "error"}
+    >
+      <MarkdownBody source={text} conversationId={conversationId} />
+    </Card>
+  );
+}
+
 function PreparingCard({ toolCall }: { toolCall: string }) {
   return (
     <Card
@@ -344,6 +380,16 @@ export function TurnTimeline({
             />
           );
         }
+        if (card.type === "failure") {
+          return (
+            <FailureCard
+              key={index}
+              text={card.text}
+              code={card.code}
+              conversationId={conversationId}
+            />
+          );
+        }
         return (
           <TerminalResponseCard
             key={index}
@@ -365,10 +411,13 @@ export function LegacyAssistant({
   content,
   intermediateOutputs,
   conversationId,
+  failure,
 }: {
   content: string;
   intermediateOutputs?: IntermediateOutput[] | null;
   conversationId: string | null;
+  /** Set on messages stored before the turn timeline, so they still read as failed. */
+  failure?: TurnFailure | null;
 }) {
   const notes = (intermediateOutputs || []).filter((output) => output && output.text);
   return (
@@ -389,7 +438,15 @@ export function LegacyAssistant({
           />
         </Card>
       ) : null}
-      <TerminalResponseCard text={content} conversationId={conversationId} />
+      {failure ? (
+        <FailureCard
+          text={content}
+          code={failure.code}
+          conversationId={conversationId}
+        />
+      ) : (
+        <TerminalResponseCard text={content} conversationId={conversationId} />
+      )}
     </div>
   );
 }

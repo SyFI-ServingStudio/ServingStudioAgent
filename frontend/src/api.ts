@@ -181,7 +181,11 @@ async function consumeTurnStream(
   handlers: StreamHandlers,
 ): Promise<void> {
   if (!response.ok || !response.body) {
-    handlers.done?.(`(request failed: ${response.status})`, "final_answer");
+    // Our own backend failed, so no `done` frame is coming. Emit the same
+    // failure event the stream would have, or the turn renders as an answer.
+    const text = `The request to the VibeSim backend failed (HTTP ${response.status}).`;
+    handlers.event?.({ kind: "error", text, code: "backend_unreachable" });
+    handlers.done?.(text, "final_answer");
     return;
   }
 
@@ -269,12 +273,28 @@ function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
     case "implementer":
       handlers.event?.({ kind: "implementer", text: String(data.text || "") });
       break;
+    case "error":
+      // The transient line only; the terminal failure card arrives on `done`
+      // milliseconds later, and two red cards for one failure read as two.
+      handlers.toolCall?.(String(data.text || ""));
+      break;
     case "done":
       {
+        const text = String(data.text || "");
+        const failure = (data.failure ?? null) as { code?: string } | null;
+        if (failure) {
+          handlers.event?.({
+            kind: "error",
+            text,
+            code: failure.code ? String(failure.code) : undefined,
+          });
+          handlers.done?.(text, "final_answer");
+          break;
+        }
         const outcome: TerminalOutcome =
           data.outcome === "request_user_input" ? "request_user_input" : "final_answer";
-        handlers.event?.({ kind: "final", text: String(data.text || ""), outcome });
-        handlers.done?.(String(data.text || ""), outcome);
+        handlers.event?.({ kind: "final", text, outcome });
+        handlers.done?.(text, outcome);
       }
       break;
   }

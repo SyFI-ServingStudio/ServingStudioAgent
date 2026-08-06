@@ -74,5 +74,71 @@ class FirstOutputWaitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1], {"kind": "final", "text": "done"})
 
 
+# The real shape of the outage: Codex exhausts its own reconnects, writes the
+# gateway status to stdout as an error event, and then exits 0 — so nothing at
+# the process level says the call failed.
+FAKE_CODEX_503 = """
+import json, sys
+sys.stdin.read()
+print(json.dumps({"type": "thread.started", "thread_id": "thread-1"}), flush=True)
+for attempt in range(1, 6):
+    print(json.dumps({
+        "type": "error",
+        "message": (
+            f"Reconnecting... {attempt}/5 (unexpected status 503 Service "
+            "Unavailable: Service temporarily unavailable, url: "
+            "http://cayenne.cs.washington.edu:3456/responses, request id: abc)"
+        ),
+    }), flush=True)
+print(json.dumps({
+    "type": "error",
+    "message": (
+        "unexpected status 503 Service Unavailable: Service temporarily "
+        "unavailable, url: http://cayenne.cs.washington.edu:3456/responses, "
+        "request id: def"
+    ),
+}), flush=True)
+sys.exit(0)
+"""
+
+
+class UpstreamFailureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_gateway_outage_produces_a_failed_final(self) -> None:
+        """End to end through a real subprocess: the CLI exits 0 with no answer,
+        so the failure has to be read out of the stream itself."""
+        with patch.object(
+            codex_cli,
+            "build_codex_exec_command",
+            return_value=[sys.executable, "-c", FAKE_CODEX_503],
+        ):
+            events = [
+                event
+                async for event in run_codex(
+                    "container",
+                    "question",
+                    label="orchestrator",
+                    workspace_id="w_test",
+                    conversation_id="conversation-1",
+                    turn_id="turn-1",
+                    model_id="gpt-5.6-sol",
+                    effort="xhigh",
+                )
+            ]
+
+        # The reconnect attempts stay visible as ordinary advisory lines.
+        warnings = [
+            event["text"]
+            for event in events
+            if event["kind"] == "tool_call" and "Reconnecting" in event["text"]
+        ]
+        self.assertEqual(len(warnings), 5)
+
+        self.assertEqual(events[-1]["kind"], "final")
+        self.assertEqual(
+            events[-1]["failure"], {"code": "upstream_unavailable", "status": 503}
+        )
+        self.assertNotIn("cayenne", events[-1]["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

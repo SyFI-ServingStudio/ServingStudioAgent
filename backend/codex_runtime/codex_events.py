@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
-from .config import role_codex_home_for
+from .config import CODEX_TRANSPORT_FAILURE_STATUSES, role_codex_home_for
 
 
 def _describe_item(item: dict[str, Any]) -> str:
@@ -174,7 +175,7 @@ def _scan_rollout_last_token_usage(rollout_file: Path) -> dict[str, int] | None:
         return None
 
 
-def _translate(ev: dict[str, Any]) -> list[dict[str, str]]:
+def _translate(ev: dict[str, Any]) -> list[dict[str, Any]]:
     etype = ev.get("type")
     if etype == "thread.started" and ev.get("thread_id"):
         return [{"kind": "session", "session_id": str(ev["thread_id"])}]
@@ -198,11 +199,56 @@ def _translate(ev: dict[str, Any]) -> list[dict[str, str]]:
                 ]
             return []
         if etype == "item.completed":
-            return [{"kind": "tool_call", "text": _describe_item(item)}]
+            return [
+                _warning_event(
+                    _describe_item(item),
+                    str(item.get("message") or "") if item.get("type") == "error" else "",
+                )
+            ]
     if etype == "error":
         message = str(ev.get("message") or ev.get("error") or "error")
-        return [{"kind": "tool_call", "text": f"warning: {message}"}]
+        return [_warning_event(f"warning: {message}", message)]
     return []
+
+
+def _warning_event(text: str, failure_source: str) -> dict[str, Any]:
+    """One advisory line, tagged when it names a fatal upstream status.
+
+    The tag rides alongside the unchanged tool-call shape so reconnect notices
+    keep rendering as they do today; only `CodexOutputCollector` reads it, and
+    only once the call has ended without assistant text.
+    """
+    event: dict[str, Any] = {"kind": "tool_call", "text": text}
+    failure = transport_failure(failure_source) if failure_source else None
+    if failure:
+        event["transport_failure"] = failure
+    return event
+
+
+# Codex names the upstream status in two shapes: a single failed call
+# ("unexpected status 503 Service Unavailable: ...") and an exhausted internal
+# retry loop ("exceeded retry limit, last status: 429 Too Many Requests, ..."),
+# including inside its own "Reconnecting... 1/5 (...)" notices. Anchoring on the
+# status phrase is what keeps the non-fatal advisories in `_describe_item` — a
+# within-family model switch carries no status token — out of this classifier.
+_TRANSPORT_STATUS_RE = re.compile(
+    r"(?:unexpected\s+status|last\s+status:?)\s*(\d{3})\b", re.IGNORECASE
+)
+
+
+def transport_failure(message: str) -> dict[str, Any] | None:
+    """Return ``{"code", "status"}`` when text reports a fatal upstream status.
+
+    A reconnect notice matches the same way a terminal failure does. That is
+    intentional: the caller only consults this once a call has ended with no
+    assistant text, so a successful reconnect is never treated as a failure.
+    """
+    for match in _TRANSPORT_STATUS_RE.finditer(message):
+        status = int(match.group(1))
+        code = CODEX_TRANSPORT_FAILURE_STATUSES.get(status)
+        if code:
+            return {"code": code, "status": status}
+    return None
 
 
 def _codex_stderr_for_error(

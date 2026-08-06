@@ -50,6 +50,19 @@ VIBESIM_API_TOKEN = os.environ.get("VIBESIM_API_TOKEN", "").strip()
 CODEX_IDLE_TIMEOUT = float(
     os.environ.get("CODEX_IDLE_TIMEOUT", os.environ.get("CODEX_TURN_TIMEOUT", "600"))
 )
+# Upstream statuses that mean the gateway, not the model, ended the call. The
+# Codex CLI already reconnects about five times before reporting one, so a
+# repair round would only spend another full reconnect cycle on the same outage.
+# 4xx statuses outside this table stay ordinary warnings: a malformed or
+# unauthorized request will not succeed on retry, so "try again" is wrong advice.
+CODEX_TRANSPORT_FAILURE_STATUSES: dict[int, str] = {
+    408: "upstream_unavailable",
+    429: "upstream_rate_limited",
+    500: "upstream_unavailable",
+    502: "upstream_unavailable",
+    503: "upstream_unavailable",
+    504: "upstream_unavailable",
+}
 CODEX_DOCKER_GPUS = os.environ.get("CODEX_DOCKER_GPUS", "all").strip()
 CODEX_DOCKER_UID = int(os.environ.get("CODEX_DOCKER_UID", str(os.getuid())))
 CODEX_DOCKER_GID = int(os.environ.get("CODEX_DOCKER_GID", str(os.getgid())))

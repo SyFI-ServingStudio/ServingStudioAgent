@@ -187,17 +187,6 @@ def parse_orchestrator(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _format_implementer_summaries(summaries: list[str]) -> str:
-    if not summaries:
-        return ""
-    if len(summaries) == 1:
-        return summaries[0].strip()
-    parts = []
-    for idx, summary in enumerate(summaries, start=1):
-        parts.append(f"**Round {idx}**\n\n{summary.strip()}")
-    return "\n\n".join(parts)
-
-
 def compose_final_message(
     message: str,
     implementer_summaries: list[str],
@@ -210,3 +199,51 @@ def compose_final_message(
     `implementer_summaries` is kept in the signature for call-site compatibility.
     """
     return message.strip()
+
+
+def compose_failure_message(reason: str, implementer_summaries: list[str]) -> str:
+    """A failed turn's body: reports completed work by count, never by quoting it.
+
+    Same contract as `compose_final_message`. Quoting the summaries here would
+    both duplicate their timeline cards and attribute the implementer's
+    first-person report to the assistant's own answer, which reads as the two
+    roles having been confused.
+    """
+    rounds = len(implementer_summaries)
+    if not rounds:
+        return reason.strip()
+    noun = "round" if rounds == 1 else "rounds"
+    return (
+        f"{reason.strip()}\n\n"
+        f"{rounds} implementer {noun} completed before this failure and are shown "
+        "as their own cards above. The Codex sessions are preserved — continue "
+        "the conversation to resume from this point."
+    )
+
+
+def transport_failure_reason(role: str, failure: dict[str, Any]) -> str:
+    """Plain-language cause for one failed Codex call.
+
+    Names the transport as the cause so an outage is not read as a model or
+    parsing problem, which is what the generic wording used to imply.
+    """
+    if failure.get("code") == "codex_call_timeout":
+        return (
+            f"The {role} produced no output before its idle timeout, so this "
+            "turn has no answer. The call reached no decision — this is a "
+            "runtime stall, not a model or parsing problem."
+        )
+    status = failure.get("status") or 0
+    if failure.get("code") == "upstream_rate_limited":
+        return (
+            f"The {role} could not run: the upstream model gateway is rate "
+            f"limiting this account (HTTP {status}), and the Codex CLI already "
+            "exhausted its own retries. No output was produced — this is an API "
+            "limit, not a model or parsing problem."
+        )
+    return (
+        f"The {role} could not run: the upstream model gateway is unavailable "
+        f"(HTTP {status}), and the Codex CLI already exhausted its own "
+        "reconnects. No output was produced — this is an API outage, not a "
+        "model or parsing problem."
+    )

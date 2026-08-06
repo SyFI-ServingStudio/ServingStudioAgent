@@ -100,5 +100,96 @@ class OutputCollectorTests(unittest.TestCase):
         )
 
 
+GATEWAY_503 = (
+    "unexpected status 503 Service Unavailable: Service temporarily "
+    "unavailable, url: http://cayenne.cs.washington.edu:3456/responses, "
+    "request id: de7c6e7b-c244-49b4-b2f1-6b45cbb644ee"
+)
+
+
+def _error_event(message: str) -> bytes:
+    return json.dumps({"type": "error", "message": message}).encode("utf-8")
+
+
+class TransportFailureTests(unittest.TestCase):
+    def test_gateway_error_with_no_output_marks_the_call_failed(self) -> None:
+        collector = _collector()
+        events = collector.events_from_stdout_line(_error_event(GATEWAY_503))
+
+        # The advisory still renders as the same warning line it always did.
+        self.assertEqual(events[0]["kind"], "tool_call")
+
+        final = collector.final_event(0)
+        self.assertEqual(
+            final["failure"], {"code": "upstream_unavailable", "status": 503}
+        )
+        # The gateway URL and request id must not reach the answer body.
+        self.assertNotIn("cayenne", final["text"])
+        self.assertNotIn("request id", final["text"])
+        self.assertIn("503", final["text"])
+
+    def test_a_reconnect_that_succeeded_is_not_a_failure(self) -> None:
+        """The CLI logs the same status while retrying. A call that recovered
+        and produced an answer must not be reported as failed."""
+        collector = _collector()
+        collector.events_from_stdout_line(
+            _error_event(f"Reconnecting... 1/5 ({GATEWAY_503})")
+        )
+        collector.events_from_stdout_line(
+            _completed_item(
+                {
+                    "type": "agent_message",
+                    "text": '{"action":"final_answer","message":"Done.","task":""}',
+                    "phase": None,
+                }
+            )
+        )
+
+        final = collector.final_event(0)
+        self.assertNotIn("failure", final)
+        self.assertEqual(
+            final["text"], '{"action":"final_answer","message":"Done.","task":""}'
+        )
+
+    def test_stderr_only_gateway_failure_is_detected(self) -> None:
+        collector = _collector()
+        collector.append_stderr_line(
+            b"exceeded retry limit, last status: 429 Too Many Requests, "
+            b"request id: 01e49236\n"
+        )
+
+        final = collector.final_event(1)
+        self.assertEqual(
+            final["failure"], {"code": "upstream_rate_limited", "status": 429}
+        )
+        self.assertNotIn("request id", final["text"])
+
+    def test_noisy_stderr_after_a_successful_call_is_not_a_failure(self) -> None:
+        """A sandboxed command can print a status line of its own. Once the call
+        produced an answer, stderr is never the cause."""
+        collector = _collector()
+        collector.events_from_stdout_line(
+            _completed_item(
+                {"type": "agent_message", "text": "All done.", "phase": None}
+            )
+        )
+        collector.append_stderr_line(
+            b"curl: the endpoint returned unexpected status 503\n"
+        )
+
+        self.assertNotIn("failure", collector.final_event(0))
+
+    def test_idle_timeout_is_reported_as_a_failure(self) -> None:
+        """An idle timeout also ends with no decision to parse, so it must not
+        be sent through the repair loop either."""
+        collector = _collector()
+        collector.mark_timed_out()
+        collector.timeout_event()
+
+        final = collector.final_event(None)
+        self.assertEqual(final["failure"], {"code": "codex_call_timeout", "status": 0})
+        self.assertIn("idle timeout", final["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

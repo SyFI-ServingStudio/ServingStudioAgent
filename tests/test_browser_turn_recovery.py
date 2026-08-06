@@ -225,5 +225,120 @@ class ResumeTurnTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["outcome"], "final_answer")
 
 
+# What `run_turn` yields once a Codex call ends without reaching the model.
+UPSTREAM_FAILURE_FINAL = {
+    "kind": "final",
+    "failure": {"code": "upstream_unavailable", "status": 503},
+    "text": (
+        "The orchestrator could not run: the upstream model gateway is "
+        "unavailable (HTTP 503)."
+    ),
+}
+EXPECTED_FAILURE = {
+    "code": "upstream_unavailable",
+    "message": app_module._TURN_FAILURES["upstream_unavailable"],
+}
+
+
+class UpstreamFailureTests(unittest.IsolatedAsyncioTestCase):
+    """A turn that never reached the model must read as failed on both the
+    browser and the agent path, which used to disagree."""
+
+    def _store(self, temporary_directory: str) -> Store:
+        main_dir = Path(temporary_directory) / "main"
+        (main_dir / "logs").mkdir(parents=True)
+        registry = WorkspaceRegistry(
+            Path(temporary_directory) / "agent-workspaces",
+            main_dir=main_dir,
+        )
+        store = Store(registry)
+        store.create("w_main", "conversation", "workspace-write", naming_state="pending")
+        return store
+
+    async def test_browser_turn_is_recorded_failed(self) -> None:
+        async def fake_run_turn(*args, **kwargs):
+            yield UPSTREAM_FAILURE_FINAL
+
+        with TemporaryDirectory() as temporary_directory:
+            store = self._store(temporary_directory)
+            store.start_turn("w_main", "conversation", "turn")
+            active_turn = app_module.ActiveBrowserTurn(turn_id="turn")
+            with (
+                patch.object(app_module, "store", store),
+                patch.object(app_module, "run_turn", fake_run_turn),
+                patch.object(app_module, "schedule_auto_naming", return_value=True),
+                patch.object(app_module, "remove_managed_context"),
+                patch.object(
+                    store, "finish_turn", wraps=store.finish_turn
+                ) as finish_turn,
+            ):
+                await app_module._run_browser_turn(
+                    workspace_id="w_main",
+                    cid="conversation",
+                    text="The question",
+                    sandbox="workspace-write",
+                    sessions={},
+                    turn_id="turn",
+                    prompt_fingerprint="fingerprint",
+                    autonomous=False,
+                    analyzer_context=None,
+                    active_turn=active_turn,
+                )
+
+            done_payload = next(
+                json.loads(event.split("data: ", 1)[1])
+                for event in active_turn.events
+                if event.startswith("event: done")
+            )
+            self.assertEqual(done_payload["failure"], EXPECTED_FAILURE)
+            # No decision was made, so there is no outcome to report, and a
+            # failed turn must not name the conversation.
+            self.assertIsNone(done_payload["outcome"])
+            self.assertFalse(done_payload["naming_scheduled"])
+
+            stored = store.get("w_main", "conversation")
+            # Persisted as an error entry, so a reload renders the failure card
+            # instead of dropping it.
+            self.assertEqual(stored["messages"][-1]["activity"][-1]["kind"], "error")
+            self.assertEqual(stored["messages"][-1]["failure"], EXPECTED_FAILURE)
+            finish_turn.assert_called_once_with("w_main", "turn", "failed")
+
+    async def test_agent_turn_reports_the_same_contract(self) -> None:
+        async def fake_run_turn(*args, **kwargs):
+            yield UPSTREAM_FAILURE_FINAL
+
+        with TemporaryDirectory() as temporary_directory:
+            store = self._store(temporary_directory)
+            with (
+                patch.object(app_module, "store", store),
+                patch.object(app_module, "run_turn", fake_run_turn),
+                patch.object(app_module, "schedule_auto_naming", return_value=True),
+                patch.object(app_module, "remove_managed_context"),
+            ):
+                result = await app_module.agent_send_message(
+                    "w_main",
+                    "conversation",
+                    app_module.AgentSendMessage(text="The question"),
+                    None,
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["failure"], EXPECTED_FAILURE)
+            self.assertIsNone(result["outcome"])
+            self.assertFalse(result["naming_scheduled"])
+
+    def test_failure_messages_carry_no_host_detail(self) -> None:
+        for code in ("upstream_unavailable", "upstream_rate_limited", "codex_call_timeout"):
+            message = app_module._failure_for_code(code)["message"].lower()
+            for leak in ("http", "url", "request id", "cayenne", "docker", "/workspace"):
+                self.assertNotIn(leak, message, f"{code} leaked {leak!r}")
+
+    def test_unknown_codes_fall_back(self) -> None:
+        self.assertEqual(
+            app_module._failure_for_code("something_new")["code"],
+            "agent_runtime_failure",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

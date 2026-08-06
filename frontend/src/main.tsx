@@ -920,6 +920,7 @@ function AssistantTurn({
       content={message.content}
       intermediateOutputs={message.intermediate_outputs}
       conversationId={conversationId}
+      failure={message.failure}
     />
   );
 }

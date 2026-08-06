@@ -65,13 +65,21 @@ export type TurnEvent =
   | { kind: "decision"; action: string; task: string }
   | { kind: "implementer"; text: string }
   | { kind: "usage"; role: string; model?: string; effort?: string; duration_ms: number; tokens: Tokens }
+  | { kind: "error"; text: string; code?: string }
   | { kind: "final"; text: string; outcome?: TerminalOutcome };
+
+/** Why a turn ended without an answer. Set instead of an outcome, never beside one. */
+export interface TurnFailure {
+  code: string;
+  message?: string;
+}
 
 export interface ChatMessage {
   role: "user" | "assistant" | string;
   content: string;
   intermediate_outputs?: IntermediateOutput[] | null;
   activity?: TurnEvent[] | null;
+  failure?: TurnFailure | null;
 }
 
 export interface MessagePage {
@@ -126,4 +134,11 @@ export interface TerminalResponse {
   outcome: TerminalOutcome;
 }
 
-export type TurnCard = RolePhase | Handoff | TerminalResponse;
+/** A turn that ended without an answer. Replaces the response card, never joins it. */
+export interface FailureNotice {
+  type: "failure";
+  text: string;
+  code?: string;
+}
+
+export type TurnCard = RolePhase | Handoff | TerminalResponse | FailureNotice;

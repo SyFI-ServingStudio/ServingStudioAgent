@@ -46,6 +46,8 @@ export function cleanNote(text: string, level?: CommentaryLevel): RoleNote | nul
  *  - `decision` emits the orchestrator→implementer delegated-task hand-off card.
  *  - `implementer` emits the implementer→orchestrator conclusion hand-off card.
  *  - `final` emits the answer card.
+ *  - `error` emits the failure card, the terminal entry the backend persists in
+ *    place of `final` whenever a turn ends without an answer.
  *
  * The same reducer runs live (incremental events) and on reload (persisted
  * `activity`), so a reopened conversation rebuilds the identical timeline.
@@ -126,6 +128,11 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
       }
       case "implementer": {
         cards.push({ type: "handoff", variant: "conclusion", text: event.text });
+        current = null;
+        break;
+      }
+      case "error": {
+        cards.push({ type: "failure", text: event.text, code: event.code });
         current = null;
         break;
       }

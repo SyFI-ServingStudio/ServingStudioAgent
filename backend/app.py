@@ -199,6 +199,43 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+_TURN_FAILURES: dict[str, str] = {
+    "runtime_storage_full": (
+        "The Agent runtime could not start because the host disk is full. "
+        "Free space, then retry this question."
+    ),
+    "upstream_unavailable": (
+        "The upstream model service is unavailable, so the Agent could not "
+        "produce an answer. This is a service outage, not a problem with your "
+        "question. The conversation is intact — continue it to retry."
+    ),
+    "upstream_rate_limited": (
+        "The upstream model service is rate limiting this account, so the Agent "
+        "could not produce an answer. The conversation is intact — wait a "
+        "moment, then continue it to retry."
+    ),
+    "codex_call_timeout": (
+        "The Agent stalled without producing output and the call was stopped. "
+        "The conversation is intact — continue it to retry."
+    ),
+    "agent_runtime_failure": (
+        "The Agent runtime failed before producing an answer. "
+        "Retry the question; the full diagnostic is available in the backend log."
+    ),
+}
+
+
+def _failure_for_code(code: str) -> dict[str, str]:
+    """The stable, user-safe {code, message} contract for one failure code.
+
+    Unknown codes fall back rather than reaching a client verbatim, so a new
+    runtime failure can never leak host detail through this path.
+    """
+    if code not in _TURN_FAILURES:
+        code = "agent_runtime_failure"
+    return {"code": code, "message": _TURN_FAILURES[code]}
+
+
 def _turn_failure(exc: Exception) -> dict[str, str]:
     """Map internal runtime exceptions to stable, user-safe failure details.
 
@@ -209,20 +246,8 @@ def _turn_failure(exc: Exception) -> dict[str, str]:
 
     detail = str(exc).lower()
     if "no space left on device" in detail:
-        return {
-            "code": "runtime_storage_full",
-            "message": (
-                "The Agent runtime could not start because the host disk is full. "
-                "Free space, then retry this question."
-            ),
-        }
-    return {
-        "code": "agent_runtime_failure",
-        "message": (
-            "The Agent runtime failed before producing an answer. "
-            "Retry the question; the full diagnostic is available in the backend log."
-        ),
-    }
+        return _failure_for_code("runtime_storage_full")
+    return _failure_for_code("agent_runtime_failure")
 
 
 _MANAGED_ACTIVITY_KINDS = {
@@ -1529,7 +1554,11 @@ async def agent_send_message(
                     ev,
                 )
                 collect_turn_event(result, ev)
-            result["ok"] = bool(result["final"]) and not bool(result["error"])
+            result["ok"] = (
+                bool(result["final"])
+                and not bool(result["error"])
+                and not bool(result["failure_code"])
+            )
         except Exception as exc:  # surface backend failures in-band, like /api/eval
             result["error"] = str(exc)
             LOG.exception(
@@ -1543,9 +1572,14 @@ async def agent_send_message(
                     }
                 },
             )
-        failure = (
-            _turn_failure(RuntimeError(result["error"])) if result["error"] else None
-        )
+        if result["failure_code"]:
+            # A runtime-classified failure (upstream outage, idle timeout): the
+            # browser path publishes the same contract for the same event.
+            failure = _failure_for_code(result["failure_code"])
+        elif result["error"]:
+            failure = _turn_failure(RuntimeError(result["error"]))
+        else:
+            failure = None
         result["failure"] = failure
         if not result["final"]:
             result["final"] = failure["message"] if failure else "(no answer)"
@@ -1933,18 +1967,33 @@ async def _run_browser_turn(
                     }
                     activity.append({"kind": "usage", **usage})
                     await active_turn.publish(_sse("usage", usage))
-                elif kind in ("tool_call", "error"):
+                elif kind == "tool_call":
                     await active_turn.publish(
                         _sse("tool_call", {"text": ev.get("text", "")})
                     )
+                elif kind == "error":
+                    await active_turn.publish(
+                        _sse("error", {"text": ev.get("text", "")})
+                    )
                 elif kind == "final":
                     final_text = ev.get("text") or ""
-                    outcome = ev.get("outcome")
-                    final_outcome = (
-                        outcome
-                        if outcome in {"final_answer", "request_user_input"}
-                        else "final_answer"
-                    )
+                    event_failure = ev.get("failure")
+                    if isinstance(event_failure, dict):
+                        # No orchestrator decision was ever made, so there is no
+                        # outcome to report. `failure` is what the rest of this
+                        # function already keys the error card, the `failed`
+                        # status and the suppressed auto-naming off. The runtime's
+                        # own text is kept as the body: it names the status and
+                        # the surviving work, and is already free of host detail.
+                        failure = _failure_for_code(str(event_failure.get("code") or ""))
+                        final_outcome = None
+                    else:
+                        outcome = ev.get("outcome")
+                        final_outcome = (
+                            outcome
+                            if outcome in {"final_answer", "request_user_input"}
+                            else "final_answer"
+                        )
                 store.append_turn_event(
                     workspace_id,
                     turn_id,
@@ -1961,6 +2010,7 @@ async def _run_browser_turn(
                 turn_id=turn_id,
                 final_len=len(final_text),
                 final_preview=compact_text(final_text),
+                failure_code=failure["code"] if failure else "",
             )
         except asyncio.CancelledError:
             cancelled = True

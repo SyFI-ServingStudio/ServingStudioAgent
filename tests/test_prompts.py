@@ -7,7 +7,10 @@ from backend.codex_runtime.prompts import (
     _orchestrator_handoff_prompt,
     _orchestrator_prompt,
     _orchestrator_repair_prompt,
+    compose_failure_message,
+    compose_final_message,
     parse_orchestrator,
+    transport_failure_reason,
 )
 from backend.codex_runtime.codex_events import parse_commentary
 
@@ -212,6 +215,65 @@ class RolePromptTest(unittest.TestCase):
         self.assertIn("Do not redo completed analysis", prompt)
         self.assertIn("Analysis complete. Throughput rises with TP.", prompt)
         self.assertIn("/workspace/conversation-123_plan.md", prompt)
+
+
+REPORTS = [
+    "Implemented and committed the batched delivery trial. Commit fbed215.",
+    "Investigated DecodeStream. 68082 token steps, zero mismatches.",
+]
+
+
+class FailureMessageTest(unittest.TestCase):
+    """A failed turn must report the implementer's work by count. Quoting it
+    attributes the implementer's first-person report to the assistant, which is
+    what read as the two roles having been confused."""
+
+    def test_summaries_are_counted_never_quoted(self) -> None:
+        message = compose_failure_message("The gateway is down.", REPORTS)
+
+        for report in REPORTS:
+            self.assertNotIn(report, message)
+        self.assertNotIn("### Implementer Summary", message)
+        self.assertNotIn("**Round", message)
+        self.assertIn("2 implementer rounds completed", message)
+        self.assertIn("continue", message)
+
+    def test_singular_round_reads_correctly(self) -> None:
+        message = compose_failure_message("The gateway is down.", REPORTS[:1])
+
+        self.assertIn("1 implementer round completed", message)
+
+    def test_no_rounds_adds_nothing(self) -> None:
+        self.assertEqual(
+            compose_failure_message("The gateway is down.", []), "The gateway is down."
+        )
+
+    def test_it_matches_the_answer_path_contract(self) -> None:
+        """`compose_final_message` already excludes the summaries; the failure
+        path must not be the one place that reintroduces them."""
+        self.assertEqual(
+            compose_final_message("Done.", REPORTS),
+            "Done.",
+        )
+
+    def test_reasons_name_the_transport_not_the_model(self) -> None:
+        outage = transport_failure_reason(
+            "orchestrator", {"code": "upstream_unavailable", "status": 503}
+        )
+        limited = transport_failure_reason(
+            "implementer", {"code": "upstream_rate_limited", "status": 429}
+        )
+        stalled = transport_failure_reason(
+            "orchestrator", {"code": "codex_call_timeout", "status": 0}
+        )
+
+        self.assertIn("503", outage)
+        self.assertIn("not a model or parsing problem", outage)
+        self.assertIn("429", limited)
+        self.assertIn("rate limiting", limited)
+        self.assertIn("idle timeout", stalled)
+        for reason in (outage, limited, stalled):
+            self.assertNotIn("parse the orchestrator decision", reason)
 
 
 if __name__ == "__main__":

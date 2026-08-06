@@ -21,14 +21,15 @@ from .config import (
 from .config import container_name as container_name_for
 from .docker import container_running, ensure_container
 from .prompts import (
-    _format_implementer_summaries,
     _implementer_prompt,
     _orchestrator_handoff_prompt,
     _orchestrator_continue_prompt,
     _orchestrator_prompt,
     _orchestrator_repair_prompt,
+    compose_failure_message,
     compose_final_message,
     parse_orchestrator,
+    transport_failure_reason,
 )
 from .workspace import prepare_workspace
 
@@ -159,6 +160,7 @@ async def run_turn(
 
     while True:
         orchestrator_text: str | None = None
+        orchestrator_failure: dict[str, Any] | None = None
         write_managed_context(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
@@ -183,9 +185,34 @@ async def run_turn(
                 yield ev
             elif ev["kind"] == "final":
                 orchestrator_text = ev["text"]
+                orchestrator_failure = ev.get("failure")
             else:
                 yield ev
         orchestrator_text = orchestrator_text or ""
+
+        # A call that never reached the model has no decision to repair. Retrying
+        # would spend another full reconnect cycle (or idle timeout) per round on
+        # the same outage, and would still end here.
+        if orchestrator_failure is not None:
+            log_event(
+                LOG,
+                "turn.transport_failed",
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                role="orchestrator",
+                code=orchestrator_failure["code"],
+                status=orchestrator_failure["status"],
+                implementer_rounds=len(implementer_summaries),
+            )
+            yield {
+                "kind": "final",
+                "failure": orchestrator_failure,
+                "text": compose_failure_message(
+                    transport_failure_reason("orchestrator", orchestrator_failure),
+                    implementer_summaries,
+                ),
+            }
+            return
 
         decision = parse_orchestrator(orchestrator_text)
         if decision is None:
@@ -204,17 +231,14 @@ async def run_turn(
                     conversation_id=conversation_id,
                 )
                 continue
-            sections = []
-            if implementer_summaries:
-                sections.append(
-                    "### Implementer Summary\n\n"
-                    f"{_format_implementer_summaries(implementer_summaries)}"
-                )
-            sections.append("### Error\n\nI could not parse the orchestrator decision.")
             yield {
                 "kind": "final",
                 "outcome": "final_answer",
-                "text": "\n\n".join(sections),
+                "text": compose_failure_message(
+                    "I could not parse the orchestrator decision after "
+                    f"{MAX_ORCHESTRATOR_DECISION_REPAIRS} repair attempts.",
+                    implementer_summaries,
+                ),
             }
             return
 
@@ -285,6 +309,7 @@ async def run_turn(
         # card) rather than a generic "starting..." progress line.
         yield {"kind": "decision", "action": "delegate", "task": task}
         implementer_text: str | None = None
+        implementer_failure: dict[str, Any] | None = None
         write_managed_context(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
@@ -310,10 +335,35 @@ async def run_turn(
                 implementer_session = ev["session_id"]
                 yield ev
             elif ev["kind"] == "final":
-                implementer_text = ev["text"]
-                yield {"kind": "implementer", "text": implementer_text}
+                implementer_failure = ev.get("failure")
+                if implementer_failure is None:
+                    implementer_text = ev["text"]
+                    yield {"kind": "implementer", "text": implementer_text}
             else:
                 yield ev
+
+        # Handing a placeholder summary back to the orchestrator would spend one
+        # more call — against the same unavailable gateway — to conclude nothing.
+        if implementer_failure is not None:
+            log_event(
+                LOG,
+                "turn.transport_failed",
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                role="implementer",
+                code=implementer_failure["code"],
+                status=implementer_failure["status"],
+                implementer_rounds=len(implementer_summaries),
+            )
+            yield {
+                "kind": "final",
+                "failure": implementer_failure,
+                "text": compose_failure_message(
+                    transport_failure_reason("implementer", implementer_failure),
+                    implementer_summaries,
+                ),
+            }
+            return
 
         if implementer_text is None:
             implementer_text = "(implementer produced no summary)"

@@ -27,6 +27,11 @@
   --color-ans-soft: #e2adbe;
   --color-ans-bg: rgba(207, 136, 160, 0.1);
   --color-ans-line: rgba(207, 136, 160, 0.34);
+  /* failure = a hotter, redder tone that still reads apart from the answer rose */
+  --color-fail: #d2635e;
+  --color-fail-soft: #e79490;
+  --color-fail-bg: rgba(210, 99, 94, 0.1);
+  --color-fail-line: rgba(210, 99, 94, 0.34);
   --color-ink: #060709;
   --color-panel: #0d0f14;
   --color-panel2: #12141b;
@@ -100,6 +105,7 @@
 .tint-orch { background-color: color-mix(in oklab, var(--color-panel) 92%, var(--color-orch)); }
 .tint-impl { background-color: color-mix(in oklab, var(--color-panel) 92%, var(--color-impl)); }
 .tint-answer { background-color: color-mix(in oklab, var(--color-panel) 87%, var(--color-ans)); }
+.tint-fail { background-color: color-mix(in oklab, var(--color-panel) 87%, var(--color-fail)); }
 
 /* Markdown rendered from assistant answers / conclusions / delegated tasks.
    Scoped class so it does not fight Tailwind's preflight reset. */
