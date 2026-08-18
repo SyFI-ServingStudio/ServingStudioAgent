@@ -15,6 +15,7 @@ from .codex_events import (
     _scan_rollout_last_token_usage,
     _translate,
     parse_commentary,
+    terminal_envelope,
     transport_failure,
 )
 from .config import CODEX_IDLE_TIMEOUT, LOG
@@ -37,6 +38,9 @@ class CodexOutputCollector:
         # Keep their assistant text pending until the next event establishes
         # whether work continued (intermediate) or the call ended (final).
         self.pending_unphased_text: str | None = None
+        # Rollout terminal events are authoritative when stdout ordering makes
+        # a completed handoff look like an intermediate message.
+        self.rollout_terminal_text: str | None = None
         # Cumulative token usage recorded just before this call, so the per-call
         # delta is `end - baseline` (the Codex session is reused across rounds).
         self.tokens_baseline: dict[str, int] | None = None
@@ -90,10 +94,12 @@ class CodexOutputCollector:
             if self.rollout_file is None:
                 return []
 
-        messages, self.rollout_offset = _scan_rollout_agent_messages(
+        messages, terminal_text, self.rollout_offset = _scan_rollout_agent_messages(
             self.rollout_file,
             self.rollout_offset,
         )
+        if terminal_text:
+            self.rollout_terminal_text = terminal_text
         events = []
         for text, phase in messages:
             if phase != "commentary":
@@ -186,7 +192,10 @@ class CodexOutputCollector:
         }
 
     def final_event(self, returncode: int | None) -> CodexEvent:
-        if self.pending_unphased_text:
+        if self.rollout_terminal_text:
+            self.final_text = self.rollout_terminal_text
+            self.pending_unphased_text = None
+        elif self.pending_unphased_text:
             self.final_text = self.pending_unphased_text
             self.pending_unphased_text = None
         raw_stderr_text = "".join(self.stderr_chunks).strip()
@@ -264,6 +273,10 @@ class CodexOutputCollector:
         phase = translated_event.get("phase") or ""
         if phase == "commentary":
             return self._intermediate_output_event(text.strip(), source="stdout")
+        if phase == "final_answer" or terminal_envelope(text):
+            if text.strip():
+                self.final_text = text.strip()
+            return None
         if text.strip():
             self.pending_unphased_text = text.strip()
         return None

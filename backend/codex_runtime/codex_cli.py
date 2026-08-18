@@ -211,6 +211,11 @@ class CodexExecCall:
         if output.timed_out:
             process.kill()
         await process.wait()
+        # Codex can persist task_complete while shutting down after stdout has
+        # already reached EOF. Refresh once more so final_event can recover the
+        # durable handoff instead of reporting a false empty result.
+        for event in output.poll_rollout_intermediate_outputs():
+            yield event
 
     async def _cancel_read_task(self, read_task: asyncio.Task[bytes]) -> None:
         if read_task.done():

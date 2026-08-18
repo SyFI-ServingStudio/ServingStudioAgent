@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from backend.codex_runtime.exec_types import CodexExecRequest
 from backend.codex_runtime.output_collector import CodexOutputCollector
@@ -97,6 +99,110 @@ class OutputCollectorTests(unittest.TestCase):
                 "kind": "final",
                 "text": '{"action":"final_answer","message":"Done.","task":""}',
             },
+        )
+
+    def test_terminal_envelope_survives_trailing_todo_list(self) -> None:
+        collector = _collector()
+        final_text = '{"action":"final_answer","message":"Done.","task":""}'
+
+        self.assertEqual(
+            collector.events_from_stdout_line(
+                _completed_item(
+                    {
+                        "type": "agent_message",
+                        "text": final_text,
+                        "phase": None,
+                    }
+                )
+            ),
+            [],
+        )
+        events = collector.events_from_stdout_line(
+            _completed_item({"type": "todo_list"})
+        )
+        collector.append_stderr_line(
+            b"worker quit with fatal: AuthRequired(Missing or invalid access token)\n"
+        )
+
+        self.assertEqual([event["kind"] for event in events], ["tool_call"])
+        self.assertEqual(
+            collector.final_event(0),
+            {"kind": "final", "text": final_text},
+        )
+
+    def test_rollout_task_complete_recovers_a_flushed_free_form_final(self) -> None:
+        collector = _collector()
+        recovered_text = "Implemented and committed. 114 tests passed."
+        collector.events_from_stdout_line(
+            _completed_item(
+                {
+                    "type": "agent_message",
+                    "text": recovered_text,
+                    "phase": None,
+                }
+            )
+        )
+        flushed = collector.events_from_stdout_line(
+            _completed_item({"type": "todo_list"})
+        )
+        self.assertEqual(flushed[0]["kind"], "intermediate_output")
+
+        with TemporaryDirectory() as temporary_directory:
+            rollout_file = Path(temporary_directory) / "rollout.jsonl"
+            rollout_file.write_text(
+                json.dumps(
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "last_agent_message": recovered_text,
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            collector.rollout_file = rollout_file
+            collector.rollout_offset = 0
+            collector.current_session_id = "session-1"
+            self.assertEqual(collector.poll_rollout_intermediate_outputs(), [])
+
+        self.assertEqual(
+            collector.final_event(0),
+            {"kind": "final", "text": recovered_text},
+        )
+
+    def test_rollout_final_answer_recovers_without_task_complete(self) -> None:
+        collector = _collector()
+        recovered_text = "Final handoff from the durable rollout."
+
+        with TemporaryDirectory() as temporary_directory:
+            rollout_file = Path(temporary_directory) / "rollout.jsonl"
+            rollout_file.write_text(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "phase": "final_answer",
+                            "content": [
+                                {"type": "output_text", "text": recovered_text}
+                            ],
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            collector.rollout_file = rollout_file
+            collector.rollout_offset = 0
+            collector.current_session_id = "session-1"
+            self.assertEqual(collector.poll_rollout_intermediate_outputs(), [])
+
+        self.assertEqual(
+            collector.final_event(0),
+            {"kind": "final", "text": recovered_text},
         )
 
 

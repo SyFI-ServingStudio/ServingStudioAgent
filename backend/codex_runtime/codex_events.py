@@ -78,15 +78,24 @@ def _find_rollout_file(
 def _scan_rollout_agent_messages(
     rollout_file: Path,
     offset: int,
-) -> tuple[list[tuple[str, str]], int]:
+) -> tuple[list[tuple[str, str]], str | None, int]:
+    """Read new assistant messages and the authoritative terminal handoff.
+
+    Codex stdout can report a trailing bookkeeping item after the assistant's
+    final message. The rollout is the durable ordering authority: a
+    ``final_answer`` message or ``task_complete.last_agent_message`` proves the
+    call produced a handoff even when stdout heuristics classified that text as
+    intermediate output.
+    """
     try:
         size = rollout_file.stat().st_size
     except OSError:
-        return [], offset
+        return [], None, offset
     if offset > size:
         offset = 0
 
     messages: list[tuple[str, str]] = []
+    terminal_text: str | None = None
     try:
         with rollout_file.open("rb") as file:
             file.seek(offset)
@@ -100,12 +109,42 @@ def _scan_rollout_agent_messages(
                 payload = event.get("payload") or {}
                 if not isinstance(payload, dict):
                     continue
+                if payload.get("type") == "task_complete":
+                    last_agent_message = payload.get("last_agent_message")
+                    if (
+                        isinstance(last_agent_message, str)
+                        and last_agent_message.strip()
+                    ):
+                        terminal_text = last_agent_message.strip()
                 assistant_message = _assistant_message_from_payload(payload)
                 if assistant_message is not None:
                     messages.append(assistant_message)
-            return messages, file.tell()
+                    text, phase = assistant_message
+                    if (
+                        terminal_text is None
+                        and phase == "final_answer"
+                        and text.strip()
+                    ):
+                        terminal_text = text.strip()
+            return messages, terminal_text, file.tell()
     except OSError:
-        return [], offset
+        return [], None, offset
+
+
+def terminal_envelope(text: str) -> bool:
+    """Whether unphased assistant text is already a terminal role decision."""
+    stripped = text.strip()
+    if not (stripped.startswith("{") and stripped.endswith("}")):
+        return False
+    try:
+        payload = json.loads(stripped)
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and payload.get("action") in {
+        "delegate",
+        "final_answer",
+        "request_user_input",
+    }
 
 
 def parse_commentary(text: str) -> tuple[str, str]:
