@@ -32,7 +32,13 @@ Always answer in English in the user-facing chat.
 
 ## Roles
 
-The backend uses two Codex calls:
+A conversation picks one of two `agent_mode` values at create time, and the
+choice is pinned once the conversation has a message (the Codex sessions a turn
+builds are per role, so a mid-conversation switch would strand them).
+
+### `orchestrated` (default)
+
+Two Codex calls:
 
 - **orchestrator**: no code edits; returns JSON telling the UI to ask/notify the
   user or to run the implementer. It can also use the implementer for
@@ -43,6 +49,21 @@ The backend uses two Codex calls:
 - **implementer**: performs the delegated task in `/workspace` and returns a
   free-form handoff to the orchestrator. The orchestrator reviews that handoff
   before producing the user-facing answer.
+
+### `single`
+
+One Codex call:
+
+- **assistant**: the same session does the orchestration and the implementation.
+  It reads the skills, classifies the request, chooses the workflow, and then
+  edits `/workspace` itself. There is no `delegate` action and no `task` field —
+  its envelope is `{action, message}` only (`prompts/assistant.schema.json`).
+  If the user asks which role it is, it should identify as the single assistant.
+
+`agent_mode` is orthogonal to `autonomous`, so the workspace contract comes from
+a 2×2 matrix of `AGENTS*.md` files. Those four files are gitignored build output
+rendered from `backend/prompt_templates/AGENTS.md.j2`; edit the template, never
+a rendered file.
 
 There is no judge, profiler, or autonomous retry loop. Each role keeps its own
 Codex session and resumes it on later turns; the human user is the control loop.

@@ -1,6 +1,13 @@
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
-export type Role = "orchestrator" | "implementer";
+export type Role = "orchestrator" | "implementer" | "assistant";
+/**
+ * How many Codex backends drive a turn. `orchestrated` is the two-role
+ * orchestrator/implementer loop; `single` is one `assistant` that both plans and
+ * implements. Conversation-level and pinned after the first message, because the
+ * Codex sessions a turn builds are per role.
+ */
+export type AgentMode = "orchestrated" | "single";
 export type CommentaryLevel = "progress" | "milestone";
 export type CodexServiceTier = "default" | "fast";
 
@@ -11,9 +18,11 @@ export interface CodexRoleRuntime {
   serviceTier: CodexServiceTier;
 }
 
+/** Every role is carried, whichever mode is active; the unused one stays parked. */
 export interface CodexRuntimeSelection {
   orchestrator: CodexRoleRuntime;
   implementer: CodexRoleRuntime;
+  assistant: CodexRoleRuntime;
 }
 
 export interface CodexModelOption {
@@ -94,6 +103,7 @@ export interface Conversation {
   title: string;
   sandbox?: SandboxMode | string;
   autonomous?: boolean;
+  agent_mode?: AgentMode;
   codex_runtime?: CodexRuntimeSelection;
   messages: ChatMessage[];
   message_page?: MessagePage;
@@ -132,6 +142,8 @@ export interface TerminalResponse {
   type: "response";
   text: string;
   outcome: TerminalOutcome;
+  /** Whichever role emitted it — decides the "Input needed" card's tint. */
+  role: Role;
 }
 
 /** A turn that ended without an answer. Replaces the response card, never joins it. */

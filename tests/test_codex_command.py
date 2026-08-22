@@ -1,7 +1,12 @@
 import unittest
 
 from backend.codex_runtime.codex_command import build_codex_exec_command
-from backend.codex_runtime.config import CODEXDS_MODEL, role_codex_home_in_container
+from backend.codex_runtime.config import (
+    ASSISTANT_SCHEMA_IN_CONTAINER,
+    CODEXDS_MODEL,
+    ORCHESTRATOR_SCHEMA_IN_CONTAINER,
+    role_codex_home_in_container,
+)
 from backend.codex_runtime.exec_types import CodexExecRequest
 from backend.managed_context import MANAGED_CONTEXT_CONTAINER_PATH
 
@@ -13,11 +18,12 @@ def _request(
     effort: str = "xhigh",
     service_tier: str = "default",
     output_schema: str | None = None,
+    label: str = "orchestrator",
 ) -> CodexExecRequest:
     return CodexExecRequest(
         container="test-container",
         prompt="question",
-        label="orchestrator",
+        label=label,
         workspace_id="w_main",
         conversation_id="conversation",
         turn_id="turn",
@@ -82,16 +88,26 @@ class CodexCommandTests(unittest.TestCase):
         self.assertIn('model_reasoning_effort="high"', command)
         self.assertIn('service_tier="fast"', command)
 
-    def test_fresh_and_resumed_orchestrators_share_the_output_schema(self) -> None:
-        schema = "/opt/vibesim/prompts/orchestrator.schema.json"
-        fresh = build_codex_exec_command(_request(output_schema=schema))
-        resumed = build_codex_exec_command(
-            _request(session_id="session-1", output_schema=schema)
-        )
+    def test_fresh_and_resumed_drivers_share_the_output_schema(self) -> None:
+        """Both agent modes, both call shapes: the schema is never dropped."""
+        for label, schema in (
+            ("orchestrator", ORCHESTRATOR_SCHEMA_IN_CONTAINER),
+            ("assistant", ASSISTANT_SCHEMA_IN_CONTAINER),
+        ):
+            fresh = build_codex_exec_command(
+                _request(label=label, output_schema=schema)
+            )
+            resumed = build_codex_exec_command(
+                _request(label=label, session_id="session-1", output_schema=schema)
+            )
 
-        for command in (fresh, resumed):
-            self.assertIn("--output-schema", command)
-            self.assertIn(schema, command)
+            for command in (fresh, resumed):
+                with self.subTest(label=label, resumed="resume" in command):
+                    self.assertIn("--output-schema", command)
+                    self.assertIn(schema, command)
+                    self.assertIn(
+                        f"CODEX_HOME={role_codex_home_in_container(label)}", command
+                    )
 
     def test_new_codex_call_injects_analyzer_mcp(self) -> None:
         command = build_codex_exec_command(_request())

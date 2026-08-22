@@ -82,6 +82,9 @@ from .artifacts import (
     resolve_preview,
 )
 from .codex_runtime.config import (
+    AGENT_MODES,
+    ALL_CODEX_ROLES,
+    DEFAULT_AGENT_MODE,
     DEFAULT_CODEX_EFFORT,
     DEFAULT_CODEX_FAMILY,
     DEFAULT_CODEX_MODEL,
@@ -93,8 +96,10 @@ from .codex_runtime.config import (
     codex_model,
     codex_model_catalog,
     codex_model_registry,
+    normalize_agent_mode,
     normalize_role_runtime,
     prompt_fingerprint,
+    roles_for_agent_mode,
 )
 from .codex_runtime.docker import cleanup_conversation
 from .codex_runtime.turn import run_turn
@@ -420,6 +425,18 @@ def _autonomous_for_turn(conv: dict, requested_autonomous: bool) -> bool:
     return requested_autonomous
 
 
+def _agent_mode_for_turn(conv: dict, requested_agent_mode: str | None) -> str:
+    """Lock the agent mode once the conversation has a user-visible history.
+
+    Codex sessions are per role, so switching mode mid-conversation would strand
+    the sessions the earlier turns built and start the new role with no history.
+    """
+    requested = _validated_agent_mode(requested_agent_mode)
+    if conv.get("messages") or requested_agent_mode is None:
+        return normalize_agent_mode(conv.get("agent_mode"))
+    return requested
+
+
 class RoleRuntime(BaseModel):
     """One role's Codex model, reasoning effort, and speed tier."""
 
@@ -434,8 +451,11 @@ class RoleRuntime(BaseModel):
 
 
 class ConversationRuntime(BaseModel):
+    """Per-role selections. All roles are carried, whichever mode is active."""
+
     orchestrator: RoleRuntime = Field(default_factory=RoleRuntime)
     implementer: RoleRuntime = Field(default_factory=RoleRuntime)
+    assistant: RoleRuntime = Field(default_factory=RoleRuntime)
 
 
 class UpdateConversationRuntime(BaseModel):
@@ -443,8 +463,13 @@ class UpdateConversationRuntime(BaseModel):
 
 
 class NewConversation(BaseModel):
+    # Aliased fields must accept the snake_case name too; every documented
+    # create body (SKILL.md, the frontend, the smoke script) sends `agent_mode`.
+    model_config = ConfigDict(populate_by_name=True)
+
     sandbox: str = DEFAULT_SANDBOX
     autonomous: bool = False
+    agent_mode: str = Field(default=DEFAULT_AGENT_MODE, alias="agentMode")
     codex_runtime: ConversationRuntime = Field(default_factory=ConversationRuntime)
     # Co-evolution (used by vibe-serve): host path to the caller's candidate
     # workspace to bind read-only at /candidate in this conversation's container.
@@ -484,7 +509,10 @@ def _role_runtimes(
         else (selection or {})
     )
     runtimes: dict[str, dict[str, str]] = {}
-    for role in ("orchestrator", "implementer"):
+    # Every role is normalized regardless of the active agent mode: the stored
+    # selection outlives a single turn, and `prompt_fingerprint` narrows to the
+    # mode's own roles.
+    for role in ALL_CODEX_ROLES:
         requested = raw.get(role)
         requested = requested if isinstance(requested, dict) else {}
         if requested.get("model") and requested["model"] not in codex_model_registry():
@@ -513,11 +541,34 @@ def _session_family(event: dict, runtimes: dict[str, dict[str, str]]) -> str:
         return DEFAULT_CODEX_FAMILY
 
 
-def _require_available_runtimes(runtimes: dict[str, dict[str, str]]) -> None:
+def _validated_agent_mode(requested: str | None) -> str:
+    """Reject an unknown mode at the API edge instead of silently defaulting."""
+    if requested is not None and requested not in AGENT_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "unknown_agent_mode", "agent_mode": requested},
+        )
+    return normalize_agent_mode(requested)
+
+
+def _require_available_runtimes(
+    runtimes: dict[str, dict[str, str]],
+    *,
+    agent_mode: str | None = None,
+) -> None:
+    """Reject a selection whose family has no credentials configured.
+
+    Only the roles the active mode actually drives are checked: a stored model
+    for a role this mode never spawns cannot break the turn, so it must not
+    block the request either. `agent_mode=None` means check every role.
+    """
+    checked = (
+        roles_for_agent_mode(agent_mode) if agent_mode is not None else ALL_CODEX_ROLES
+    )
     unavailable = [
-        codex_model(selection["model"]).family_id
-        for selection in runtimes.values()
-        if not codex_model(selection["model"]).available
+        codex_model(runtimes[role]["model"]).family_id
+        for role in checked
+        if role in runtimes and not codex_model(runtimes[role]["model"]).available
     ]
     if unavailable:
         raise HTTPException(
@@ -571,6 +622,8 @@ class SendMessage(BaseModel):
     text: str
     sandbox_mode: str = DEFAULT_SANDBOX
     autonomous_mode: bool = False
+    # Honored only on the first turn; `_agent_mode_for_turn` pins it afterwards.
+    agent_mode: str | None = Field(default=None, alias="agentMode")
     analyzer_context: AnalyzerTurnContext | None = Field(
         default=None, alias="analyzerContext"
     )
@@ -579,13 +632,16 @@ class SendMessage(BaseModel):
 class AgentSendMessage(BaseModel):
     """One agent turn. `sandbox_mode`/`autonomous_mode` are optional per-turn
     overrides; when omitted they inherit the conversation's create-time settings
-    (so a read-only conversation stays read-only unless a turn opts up)."""
+    (so a read-only conversation stays read-only unless a turn opts up).
+    `agent_mode` is only an override on the very first turn — once the
+    conversation has history its Codex sessions pin the mode."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     text: str
     sandbox_mode: str | None = None
     autonomous_mode: bool | None = None
+    agent_mode: str | None = Field(default=None, alias="agentMode")
     analyzer_context: AnalyzerTurnContext | None = Field(
         default=None, alias="analyzerContext"
     )
@@ -622,10 +678,10 @@ def list_codex_backends() -> dict:
     return {
         "models": codex_model_catalog(),
         "families": codex_family_catalog(),
-        "defaults": {
-            "orchestrator": dict(default_runtime),
-            "implementer": dict(default_runtime),
-        },
+        # Every role, not just the ones the default agent mode runs: the picker
+        # lets a user choose the mode before the first message, so it needs a
+        # default for a role that turn may or may not end up using.
+        "defaults": {role: dict(default_runtime) for role in ALL_CODEX_ROLES},
     }
 
 
@@ -774,12 +830,13 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
     runtimes = _role_runtimes(body.codex_runtime)
-    _require_available_runtimes(runtimes)
+    agent_mode = _validated_agent_mode(body.agent_mode)
+    _require_available_runtimes(runtimes, agent_mode=agent_mode)
     cid = uuid.uuid4().hex[:12]
     fingerprint = prompt_fingerprint(
         autonomous=body.autonomous,
-        orchestrator_runtime=runtimes["orchestrator"],
-        implementer_runtime=runtimes["implementer"],
+        agent_mode=agent_mode,
+        role_runtimes=runtimes,
     )
     log_event(
         LOG,
@@ -788,6 +845,7 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
         conversation_id=cid,
         sandbox=body.sandbox,
         autonomous=body.autonomous,
+        agent_mode=agent_mode,
         codex_runtime=runtimes,
         prompt_fingerprint=fingerprint,
     )
@@ -797,8 +855,8 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
         body.sandbox,
         fingerprint,
         autonomous=body.autonomous,
-        orchestrator_runtime=runtimes["orchestrator"],
-        implementer_runtime=runtimes["implementer"],
+        agent_mode=agent_mode,
+        role_runtimes=runtimes,
         peer_workspace=body.peer_workspace,
         naming_state="pending",
     )
@@ -817,8 +875,7 @@ def update_conversation_runtime(
         store.update_codex_runtime(
             workspace_id,
             cid,
-            orchestrator_runtime=runtimes["orchestrator"],
-            implementer_runtime=runtimes["implementer"],
+            role_runtimes=runtimes,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="conversation not found") from exc
@@ -1306,6 +1363,7 @@ async def eval_run(body: EvalRequest, _: None = Depends(require_token)) -> dict:
             prompt=body.prompt,
             sandbox=body.sandbox,
             autonomous=body.autonomous,
+            agent_mode=_validated_agent_mode(body.agent_mode),
             keep_container=body.keep_container,
         )
     except ValueError as exc:
@@ -1391,12 +1449,13 @@ def agent_create_conversation(
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
     runtimes = _role_runtimes(body.codex_runtime)
-    _require_available_runtimes(runtimes)
+    agent_mode = _validated_agent_mode(body.agent_mode)
+    _require_available_runtimes(runtimes, agent_mode=agent_mode)
     cid = uuid.uuid4().hex[:12]
     fingerprint = prompt_fingerprint(
         autonomous=body.autonomous,
-        orchestrator_runtime=runtimes["orchestrator"],
-        implementer_runtime=runtimes["implementer"],
+        agent_mode=agent_mode,
+        role_runtimes=runtimes,
     )
     log_event(
         LOG,
@@ -1405,6 +1464,7 @@ def agent_create_conversation(
         conversation_id=cid,
         sandbox=body.sandbox,
         autonomous=body.autonomous,
+        agent_mode=agent_mode,
         codex_runtime=runtimes,
         prompt_fingerprint=fingerprint,
         peer_workspace=body.peer_workspace,
@@ -1416,8 +1476,8 @@ def agent_create_conversation(
         body.sandbox,
         fingerprint,
         autonomous=body.autonomous,
-        orchestrator_runtime=runtimes["orchestrator"],
-        implementer_runtime=runtimes["implementer"],
+        agent_mode=agent_mode,
+        role_runtimes=runtimes,
         peer_workspace=body.peer_workspace,
         naming_state="pending",
     )
@@ -1478,11 +1538,12 @@ async def agent_send_message(
         else bool(conv.get("autonomous", False))
     )
     autonomous = _autonomous_for_turn(conv, requested_autonomous)
+    agent_mode = _agent_mode_for_turn(conv, body.agent_mode)
     runtimes = _role_runtimes(conv.get("codex_runtime") or {})
     fingerprint = prompt_fingerprint(
         autonomous=autonomous,
-        orchestrator_runtime=runtimes["orchestrator"],
-        implementer_runtime=runtimes["implementer"],
+        agent_mode=agent_mode,
+        role_runtimes=runtimes,
     )
     turn_id = uuid.uuid4().hex[:10]
     store.update_runtime_settings(
@@ -1490,6 +1551,7 @@ async def agent_send_message(
         cid,
         sandbox=sandbox,
         autonomous=autonomous,
+        agent_mode=agent_mode,
     )
     store.add_message(
         workspace_id,
@@ -1510,6 +1572,7 @@ async def agent_send_message(
         turn_id=turn_id,
         sandbox=sandbox,
         autonomous=autonomous,
+        agent_mode=agent_mode,
         prompt_fingerprint=fingerprint,
         prompt_len=len(text),
         prompt_preview=compact_text(text),
@@ -1521,6 +1584,7 @@ async def agent_send_message(
         turn_id=turn_id,
         sandbox=sandbox,
         autonomous=autonomous,
+        agent_mode=agent_mode,
     )
 
     lock = _lock_for(workspace_id)
@@ -1535,9 +1599,9 @@ async def agent_send_message(
                 turn_id=turn_id,
                 prompt_fingerprint=fingerprint,
                 autonomous=autonomous,
+                agent_mode=agent_mode,
                 peer_dir=conv.get("peer_workspace"),
-                orchestrator_runtime=runtimes["orchestrator"],
-                implementer_runtime=runtimes["implementer"],
+                role_runtimes=runtimes,
             ):
                 if ev.get("kind") == "session":
                     store.set_codex_session(
@@ -1769,11 +1833,12 @@ async def send_message(
 
     sandbox = body.sandbox_mode
     autonomous = _autonomous_for_turn(conv, body.autonomous_mode)
+    agent_mode = _agent_mode_for_turn(conv, body.agent_mode)
     runtimes = _role_runtimes(conv.get("codex_runtime") or {})
     current_prompt_fingerprint = prompt_fingerprint(
         autonomous=autonomous,
-        orchestrator_runtime=runtimes["orchestrator"],
-        implementer_runtime=runtimes["implementer"],
+        agent_mode=agent_mode,
+        role_runtimes=runtimes,
     )
     turn_id = uuid.uuid4().hex[:10]
     previous_sessions = dict(conv.get("codex_sessions") or {})
@@ -1782,6 +1847,7 @@ async def send_message(
         cid,
         sandbox=sandbox,
         autonomous=autonomous,
+        agent_mode=agent_mode,
     )
     store.add_message(
         workspace_id,
@@ -1805,6 +1871,7 @@ async def send_message(
         turn_id=turn_id,
         sandbox=sandbox,
         autonomous=autonomous,
+        agent_mode=agent_mode,
         prompt_fingerprint=current_prompt_fingerprint,
         prompt_len=len(text),
         prompt_preview=compact_text(text),
@@ -1825,6 +1892,7 @@ async def send_message(
             turn_id=turn_id,
             prompt_fingerprint=current_prompt_fingerprint,
             autonomous=autonomous,
+            agent_mode=agent_mode,
             analyzer_context=body.analyzer_context,
             active_turn=active_turn,
             runtimes=runtimes,
@@ -1873,6 +1941,7 @@ async def _run_browser_turn(
     analyzer_context: AnalyzerTurnContext | None,
     active_turn: ActiveBrowserTurn,
     runtimes: dict[str, dict[str, str]] | None = None,
+    agent_mode: str = DEFAULT_AGENT_MODE,
 ) -> None:
     runtimes = runtimes or _role_runtimes(None)
     lock = _lock_for(workspace_id)
@@ -1895,8 +1964,8 @@ async def _run_browser_turn(
                 turn_id=turn_id,
                 prompt_fingerprint=prompt_fingerprint,
                 autonomous=autonomous,
-                orchestrator_runtime=runtimes["orchestrator"],
-                implementer_runtime=runtimes["implementer"],
+                agent_mode=agent_mode,
+                role_runtimes=runtimes,
             ):
                 kind = ev.get("kind")
                 if kind == "session":

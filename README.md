@@ -217,13 +217,17 @@ browser
      - repo-local skills remain in /workspace/skills
      - when host HF_HOME is set, mount it read-only at /model and set container HF_HOME=/model
      using the prebuilt CODEX_DOCKER_IMAGE
-  -> codex exec/resume as orchestrator
+  -> codex exec/resume as the driving role
+       (agent_mode=orchestrated -> orchestrator; agent_mode=single -> assistant)
        action=progress           -> emit a concise user-facing update and continue
        action=milestone          -> emit a completed checkpoint and continue
        action=final_answer       -> return completed results to the user
        action=request_user_input -> return a blocking question to the user
        action=delegate           -> codex exec/resume as implementer
-  -> explicit handoff of implementer summary back to orchestrator
+                                    (orchestrated only; in single mode the
+                                     envelope has no delegate action, and one
+                                     emitted anyway is sent back for repair)
+  -> explicit handoff of implementer summary back to orchestrator  [orchestrated only]
        action=final_answer       -> return reviewed result to the user
        action=request_user_input -> request genuinely required user input
        action=delegate           -> continue with another bounded implementer task
@@ -263,12 +267,55 @@ contract tells the orchestrator to proceed with conservative assumptions
 instead of asking preference or clarification questions. After the first user
 message, the conversation's autonomous setting is fixed.
 
+Beside it sits a Single agent / Orchestrated button. `agent_mode=single`
+replaces the two-role loop with one `assistant` role that both plans and
+implements: it costs one Codex call per user message rather than `1 + 2D`, keeps
+one Codex session instead of two, and needs no handoff text because nothing is
+handed off. Its envelope drops `delegate` and `task`
+(`backend/prompts/assistant.schema.json`); a `delegate` decision emitted anyway
+is rejected at parse time and repaired through the normal repair budget. Like
+autonomous, the mode is fixed after the first user message — the Codex sessions
+a turn builds are per role, so switching would strand them and restart the new
+role with no history. The two switches are orthogonal, which is why there are
+four `AGENTS*.md` variants.
+
+### Prompt rendering
+
+The mode-dependent prompts are **generated build output and are gitignored**:
+the four `AGENTS*.md` variants come from
+`backend/prompt_templates/AGENTS.md.j2`, and `orchestrator.txt` /
+`assistant.txt` from `backend/prompt_templates/role.txt.j2`. Only the templates
+are source. The rest of `backend/prompts/` — the two `*.schema.json`,
+`implementer.txt`, `naming-*.txt` — has no mode variants, is hand-written, and
+stays tracked.
+
+They exist as files because the runtime consumes them as files (bind-mount
+source, container-reuse `cmp -s`, fingerprint hashing), so
+`backend/codex_runtime/config.py` calls `agents_prompt.ensure_rendered()` when
+it is imported. That covers every entry point — `./run.sh`, a bare `uvicorn`,
+`unittest discover` — including a fresh clone where the files do not yet exist.
+Jinja2 is therefore a runtime dependency, not a dev-only one.
+
+To change a contract, edit the template and read what it produced:
+
+```bash
+$EDITOR backend/prompt_templates/AGENTS.md.j2
+uv run python -m backend.agents_prompt   # re-render now instead of on next import
+git diff --no-index /dev/null backend/prompts/AGENTS.autonomous.md | less
+```
+
+Reviewing the rendered text matters more than usual here: a Jinja whitespace or
+condition mistake produces a plausible contract rather than an error, and it can
+land in only one of the four variants. Nothing enforces re-rendering, because
+nothing has to — a hand-edited artifact is silently overwritten on the next
+import, and `tests/test_prompts.py` asserts exactly that.
+
 The implementer returns free-form text; there is no judge, profiler, or shared
 `profile.db` write unless the copied workspace task does it. The orchestrator
 and implementer keep separate Codex session ids. Same-role continuity uses
 `codex exec resume`; cross-role handoff does not rely on shared context and is
 passed explicitly as task text and implementer summary.
-`backend/prompts/AGENTS.md` and `backend/prompts/AGENTS.autonomous.md` hold the
+The four `backend/prompts/AGENTS*.md` files hold the
 detailed shared role and skill instructions. One is mounted read-only into each
 conversation container as `/workspace/AGENTS.md`; this preserves Codex's native
 project-instruction discovery and per-conversation mode without changing shared
@@ -447,9 +494,17 @@ fields:
 
 The Autonomous button is independent from execution mode. It is available in the
 welcome area before the first user message, and changes the workspace prompt
-file, not filesystem permissions: the orchestrator should avoid clarification
+file, not filesystem permissions: the driving role should avoid clarification
 questions and continue with stated assumptions, while still stopping for missing
 credentials or destructive/shared-state authorization.
+
+Note that `sandbox` never reaches the Codex CLI — `codex_command.py` always
+passes `--dangerously-bypass-approvals-and-sandbox`, so `read-only`'s one
+enforced effect is that `turn.py` refuses to delegate. In `agent_mode=single`
+there is nothing to delegate, so `read-only` degrades to a prompt-only
+constraint stated in the single-mode `AGENTS*.md`. This is a pre-existing gap in
+how `sandbox` is wired, not something single mode introduced; treat `read-only`
+as advisory in that mode.
 
 GPU forwarding is controlled independently by `CODEX_DOCKER_GPUS`. It defaults
 to `all`, so `workspace-write` containers can run CUDA smoke checks and
@@ -470,15 +525,17 @@ Docker GPU forwarding.
 | `backend/codex_runtime/output_collector.py` | stdout/stderr/rollout collection into UI events                                                          |
 | `backend/codex_runtime/codex_events.py`     | Codex JSON/rollout event translation                                                                     |
 | `backend/codex_runtime/prompts.py`          | role prompts and orchestrator JSON parsing                                                               |
-| `backend/codex_runtime/turn.py`             | high-level orchestrator/implementer turn loop                                                            |
+| `backend/codex_runtime/turn.py`             | high-level turn loop for both agent modes                                                                |
 | `backend/analyzer_evidence_mcp/server.py`   | bounded read-only MCP bridge to the Analyzer `/api/v1/*` resources                                       |
 | `backend/naming.py`                         | non-blocking OpenRouter structured naming plus pending-state scheduling                                  |
 | `backend/eval.py`                           | JSON `/api/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`)                         |
 | `backend/artifacts.py`                      | list/resolve files in a run workspace for the agent artifact endpoints                                   |
 | `SKILL.md`                                  | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/skill` |
-| `backend/prompts/AGENTS.md`                 | detailed instructions mounted read-only as `/workspace/AGENTS.md`                                        |
-| `backend/prompts/AGENTS.autonomous.md`      | autonomous-mode instructions mounted read-only at the same path                                          |
-| `backend/prompts/*.txt`                     | short role startup prompts for orchestrator/implementer                                                  |
+| `backend/prompt_templates/*.j2`             | Jinja2 sources for the generated prompts; edit these, never `backend/prompts/`                           |
+| `backend/agents_prompt.py`                  | prompt renderer; `ensure_rendered()` runs on `codex_runtime/config` import                               |
+| `backend/prompts/AGENTS*.md`                | generated (gitignored) agent_mode × autonomous matrix, one mounted read-only as `/workspace/AGENTS.md`   |
+| `backend/prompts/*.txt`                     | short role startup prompts; orchestrator/assistant generated, implementer hand-written                   |
+| `backend/prompts/*.schema.json`             | decision-envelope schemas passed to `codex exec --output-schema`                                         |
 | `backend/store.py`                          | workspace registry plus per-workspace SQLite conversation/event store                                    |
 | `docker/codex-runner.Dockerfile`            | prebuilt CUDA runner image with Node, Codex CLI, `uv`, git, Rust, `just`, `nvcc`, and baked VibeSim deps |
 | `scripts/build-codex-runner-image.sh`       | one-shot image builder used by `run.sh` when needed                                                      |

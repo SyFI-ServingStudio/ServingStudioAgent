@@ -1,4 +1,5 @@
 import type {
+  AgentMode,
   CodexRuntimeCatalog,
   CodexRuntimeSelection,
   Conversation,
@@ -53,12 +54,18 @@ export async function listConversations(): Promise<ConversationListResponse> {
 export async function createConversation(
   sandbox: SandboxMode,
   autonomous: boolean,
+  agentMode: AgentMode,
   codexRuntime: CodexRuntimeSelection,
 ): Promise<Conversation> {
   const response = await fetch(`/api/workspaces/${MAIN_WORKSPACE_ID}/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sandbox, autonomous, codex_runtime: codexRuntime }),
+    body: JSON.stringify({
+      sandbox,
+      autonomous,
+      agent_mode: agentMode,
+      codex_runtime: codexRuntime,
+    }),
   });
   if (!response.ok) {
     throw new Error(`failed to create conversation: ${response.status}`);
@@ -128,6 +135,7 @@ export async function streamTurn(
   text: string,
   sandbox: SandboxMode,
   autonomous: boolean,
+  agentMode: AgentMode,
   handlers: StreamHandlers,
   signal: AbortSignal,
 ): Promise<void> {
@@ -137,7 +145,13 @@ export async function streamTurn(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, sandbox_mode: sandbox, autonomous_mode: autonomous }),
+      body: JSON.stringify({
+        text,
+        sandbox_mode: sandbox,
+        autonomous_mode: autonomous,
+        // Only honored on the first turn; the backend pins it afterwards.
+        agent_mode: agentMode,
+      }),
       signal,
     },
   );

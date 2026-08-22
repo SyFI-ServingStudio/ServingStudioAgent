@@ -8,7 +8,12 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .codex_runtime.config import DEFAULT_SANDBOX, prompt_fingerprint, workspace_main_for
+from .codex_runtime.config import (
+    DEFAULT_AGENT_MODE,
+    DEFAULT_SANDBOX,
+    prompt_fingerprint,
+    workspace_main_for,
+)
 from .codex_runtime.docker import remove_container
 from .codex_runtime.turn import run_turn
 from .store import WorkspaceRegistry
@@ -19,6 +24,7 @@ class EvalRequest(BaseModel):
     prompt: str
     sandbox: str = DEFAULT_SANDBOX
     autonomous: bool = True
+    agent_mode: str = DEFAULT_AGENT_MODE
     keep_container: bool = False
 
 
@@ -27,6 +33,7 @@ async def run_eval(
     prompt: str,
     sandbox: str = DEFAULT_SANDBOX,
     autonomous: bool = True,
+    agent_mode: str = DEFAULT_AGENT_MODE,
     keep_container: bool = False,
 ) -> dict[str, Any]:
     """Run one prompt through `run_turn` and return a script-friendly JSON object."""
@@ -41,12 +48,13 @@ async def run_eval(
         workspace_id=workspace_id,
     )
     turn_id = uuid.uuid4().hex[:10]
-    fingerprint = prompt_fingerprint(autonomous=autonomous)
+    fingerprint = prompt_fingerprint(autonomous=autonomous, agent_mode=agent_mode)
     result = new_turn_result(
         conversation_id=conversation_id,
         turn_id=turn_id,
         sandbox=sandbox,
         autonomous=autonomous,
+        agent_mode=agent_mode,
         workspace_id=workspace_id,
         kept_workspace=True,
         kept_container=keep_container,
@@ -63,6 +71,7 @@ async def run_eval(
             turn_id=turn_id,
             prompt_fingerprint=fingerprint,
             autonomous=autonomous,
+            agent_mode=agent_mode,
         ):
             collect_turn_event(result, event)
         result["ok"] = (

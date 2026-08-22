@@ -7,7 +7,9 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Two-role brand language: orchestrator = amber, implementer = teal.
+/* Per-role brand language: orchestrator = amber, implementer = teal, and the
+   single-agent-mode assistant = indigo (it is both roles at once, so it gets its
+   own hue rather than borrowing either).
    Compound color names (orch-soft/-bg/-line) are used as literal class strings
    only — never string-built at runtime — so Tailwind's scanner emits them. */
 @theme {
@@ -22,6 +24,10 @@
   --color-impl-soft: #83d4c6;
   --color-impl-bg: rgba(79, 179, 163, 0.1);
   --color-impl-line: rgba(79, 179, 163, 0.34);
+  --color-asst: #8f8cf0;
+  --color-asst-soft: #b6b4f6;
+  --color-asst-bg: rgba(143, 140, 240, 0.1);
+  --color-asst-line: rgba(143, 140, 240, 0.34);
   /* answer = a warm muted rose, distinct from both role hues */
   --color-ans: #cf88a0;
   --color-ans-soft: #e2adbe;
@@ -104,6 +110,7 @@
    card type reads at a glance without a bright fill. Tune the mix % to taste. */
 .tint-orch { background-color: color-mix(in oklab, var(--color-panel) 92%, var(--color-orch)); }
 .tint-impl { background-color: color-mix(in oklab, var(--color-panel) 92%, var(--color-impl)); }
+.tint-asst { background-color: color-mix(in oklab, var(--color-panel) 92%, var(--color-asst)); }
 .tint-answer { background-color: color-mix(in oklab, var(--color-panel) 87%, var(--color-ans)); }
 .tint-fail { background-color: color-mix(in oklab, var(--color-panel) 87%, var(--color-fail)); }
 

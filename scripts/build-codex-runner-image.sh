@@ -21,18 +21,11 @@ rust_toolchain="${RUST_TOOLCHAIN:-stable}"
 runner_version="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v10}"
 lock_sha="$(sha256sum "$main_dir/uv.lock" | awk '{print $1}')"
 build_context="$(mktemp -d "${TMPDIR:-/tmp}/vibesim-ui-runner-build.XXXXXX")"
+# shellcheck source=lib/main-tree-copy.sh
+source "$ui_dir/scripts/lib/main-tree-copy.sh"
 trap 'rm -rf "$build_context"' EXIT
 
-mkdir -p "$build_context/vibesim"
-# Copy the current contents of tracked files, including intentional working-tree
-# edits, while skipping submodule gitlinks and all untracked build artifacts.
-while IFS= read -r -d '' rel_path; do
-  source_path="$main_dir/$rel_path"
-  if [ -f "$source_path" ] || [ -L "$source_path" ]; then
-    mkdir -p "$build_context/vibesim/$(dirname "$rel_path")"
-    cp -a "$source_path" "$build_context/vibesim/$rel_path"
-  fi
-done < <(git -C "$main_dir" ls-files -z)
+copy_main_tree "$main_dir" "$build_context/vibesim"
 
 docker build \
   -f "$ui_dir/docker/codex-runner.Dockerfile" \

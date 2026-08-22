@@ -3,48 +3,37 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from backend.codex_runtime import docker
-from backend.codex_runtime.config import PROMPTS_DIR
+from backend.codex_runtime.config import (
+    AGENTS_PROMPT_MATRIX,
+    DEFAULT_AGENT_MODE,
+    PROMPTS_DIR,
+)
 
 
 class DockerAgentPromptMountTest(unittest.TestCase):
-    def test_default_agent_prompt_uses_existing_workspace_mount_target(self) -> None:
+    def test_every_mode_pair_mounts_its_own_prompt_on_one_target(self) -> None:
+        """The container path is fixed; only the host source varies by mode."""
         with TemporaryDirectory() as temporary_directory:
             workspace_path = Path(temporary_directory)
             (workspace_path / "AGENTS.md").touch()
 
-            self.assertEqual(
-                docker._agent_prompt_mount_args(
-                    workspace_path,
-                    autonomous=False,
-                ),
-                [
-                    "--mount",
-                    (
-                        f"type=bind,src={(PROMPTS_DIR / 'AGENTS.md').resolve()},"
-                        "dst=/workspace/AGENTS.md,readonly"
-                    ),
-                ],
-            )
-
-    def test_autonomous_agent_prompt_uses_same_container_target(self) -> None:
-        with TemporaryDirectory() as temporary_directory:
-            workspace_path = Path(temporary_directory)
-            (workspace_path / "AGENTS.md").touch()
-
-            self.assertEqual(
-                docker._agent_prompt_mount_args(
-                    workspace_path,
-                    autonomous=True,
-                ),
-                [
-                    "--mount",
-                    (
-                        "type=bind,"
-                        f"src={(PROMPTS_DIR / 'AGENTS.autonomous.md').resolve()},"
-                        "dst=/workspace/AGENTS.md,readonly"
-                    ),
-                ],
-            )
+            for (agent_mode, autonomous), prompt_name in AGENTS_PROMPT_MATRIX.items():
+                with self.subTest(agent_mode=agent_mode, autonomous=autonomous):
+                    self.assertEqual(
+                        docker._agent_prompt_mount_args(
+                            workspace_path,
+                            autonomous=autonomous,
+                            agent_mode=agent_mode,
+                        ),
+                        [
+                            "--mount",
+                            (
+                                "type=bind,"
+                                f"src={(PROMPTS_DIR / prompt_name).resolve()},"
+                                "dst=/workspace/AGENTS.md,readonly"
+                            ),
+                        ],
+                    )
 
     def test_agent_prompt_mount_refuses_to_create_workspace_target(self) -> None:
         with TemporaryDirectory() as temporary_directory:
@@ -54,6 +43,7 @@ class DockerAgentPromptMountTest(unittest.TestCase):
                 docker._agent_prompt_mount_args(
                     workspace_path,
                     autonomous=False,
+                    agent_mode=DEFAULT_AGENT_MODE,
                 )
 
             self.assertFalse((workspace_path / "AGENTS.md").exists())

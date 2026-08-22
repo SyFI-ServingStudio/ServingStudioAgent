@@ -28,6 +28,7 @@ from .config import (
     CODEX_DOCKER_UV_CACHE_DIR,
     CODEX_DOCKER_UV_PROJECT_ENVIRONMENT,
     CONTAINER_RUNTIME_VERSION,
+    DEFAULT_AGENT_MODE,
     DEFAULT_CODEX_FAMILY,
     HOST_HF_HOME,
     LOG,
@@ -41,6 +42,7 @@ from .config import (
     container_name,
     role_codex_home_for,
     role_codex_home_in_container,
+    roles_for_agent_mode,
 )
 from .workspace import main_submodule_paths
 
@@ -128,6 +130,7 @@ def _agent_prompt_mount_args(
     workspace_main: Path,
     *,
     autonomous: bool,
+    agent_mode: str,
 ) -> list[str]:
     """Mount this conversation's selected project instructions read-only.
 
@@ -136,7 +139,7 @@ def _agent_prompt_mount_args(
     missing bind target inside the host workspace, which would violate the
     runtime's no-mutation contract for ``w_main``.
     """
-    prompt_path = PROMPTS_DIR / agents_prompt_name(autonomous)
+    prompt_path = PROMPTS_DIR / agents_prompt_name(autonomous, agent_mode)
     if not prompt_path.is_file():
         raise RuntimeError(f"agent prompt not found: {prompt_path}")
     mount_target = workspace_main / "AGENTS.md"
@@ -380,23 +383,32 @@ def ensure_container(
     peer_dir: str | None = None,
     *,
     autonomous: bool = False,
-    orchestrator_family: str = DEFAULT_CODEX_FAMILY,
-    implementer_family: str = DEFAULT_CODEX_FAMILY,
+    agent_mode: str = DEFAULT_AGENT_MODE,
+    role_families: dict[str, str] | None = None,
 ) -> str:
     container = container_name(workspace_id, conversation_id)
+    # Only the roles this agent mode runs get a Codex home, a fingerprint entry,
+    # and a readiness check. Switching mode therefore changes the fingerprint and
+    # recreates the container, which is what seeds the new role's home.
     family_selection = {
-        "orchestrator": orchestrator_family,
-        "implementer": implementer_family,
+        role: (role_families or {}).get(role, DEFAULT_CODEX_FAMILY)
+        for role in roles_for_agent_mode(agent_mode)
     }
     # Fingerprinted by family, not model: switching to a sibling model reuses the
-    # same auth home, so tearing the container down would buy nothing.
+    # same auth home, so tearing the container down would buy nothing. Role order
+    # follows `roles_for_agent_mode`, so an orchestrated conversation keeps the
+    # exact fingerprint string it had before single mode existed.
     backend_fingerprint = ",".join(
         f"{role}:{family_id}" for role, family_id in family_selection.items()
     )
     for role, family_id in family_selection.items():
         _prepare_role_codex_home(workspace_id, conversation_id, role, family_id)
     codex_root = codex_home_for(workspace_id, conversation_id)
-    selected_agents_prompt = agents_prompt_name(autonomous)
+    selected_agents_prompt = agents_prompt_name(autonomous, agent_mode)
+    role_home_ready_clause = "".join(
+        f"&& test -d {role_codex_home_in_container(role)!r} "
+        for role in family_selection
+    )
     log_event(
         LOG,
         "container.ensure.start",
@@ -462,8 +474,7 @@ def ensure_container(
                     "&& command -v rustc >/dev/null 2>&1 "
                     "&& command -v uv >/dev/null 2>&1 "
                     "&& command -v codex >/dev/null 2>&1 "
-                    f"&& test -d {role_codex_home_in_container('orchestrator')!r} "
-                    f"&& test -d {role_codex_home_in_container('implementer')!r} "
+                    f"{role_home_ready_clause}"
                     "&& test -r /workspace/AGENTS.md "
                     f"&& cmp -s /workspace/AGENTS.md "
                     f"{(PROMPTS_CONTAINER_DIR + '/' + selected_agents_prompt)!r} "
@@ -531,6 +542,7 @@ def ensure_container(
         *_agent_prompt_mount_args(
             workspace_main,
             autonomous=autonomous,
+            agent_mode=agent_mode,
         ),
         *_submodule_mount_args(conversation_id, container),
         *_candidate_mount_args(conversation_id, container, peer_dir),

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .codex_runtime.config import DEFAULT_AGENT_MODE
+
 
 def new_turn_result(
     *,
@@ -20,17 +22,22 @@ def new_turn_result(
     turn_id: str,
     sandbox: str,
     autonomous: bool,
+    agent_mode: str = DEFAULT_AGENT_MODE,
     **extra: Any,
 ) -> dict[str, Any]:
     """Build the base result dict shared by the eval and agent-turn endpoints.
 
     `extra` carries endpoint-specific fields (e.g. eval's workspace/kept_* flags).
+    `implementer_summaries` / `delegated_tasks` stay in the shape under
+    `agent_mode="single"` — the single agent never delegates, so they stay empty
+    rather than disappearing from a contract callers already depend on.
     """
     result: dict[str, Any] = {
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "sandbox": sandbox,
         "autonomous": autonomous,
+        "agent_mode": agent_mode,
         "sessions": {},
         "tool_calls": [],
         "intermediate_outputs": [],

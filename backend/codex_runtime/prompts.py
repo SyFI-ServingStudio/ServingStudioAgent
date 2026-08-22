@@ -6,20 +6,38 @@ import json
 import re
 from typing import Any
 
-from .config import PROMPTS_DIR
+from .config import AGENT_MODE_ROLE_PROMPT, PROMPTS_DIR
 
 
 def _role_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8").strip()
 
 
-def _orchestrator_contract(conversation_id: str) -> str:
+def _driver_contract(role_prompt_name: str, conversation_id: str) -> str:
+    """The startup contract for whichever role emits the decision envelope.
+
+    Orchestrated turns pass `orchestrator.txt`, single-agent turns
+    `assistant.txt`; the conversation-scoped plan/progress files are the same
+    recovery state either way.
+    """
     return (
-        f"{_role_prompt('orchestrator.txt')}\n\n"
+        f"{_role_prompt(role_prompt_name)}\n\n"
         f"Current conversation ID: `{conversation_id}`.\n"
         f"Conversation plan: `/workspace/{conversation_id}_plan.md`.\n"
         f"Conversation progress: `/workspace/{conversation_id}_progress.md`."
     )
+
+
+def _orchestrator_contract(conversation_id: str) -> str:
+    return _driver_contract("orchestrator.txt", conversation_id)
+
+
+def _assistant_contract(conversation_id: str) -> str:
+    return _driver_contract("assistant.txt", conversation_id)
+
+
+def driver_contract_for(agent_mode: str, conversation_id: str) -> str:
+    return _driver_contract(AGENT_MODE_ROLE_PROMPT[agent_mode], conversation_id)
 
 
 def _orchestrator_prompt(
@@ -33,6 +51,32 @@ def _orchestrator_prompt(
     del is_resume
     return (
         f"{_orchestrator_contract(conversation_id)}"
+        f"\n\nNewest user message:\n{user_text}\n"
+    )
+
+
+def _assistant_prompt(
+    user_text: str,
+    *,
+    is_resume: bool,
+    conversation_id: str,
+) -> str:
+    del is_resume
+    return (
+        f"{_assistant_contract(conversation_id)}"
+        f"\n\nNewest user message:\n{user_text}\n"
+    )
+
+
+def driver_prompt(
+    user_text: str,
+    *,
+    agent_mode: str,
+    conversation_id: str,
+) -> str:
+    """The first call of a turn, for either agent mode."""
+    return (
+        f"{driver_contract_for(agent_mode, conversation_id)}"
         f"\n\nNewest user message:\n{user_text}\n"
     )
 
@@ -67,14 +111,40 @@ def _orchestrator_repair_prompt(
     conversation_id: str,
 ) -> str:
     """Ask a resumed orchestrator to repair only its decision envelope."""
+    return driver_repair_prompt(
+        unparsed_output,
+        agent_mode="orchestrated",
+        conversation_id=conversation_id,
+    )
+
+
+def driver_repair_prompt(
+    unparsed_output: str,
+    *,
+    agent_mode: str,
+    conversation_id: str,
+) -> str:
+    """Ask the resumed driving role to repair only its decision envelope."""
+    if agent_mode == "single":
+        envelope = (
+            "Return exactly one JSON object with the fields `action` and "
+            "`message`. If the text below is the completed answer, preserve it "
+            "in `message` with action `final_answer`. If user input is genuinely "
+            "required, use `request_user_input`. There is no `delegate` action "
+            "and no `task` field in this mode."
+        )
+    else:
+        envelope = (
+            "Return exactly one JSON object with the fields `action`, `message`, "
+            "and `task`. If the text below is the completed answer, preserve it "
+            "in `message` with action `final_answer`. If user input is genuinely "
+            "required, use `request_user_input`; if a separate implementer task "
+            "is required, use `delegate`."
+        )
     return (
-        f"{_orchestrator_contract(conversation_id)}\n\n"
+        f"{driver_contract_for(agent_mode, conversation_id)}\n\n"
         "Your previous final output could not be parsed as the required decision "
-        "JSON. Do not redo completed analysis. Return exactly one JSON object with "
-        "the fields `action`, `message`, and `task`. If the text below is the "
-        "completed answer, preserve it in `message` with action `final_answer`. "
-        "If user input is genuinely required, use `request_user_input`; if a "
-        "separate implementer task is required, use `delegate`. Do not end with "
+        f"JSON. Do not redo completed analysis. {envelope} Do not end with "
         "a progress update and do not add text outside the JSON object.\n\n"
         f"Unparsed previous output:\n{unparsed_output}\n"
     )
@@ -87,12 +157,33 @@ def _orchestrator_continue_prompt(
     conversation_id: str,
 ) -> str:
     """Resume after a non-terminal envelope was emitted as the final item."""
+    return driver_continue_prompt(
+        action,
+        message,
+        agent_mode="orchestrated",
+        conversation_id=conversation_id,
+    )
+
+
+def driver_continue_prompt(
+    action: str,
+    message: str,
+    *,
+    agent_mode: str,
+    conversation_id: str,
+) -> str:
+    """Resume after a non-terminal envelope was emitted as the final item."""
+    terminal_actions = (
+        "`final_answer` or `request_user_input`"
+        if agent_mode == "single"
+        else "`final_answer`, `request_user_input`, or `delegate`"
+    )
     return (
-        f"{_orchestrator_contract(conversation_id)}\n\n"
+        f"{driver_contract_for(agent_mode, conversation_id)}\n\n"
         f"Your previous call ended with a non-terminal `{action}` update. The "
         "runtime already showed it to the user. Continue the same work from that "
         "checkpoint without repeating completed analysis. End this call only with "
-        "`final_answer`, `request_user_input`, or `delegate`; use `progress` and "
+        f"{terminal_actions}; use `progress` and "
         "`milestone` only for commentary emitted while you keep working.\n\n"
         f"Last update:\n{message}\n"
     )
@@ -129,7 +220,17 @@ def _normalize_orchestrator_text_field(value: str) -> str:
     return value.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
 
 
-def parse_orchestrator(text: str) -> dict[str, Any] | None:
+def parse_orchestrator(
+    text: str,
+    *,
+    allow_delegate: bool = True,
+) -> dict[str, Any] | None:
+    """Parse one decision envelope.
+
+    `allow_delegate=False` is the single-agent contract: a `delegate` payload is
+    rejected rather than normalized, so it falls through to `None` and the
+    caller spends a repair round telling the model to finish the work itself.
+    """
     for candidate in _json_candidates(text):
         try:
             payload = json.loads(candidate)
@@ -153,6 +254,8 @@ def parse_orchestrator(text: str) -> dict[str, Any] | None:
                 "action": action,
                 "message": _normalize_orchestrator_text_field(message),
             }
+        if action in {"delegate", "run_implementer"} and not allow_delegate:
+            continue
         if action in {"delegate", "run_implementer"} and isinstance(
             task, str
         ) and task.strip() and message_is_empty:

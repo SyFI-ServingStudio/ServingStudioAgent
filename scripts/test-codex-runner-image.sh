@@ -17,6 +17,9 @@ app_user="${CODEX_DOCKER_USER:-${USER:-kanzhu}}"
 app_home="${CODEX_DOCKER_HOME:-/home/$app_user}"
 smoke_level="${1:-build}"
 
+# shellcheck source=lib/main-tree-copy.sh
+source "$ui_dir/scripts/lib/main-tree-copy.sh"
+
 case "$smoke_level" in
   build|timing) ;;
   *)
@@ -37,16 +40,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$smoke_workspace"
-# Match the image build context: test the current contents of tracked files,
-# including intentional working-tree edits, while ignoring untracked artifacts.
-while IFS= read -r -d '' rel_path; do
-  source_path="$main_dir/$rel_path"
-  if [ -f "$source_path" ] || [ -L "$source_path" ]; then
-    mkdir -p "$smoke_workspace/$(dirname "$rel_path")"
-    cp -a "$source_path" "$smoke_workspace/$rel_path"
-  fi
-done < <(git -C "$main_dir" ls-files -z)
+# Assembled by the same helper the image build context uses, so this really
+# tests the source the image was built from. See scripts/lib/main-tree-copy.sh.
+copy_main_tree "$main_dir" "$smoke_workspace"
 git -C "$smoke_workspace" init -q
 git -C "$smoke_workspace" add -A
 git -C "$smoke_workspace" \

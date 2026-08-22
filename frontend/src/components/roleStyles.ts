@@ -1,6 +1,6 @@
-import { Brain, Wrench, type Icon } from "@phosphor-icons/react";
+import { Brain, Sparkle, Wrench, type Icon } from "@phosphor-icons/react";
 
-import type { Role } from "@/types";
+import type { AgentMode, Role } from "@/types";
 
 /**
  * Per-role class bundles. Tailwind only emits classes it sees as *literal*
@@ -24,7 +24,19 @@ export interface RoleStyle {
   accent: string;
   /** faint flow-tinted card background */
   tint: string;
+  /** role name as inline label text (runtime picker, chips) */
+  labelText: string;
 }
+
+/**
+ * Which roles a conversation drives, by agent mode. Mirrors the backend's
+ * `AGENT_MODE_ROLES`; the UI must not show a picker for a role that mode never
+ * spawns, or its model choice would read as active when it is inert.
+ */
+export const AGENT_MODE_ROLES: Record<AgentMode, readonly Role[]> = {
+  orchestrated: ["orchestrator", "implementer"],
+  single: ["assistant"],
+};
 
 export const ROLE_STYLE: Record<Role, RoleStyle> = {
   orchestrator: {
@@ -37,6 +49,7 @@ export const ROLE_STYLE: Record<Role, RoleStyle> = {
     progressText: "text-orch",
     accent: "border-l-2 border-l-orch/45",
     tint: "tint-orch",
+    labelText: "text-orch-soft",
   },
   implementer: {
     label: "Implementer",
@@ -48,5 +61,20 @@ export const ROLE_STYLE: Record<Role, RoleStyle> = {
     progressText: "text-impl",
     accent: "border-l-2 border-l-impl/45",
     tint: "tint-impl",
+    labelText: "text-impl-soft",
+  },
+  // Single-agent mode. It plays both parts, so it gets its own hue rather than
+  // reusing the orchestrator's — a turn is never a mix of the two.
+  assistant: {
+    label: "Assistant",
+    Icon: Sparkle,
+    avatar: "border-asst-line bg-asst-bg text-asst",
+    dot: "bg-asst",
+    chipWorking: "border-asst-line bg-asst-bg text-asst-soft",
+    cardWorking: "border-asst-line ring-1 ring-asst/15",
+    progressText: "text-asst",
+    accent: "border-l-2 border-l-asst/45",
+    tint: "tint-asst",
+    labelText: "text-asst-soft",
   },
 };

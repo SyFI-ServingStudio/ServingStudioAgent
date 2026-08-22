@@ -26,20 +26,33 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .codex_runtime.config import (
+    ALL_CODEX_ROLES,
     CODEX_FAMILIES,
+    DEFAULT_AGENT_MODE,
     DEFAULT_CODEX_EFFORT,
     DEFAULT_CODEX_FAMILY,
     DEFAULT_CODEX_MODEL,
     DEFAULT_CODEX_SERVICE_TIER,
     LEGACY_BACKEND_MODELS,
     codex_model,
+    normalize_agent_mode,
     normalize_role_runtime,
+    roles_for_agent_mode,
 )
 
 WORKSPACE_ID_PATTERN = re.compile(r"^w_[a-zA-Z0-9_-]{1,64}$")
 SCHEMA_VERSION = 1
-DATABASE_SCHEMA_VERSION = 6
+# 7 added conversations.agent_mode plus the assistant role's three runtime
+# columns. Migration is additive and idempotent; see `_initialize_database`.
+DATABASE_SCHEMA_VERSION = 7
 NAMING_STATES = {"pending", "generated", "manual"}
+
+# One role's three per-conversation runtime columns, in a fixed order.
+ROLE_RUNTIME_FIELDS = ("model", "effort", "service_tier")
+
+
+def _role_runtime_columns(role: str) -> tuple[str, ...]:
+    return tuple(f"{role}_{field}" for field in ROLE_RUNTIME_FIELDS)
 
 
 def _normalized_runtime(runtime: dict[str, str] | None) -> dict[str, str]:
@@ -419,12 +432,16 @@ class Store:
                         naming_state TEXT NOT NULL DEFAULT 'manual',
                         sandbox TEXT NOT NULL,
                         autonomous INTEGER NOT NULL,
+                        agent_mode TEXT NOT NULL DEFAULT '{DEFAULT_AGENT_MODE}',
                         orchestrator_model TEXT NOT NULL DEFAULT '{default_model}',
                         orchestrator_effort TEXT NOT NULL DEFAULT '{default_effort}',
                         orchestrator_service_tier TEXT NOT NULL DEFAULT '{default_service_tier}',
                         implementer_model TEXT NOT NULL DEFAULT '{default_model}',
                         implementer_effort TEXT NOT NULL DEFAULT '{default_effort}',
                         implementer_service_tier TEXT NOT NULL DEFAULT '{default_service_tier}',
+                        assistant_model TEXT NOT NULL DEFAULT '{default_model}',
+                        assistant_effort TEXT NOT NULL DEFAULT '{default_effort}',
+                        assistant_service_tier TEXT NOT NULL DEFAULT '{default_service_tier}',
                         prompt_fingerprint TEXT,
                         peer_workspace TEXT,
                         created_at REAL NOT NULL,
@@ -518,16 +535,26 @@ class Store:
                         ADD COLUMN naming_state TEXT NOT NULL DEFAULT 'manual'
                         """
                     )
+                if "agent_mode" not in conversation_columns:
+                    # Existing conversations kept the orchestrator/implementer
+                    # loop they were started with. Single-agent mode is opt-in
+                    # per conversation and is never applied retroactively.
+                    connection.execute(
+                        "ALTER TABLE conversations ADD COLUMN agent_mode "
+                        f"TEXT NOT NULL DEFAULT '{DEFAULT_AGENT_MODE}'"
+                    )
                 # Pre-registry databases stored one backend id per role. A role now
                 # picks a model plus a reasoning effort, so widen those two columns
                 # into four and carry the old ids onto their family's default model.
+                # The assistant columns arrive the same way when single-agent mode
+                # is introduced into an existing database.
                 for column_name, default_value in (
-                    ("orchestrator_model", default_model),
-                    ("orchestrator_effort", default_effort),
-                    ("orchestrator_service_tier", default_service_tier),
-                    ("implementer_model", default_model),
-                    ("implementer_effort", default_effort),
-                    ("implementer_service_tier", default_service_tier),
+                    (column, default)
+                    for role in ALL_CODEX_ROLES
+                    for column, default in zip(
+                        _role_runtime_columns(role),
+                        (default_model, default_effort, default_service_tier),
+                    )
                 ):
                     if column_name not in conversation_columns:
                         connection.execute(
@@ -757,8 +784,8 @@ class Store:
         prompt_fingerprint: str | None = None,
         *,
         autonomous: bool = False,
-        orchestrator_runtime: dict[str, str] | None = None,
-        implementer_runtime: dict[str, str] | None = None,
+        agent_mode: str = DEFAULT_AGENT_MODE,
+        role_runtimes: dict[str, dict[str, str]] | None = None,
         peer_workspace: str | None = None,
         created_at: float | None = None,
         updated_at: float | None = None,
@@ -768,18 +795,38 @@ class Store:
         WorkspaceRegistry._validate_naming_state(naming_state)
         creation_time = created_at if created_at is not None else time.time()
         modification_time = updated_at if updated_at is not None else creation_time
-        orchestrator = _normalized_runtime(orchestrator_runtime)
-        implementer = _normalized_runtime(implementer_runtime)
+        # Every role gets a row value, not just the ones this mode runs: the
+        # user can still flip agent_mode before the first message.
+        selections = {
+            role: _normalized_runtime((role_runtimes or {}).get(role))
+            for role in ALL_CODEX_ROLES
+        }
+        runtime_columns = [
+            column for role in ALL_CODEX_ROLES for column in _role_runtime_columns(role)
+        ]
+        runtime_values = [
+            selections[role][field]
+            for role in ALL_CODEX_ROLES
+            for field in ROLE_RUNTIME_FIELDS
+        ]
+        columns = [
+            "id",
+            "title",
+            "naming_state",
+            "sandbox",
+            "autonomous",
+            "agent_mode",
+            *runtime_columns,
+            "prompt_fingerprint",
+            "peer_workspace",
+            "created_at",
+            "updated_at",
+        ]
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             connection.execute(
-                """
-                INSERT INTO conversations(
-                    id, title, naming_state, sandbox, autonomous,
-                    orchestrator_model, orchestrator_effort, orchestrator_service_tier,
-                    implementer_model, implementer_effort, implementer_service_tier,
-                    prompt_fingerprint,
-                    peer_workspace, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"""
+                INSERT INTO conversations({", ".join(columns)})
+                VALUES ({", ".join("?" for _ in columns)})
                 """,
                 (
                     conversation_id,
@@ -787,12 +834,8 @@ class Store:
                     naming_state,
                     sandbox,
                     int(autonomous),
-                    orchestrator["model"],
-                    orchestrator["effort"],
-                    orchestrator["service_tier"],
-                    implementer["model"],
-                    implementer["effort"],
-                    implementer["service_tier"],
+                    normalize_agent_mode(agent_mode),
+                    *runtime_values,
                     prompt_fingerprint,
                     peer_workspace,
                     creation_time,
@@ -843,15 +886,22 @@ class Store:
         *,
         sandbox: str,
         autonomous: bool,
+        agent_mode: str = DEFAULT_AGENT_MODE,
     ) -> None:
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             connection.execute(
                 """
                 UPDATE conversations
-                SET sandbox = ?, autonomous = ?, updated_at = ?
+                SET sandbox = ?, autonomous = ?, agent_mode = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (sandbox, int(autonomous), time.time(), conversation_id),
+                (
+                    sandbox,
+                    int(autonomous),
+                    normalize_agent_mode(agent_mode),
+                    time.time(),
+                    conversation_id,
+                ),
             )
 
     def update_codex_runtime(
@@ -859,8 +909,7 @@ class Store:
         workspace_id: str,
         conversation_id: str,
         *,
-        orchestrator_runtime: dict[str, str],
-        implementer_runtime: dict[str, str],
+        role_runtimes: dict[str, dict[str, str]],
     ) -> None:
         """Change a role's model, effort, and tier within resume compatibility.
 
@@ -869,13 +918,20 @@ class Store:
         tier — all are per-call Codex options and the rollout stays resumable — but it
         may not cross families, because that rollout lives in the other family's
         ``CODEX_HOME`` under different auth.
+
+        The family lock only covers the roles this conversation's agent mode
+        runs. A stored selection for an unused role has no rollout to orphan, so
+        holding it hostage would block a legitimate edit.
         """
-        orchestrator = _normalized_runtime(orchestrator_runtime)
-        implementer = _normalized_runtime(implementer_runtime)
+        selections = {
+            role: _normalized_runtime(role_runtimes.get(role))
+            for role in ALL_CODEX_ROLES
+        }
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             current = connection.execute(
-                "SELECT orchestrator_model, implementer_model FROM conversations "
-                "WHERE id = ?",
+                "SELECT agent_mode, "
+                + ", ".join(f"{role}_model" for role in ALL_CODEX_ROLES)
+                + " FROM conversations WHERE id = ?",
                 (conversation_id,),
             ).fetchone()
             if current is None:
@@ -893,36 +949,36 @@ class Store:
                 ).fetchone()[0]
             )
             started = bool(message_count or turn_count)
+            active_roles = roles_for_agent_mode(current["agent_mode"])
             changed_families = [
                 role
-                for role, selection, stored in (
-                    ("orchestrator", orchestrator, current["orchestrator_model"]),
-                    ("implementer", implementer, current["implementer_model"]),
-                )
-                if codex_model(selection["model"]).family_id
-                != codex_model(stored).family_id
+                for role in ALL_CODEX_ROLES
+                if codex_model(selections[role]["model"]).family_id
+                != codex_model(current[f"{role}_model"]).family_id
             ]
-            if started and changed_families:
+            locked = [role for role in changed_families if role in active_roles]
+            if started and locked:
                 raise ValueError(
                     "model family is locked after the conversation starts: "
-                    + ", ".join(changed_families)
+                    + ", ".join(locked)
                 )
+            assignments = [
+                f"{column} = ?"
+                for role in ALL_CODEX_ROLES
+                for column in _role_runtime_columns(role)
+            ]
             connection.execute(
-                """
+                f"""
                 UPDATE conversations
-                SET orchestrator_model = ?, orchestrator_effort = ?,
-                    orchestrator_service_tier = ?, implementer_model = ?,
-                    implementer_effort = ?, implementer_service_tier = ?,
-                    updated_at = ?
+                SET {", ".join(assignments)}, updated_at = ?
                 WHERE id = ?
                 """,
                 (
-                    orchestrator["model"],
-                    orchestrator["effort"],
-                    orchestrator["service_tier"],
-                    implementer["model"],
-                    implementer["effort"],
-                    implementer["service_tier"],
+                    *(
+                        selections[role][field]
+                        for role in ALL_CODEX_ROLES
+                        for field in ROLE_RUNTIME_FIELDS
+                    ),
                     time.time(),
                     conversation_id,
                 ),
@@ -1481,8 +1537,11 @@ class Store:
             conversation.get("sandbox", "workspace-write"),
             conversation.get("prompt_fingerprint"),
             autonomous=bool(conversation.get("autonomous", False)),
-            orchestrator_runtime=_imported_runtime(conversation, "orchestrator"),
-            implementer_runtime=_imported_runtime(conversation, "implementer"),
+            agent_mode=conversation.get("agent_mode") or DEFAULT_AGENT_MODE,
+            role_runtimes={
+                role: _imported_runtime(conversation, role)
+                for role in ALL_CODEX_ROLES
+            },
             peer_workspace=conversation.get("peer_workspace"),
             created_at=source_created_at,
             updated_at=source_updated_at,
@@ -1587,17 +1646,17 @@ class Store:
             "naming_state": row["naming_state"],
             "sandbox": row["sandbox"],
             "autonomous": bool(row["autonomous"]),
+            "agent_mode": row["agent_mode"],
+            # Every role is returned, not just the ones this mode runs, so the
+            # UI can preview the other mode's selection before the first message
+            # locks agent_mode in.
             "codex_runtime": {
-                "orchestrator": {
-                    "model": row["orchestrator_model"],
-                    "effort": row["orchestrator_effort"],
-                    "serviceTier": row["orchestrator_service_tier"],
-                },
-                "implementer": {
-                    "model": row["implementer_model"],
-                    "effort": row["implementer_effort"],
-                    "serviceTier": row["implementer_service_tier"],
-                },
+                role: {
+                    "model": row[f"{role}_model"],
+                    "effort": row[f"{role}_effort"],
+                    "serviceTier": row[f"{role}_service_tier"],
+                }
+                for role in ALL_CODEX_ROLES
             },
             "prompt_fingerprint": row["prompt_fingerprint"],
             "peer_workspace": row["peer_workspace"],

@@ -1,7 +1,9 @@
 import type { CodexRoleRuntime, CommentaryLevel, Role, RoleNote, RolePhase, TurnCard, TurnEvent } from "./types";
 
+const ROLES: readonly Role[] = ["orchestrator", "implementer", "assistant"];
+
 function asRole(value: string): Role {
-  return value === "implementer" ? "implementer" : "orchestrator";
+  return (ROLES as readonly string[]).includes(value) ? (value as Role) : "orchestrator";
 }
 
 /**
@@ -54,8 +56,12 @@ export function cleanNote(text: string, level?: CommentaryLevel): RoleNote | nul
  */
 export function reduceTurn(events: TurnEvent[]): TurnCard[] {
   const cards: TurnCard[] = [];
-  const round: Record<Role, number> = { orchestrator: 0, implementer: 0 };
+  const round: Record<Role, number> = { orchestrator: 0, implementer: 0, assistant: 0 };
   let current: RolePhase | null = null;
+  // The terminal envelope arrives without a role of its own, so the response
+  // card inherits whichever role last spoke. In single mode that is `assistant`,
+  // and the "Input needed" card must not be tinted as the orchestrator.
+  let lastRole: Role = "orchestrator";
 
   const runtimeFrom = (event: { model?: string; effort?: string }): CodexRoleRuntime | undefined =>
     event.model
@@ -104,6 +110,7 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
         phase.runtime = runtimeFrom(event) ?? phase.runtime;
         phase.notes.push(clean);
         current = phase;
+        lastRole = role;
         break;
       }
       case "usage": {
@@ -116,6 +123,7 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
         target.durationMs = event.duration_ms;
         target.tokens = event.tokens;
         target.done = true;
+        lastRole = role;
         if (current === target) {
           current = null;
         }
@@ -141,6 +149,7 @@ export function reduceTurn(events: TurnEvent[]): TurnCard[] {
           type: "response",
           text: event.text,
           outcome: event.outcome ?? "final_answer",
+          role: lastRole,
         });
         current = null;
         break;
@@ -178,5 +187,5 @@ export function formatTokens(value: number): string {
 
 /** Strip the leading role tag from one transient tool-call line. */
 export function stripRolePrefix(text: string): string {
-  return text.replace(/^(orchestrator|implementer):\s*/i, "");
+  return text.replace(/^(orchestrator|implementer|assistant):\s*/i, "");
 }

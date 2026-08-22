@@ -24,9 +24,11 @@ import {
 } from "./api";
 import { cn } from "./lib/cn";
 import { LegacyAssistant, TurnTimeline } from "./components/Turn";
+import { AGENT_MODE_ROLES, ROLE_STYLE } from "./components/roleStyles";
 import { markdownHtml } from "./markdown";
 import { reduceTurn } from "./turn";
 import type {
+  AgentMode,
   ChatMessage,
   CodexModelOption,
   CodexRoleRuntime,
@@ -92,11 +94,15 @@ function App() {
   const [autonomous, setAutonomous] = useState(
     localStorage.getItem("vibesim_autonomous") === "1",
   );
+  const [agentMode, setAgentMode] = useState<AgentMode>(
+    localStorage.getItem("vibesim_agent_mode") === "single" ? "single" : "orchestrated",
+  );
   const [modelOptions, setModelOptions] = useState<CodexModelOption[]>([]);
   // Replaced by the server catalog's defaults as soon as it answers.
   const [codexRuntime, setCodexRuntime] = useState<CodexRuntimeSelection>({
     orchestrator: { model: "", effort: "", serviceTier: "default" },
     implementer: { model: "", effort: "", serviceTier: "default" },
+    assistant: { model: "", effort: "", serviceTier: "default" },
   });
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -134,6 +140,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem("vibesim_autonomous", autonomous ? "1" : "0");
   }, [autonomous]);
+
+  useEffect(() => {
+    localStorage.setItem("vibesim_agent_mode", agentMode);
+  }, [agentMode]);
 
   useEffect(() => {
     if (!shouldAutoScrollRef.current) {
@@ -239,6 +249,7 @@ function App() {
       setSandbox(conversation.sandbox as SandboxMode);
     }
     setAutonomous(Boolean(conversation.autonomous));
+    setAgentMode(conversation.agent_mode === "single" ? "single" : "orchestrated");
     if (conversation.codex_runtime) {
       setCodexRuntime(conversation.codex_runtime);
     }
@@ -308,7 +319,12 @@ function App() {
     if (streaming) {
       return;
     }
-    const conversation = await createConversation(sandbox, autonomous, codexRuntime);
+    const conversation = await createConversation(
+      sandbox,
+      autonomous,
+      agentMode,
+      codexRuntime,
+    );
     shouldAutoScrollRef.current = true;
     olderMessagesRequestSequenceRef.current += 1;
     loadingOlderMessagesRef.current = false;
@@ -355,7 +371,12 @@ function App() {
 
     let conversationId = currentId;
     if (!conversationId) {
-      const conversation = await createConversation(sandbox, autonomous, codexRuntime);
+      const conversation = await createConversation(
+        sandbox,
+        autonomous,
+        agentMode,
+        codexRuntime,
+      );
       conversationId = conversation.id;
       setCurrentId(conversation.id);
       await refreshSidebar();
@@ -384,6 +405,7 @@ function App() {
         text,
         sandbox,
         autonomous,
+        agentMode,
         liveTurnHandlers(),
         controller.signal,
       );
@@ -506,6 +528,9 @@ function App() {
   }
 
   const isEmpty = messages.length === 0 && !live;
+  // Which Codex backends this conversation actually drives. The others keep
+  // their stored selection but are neither shown nor summarized.
+  const activeRoles = AGENT_MODE_ROLES[agentMode];
 
   return (
     <div className="flex h-full flex-col text-zinc-200">
@@ -530,7 +555,9 @@ function App() {
           onNewConversation={newConversation}
           onSelect={selectConversation}
           onDelete={removeConversation}
-          backendSummary={`${runtimeSummary(codexRuntime.orchestrator)} / ${runtimeSummary(codexRuntime.implementer)}`}
+          backendSummary={activeRoles
+            .map((role) => runtimeSummary(codexRuntime[role]))
+            .join(" / ")}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -543,6 +570,8 @@ function App() {
               <Welcome
                 autonomous={autonomous}
                 onAutonomousChange={setAutonomous}
+                agentMode={agentMode}
+                onAgentModeChange={setAgentMode}
                 onSuggestion={(fill) => updateInput(fill)}
               />
             ) : (
@@ -619,7 +648,7 @@ function App() {
                 </button>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-3 text-[12.5px] text-zinc-500">
-                {(["orchestrator", "implementer"] as const).map((role) => {
+                {activeRoles.map((role) => {
                   const selected = modelOptions.find(
                     (model) => model.id === codexRuntime[role].model,
                   );
@@ -631,10 +660,8 @@ function App() {
                   );
                   return (
                     <label key={role} className="flex items-center gap-1.5">
-                      <span
-                        className={role === "orchestrator" ? "text-orch-soft" : "text-impl-soft"}
-                      >
-                        {role === "orchestrator" ? "Orchestrator" : "Implementer"}
+                      <span className={ROLE_STYLE[role].labelText}>
+                        {ROLE_STYLE[role].label}
                       </span>
                       <select
                         aria-label={`${role} Codex model`}
@@ -833,12 +860,17 @@ function Sidebar({
 function Welcome({
   autonomous,
   onAutonomousChange,
+  agentMode,
+  onAgentModeChange,
   onSuggestion,
 }: {
   autonomous: boolean;
   onAutonomousChange: (enabled: boolean) => void;
+  agentMode: AgentMode;
+  onAgentModeChange: (mode: AgentMode) => void;
   onSuggestion: (text: string) => void;
 }) {
+  const single = agentMode === "single";
   return (
     <div className="mx-auto mt-[8vh] max-w-[640px] text-center">
       <span className="mx-auto mb-4 grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-orch-soft to-orch text-ink">
@@ -862,23 +894,43 @@ function Welcome({
           </button>
         ))}
       </div>
-      <button
-        type="button"
-        aria-pressed={autonomous}
-        title="Use autonomous AGENTS.md so the orchestrator proceeds with assumptions instead of asking clarification questions"
-        onClick={() => onAutonomousChange(!autonomous)}
-        className={cn(
-          "mt-6 inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12.5px] transition",
-          autonomous
-            ? "border-impl-line bg-impl-bg text-impl-soft"
-            : "border-hair bg-panel text-zinc-400 hover:text-zinc-200",
-        )}
-      >
-        <span
-          className={cn("h-1.5 w-1.5 rounded-full", autonomous ? "bg-impl" : "bg-zinc-600")}
-        />
-        {autonomous ? "Autonomous on" : "Autonomous off"}
-      </button>
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+        <button
+          type="button"
+          aria-pressed={autonomous}
+          title="Use autonomous AGENTS.md so the agent proceeds with assumptions instead of asking clarification questions"
+          onClick={() => onAutonomousChange(!autonomous)}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12.5px] transition",
+            autonomous
+              ? "border-impl-line bg-impl-bg text-impl-soft"
+              : "border-hair bg-panel text-zinc-400 hover:text-zinc-200",
+          )}
+        >
+          <span
+            className={cn("h-1.5 w-1.5 rounded-full", autonomous ? "bg-impl" : "bg-zinc-600")}
+          />
+          {autonomous ? "Autonomous on" : "Autonomous off"}
+        </button>
+        {/* Orthogonal to Autonomous, and only offered before the first message:
+            the Codex sessions a turn builds are per role, so a mid-conversation
+            switch would strand them. */}
+        <button
+          type="button"
+          aria-pressed={single}
+          title="Single agent: one Codex backend plans and implements. Orchestrated: an orchestrator delegates to an implementer."
+          onClick={() => onAgentModeChange(single ? "orchestrated" : "single")}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-[12.5px] transition",
+            single
+              ? "border-asst-line bg-asst-bg text-asst-soft"
+              : "border-hair bg-panel text-zinc-400 hover:text-zinc-200",
+          )}
+        >
+          <span className={cn("h-1.5 w-1.5 rounded-full", single ? "bg-asst" : "bg-zinc-600")} />
+          {single ? "Single agent" : "Orchestrated"}
+        </button>
+      </div>
     </div>
   );
 }

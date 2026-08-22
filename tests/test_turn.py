@@ -6,12 +6,19 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from backend.codex_runtime import turn as turn_module
-from backend.codex_runtime.config import CODEXDS_MODEL
+from backend.codex_runtime.config import (
+    ASSISTANT_SCHEMA_IN_CONTAINER,
+    CODEXDS_MODEL,
+    ORCHESTRATOR_SCHEMA_IN_CONTAINER,
+    driving_role_for_agent_mode,
+)
 
 
 class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
     async def test_deepseek_omits_schema_while_gpt_keeps_it(self) -> None:
-        async def run_for(model_id: str) -> str | None:
+        async def run_for(
+            model_id: str, agent_mode: str = "orchestrated"
+        ) -> str | None:
             captured_schema: str | None = None
 
             async def fake_to_thread(function, *args, **kwargs):
@@ -53,9 +60,14 @@ class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
                             "conversation-1",
                             "Analyze the sweep.",
                             sandbox="workspace-write",
-                            orchestrator_runtime={
-                                "model": model_id,
-                                "effort": "max" if model_id == CODEXDS_MODEL else "high",
+                            agent_mode=agent_mode,
+                            role_runtimes={
+                                driving_role_for_agent_mode(agent_mode): {
+                                    "model": model_id,
+                                    "effort": (
+                                        "max" if model_id == CODEXDS_MODEL else "high"
+                                    ),
+                                }
                             },
                         )
                     ]
@@ -64,9 +76,11 @@ class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
 
         deepseek_schema = await run_for(CODEXDS_MODEL)
         gpt_schema = await run_for("gpt-5.6-terra")
+        single_schema = await run_for("gpt-5.6-terra", agent_mode="single")
 
         self.assertIsNone(deepseek_schema)
-        self.assertEqual(gpt_schema, turn_module.ORCHESTRATOR_SCHEMA_IN_CONTAINER)
+        self.assertEqual(gpt_schema, ORCHESTRATOR_SCHEMA_IN_CONTAINER)
+        self.assertEqual(single_schema, ASSISTANT_SCHEMA_IN_CONTAINER)
 
     async def test_final_progress_checkpoint_resumes_same_session(self) -> None:
         prompts: list[tuple[str, str | None]] = []
@@ -119,9 +133,11 @@ class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
                         "conversation-1",
                         "Analyze the sweep.",
                         sandbox="workspace-write",
-                        orchestrator_runtime={
-                            "model": "gpt-5.6-terra",
-                            "effort": "high",
+                        role_runtimes={
+                            "orchestrator": {
+                                "model": "gpt-5.6-terra",
+                                "effort": "high",
+                            }
                         },
                     )
                 ]
@@ -194,9 +210,11 @@ class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
                         "conversation-1",
                         "Analyze the sweep.",
                         sandbox="workspace-write",
-                        orchestrator_runtime={
-                            "model": "gpt-5.6-terra",
-                            "effort": "high",
+                        role_runtimes={
+                            "orchestrator": {
+                                "model": "gpt-5.6-terra",
+                                "effort": "high",
+                            }
                         },
                     )
                 ]
@@ -221,7 +239,7 @@ IMPLEMENTER_REPORT = (
 )
 
 
-async def _run(fake_run_codex) -> list[dict]:
+async def _run(fake_run_codex, *, agent_mode: str = "orchestrated") -> list[dict]:
     """Drain one turn with the docker/workspace/subprocess layers stubbed out."""
 
     async def fake_to_thread(function, *args, **kwargs):
@@ -245,7 +263,13 @@ async def _run(fake_run_codex) -> list[dict]:
                     "conversation-1",
                     "Analyze the sweep.",
                     sandbox="workspace-write",
-                    orchestrator_runtime={"model": "gpt-5.6-terra", "effort": "high"},
+                    agent_mode=agent_mode,
+                    role_runtimes={
+                        driving_role_for_agent_mode(agent_mode): {
+                            "model": "gpt-5.6-terra",
+                            "effort": "high",
+                        }
+                    },
                 )
             ]
 
@@ -383,6 +407,77 @@ class TransportFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("### Implementer Summary", events[-1]["text"])
         self.assertIn("could not parse the orchestrator decision", events[-1]["text"])
         self.assertIn("1 implementer round completed", events[-1]["text"])
+
+
+class SingleAgentTests(unittest.IsolatedAsyncioTestCase):
+    """`agent_mode="single"` runs the same loop with one role and no delegation."""
+
+    async def test_final_answer_costs_exactly_one_codex_call(self) -> None:
+        calls: list[str] = []
+
+        async def fake_run_codex(container, prompt, **kwargs):
+            del container, kwargs
+            calls.append(prompt)
+            yield {
+                "kind": "final",
+                "text": '{"action":"final_answer","message":"Done."}',
+            }
+
+        events = await _run(fake_run_codex, agent_mode="single")
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("You are the VibeSim assistant.", calls[0])
+        self.assertEqual(
+            events[-1],
+            {"kind": "final", "outcome": "final_answer", "text": "Done."},
+        )
+
+    async def test_the_driving_role_is_assistant_and_nothing_is_delegated(
+        self,
+    ) -> None:
+        labels: list[str] = []
+
+        async def fake_run_codex(container, prompt, **kwargs):
+            del container, prompt
+            labels.append(kwargs["label"])
+            yield {"kind": "tool_call", "role": kwargs["label"], "text": "rg pattern"}
+            yield {
+                "kind": "final",
+                "text": '{"action":"milestone","message":"Half way."}',
+            }
+
+        events = await _run(fake_run_codex, agent_mode="single")
+
+        self.assertEqual(set(labels), {"assistant"})
+        roles = {event["role"] for event in events if "role" in event}
+        self.assertEqual(roles, {"assistant"})
+        kinds = {event.get("kind") for event in events}
+        self.assertNotIn("decision", kinds)
+        self.assertNotIn("implementer", kinds)
+
+    async def test_a_delegate_envelope_is_repaired_not_obeyed(self) -> None:
+        """There is no implementer, so the decision must go back for repair and
+        the repair budget must still bound the turn."""
+        calls: list[str] = []
+
+        async def fake_run_codex(container, prompt, **kwargs):
+            del container, kwargs
+            calls.append(prompt)
+            yield {
+                "kind": "final",
+                "text": '{"action":"delegate","message":"","task":"Change it."}',
+            }
+
+        events = await _run(fake_run_codex, agent_mode="single")
+
+        self.assertEqual(
+            len(calls), turn_module.MAX_ORCHESTRATOR_DECISION_REPAIRS + 1
+        )
+        for prompt in calls[1:]:
+            self.assertIn("could not be parsed", prompt)
+            self.assertIn("There is no `delegate` action", prompt)
+        self.assertEqual(events[-1]["kind"], "final")
+        self.assertNotIn("implementer round", events[-1]["text"])
 
 
 if __name__ == "__main__":

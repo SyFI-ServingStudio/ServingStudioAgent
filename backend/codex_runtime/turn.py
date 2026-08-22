@@ -1,4 +1,12 @@
-"""High-level two-role orchestrator/implementer turn loop."""
+"""High-level turn loop for both agent modes.
+
+One `while True` drives every turn. Each round calls the *driving role* — the
+orchestrator in `orchestrated` mode, the assistant in `single` mode — parses its
+decision envelope, and either terminates the turn, continues after a
+non-terminal update, or repairs an unparsable envelope. Only the `delegate` tail
+(hand a task to the implementer, then loop back with its summary) is
+mode-specific, because `single` has no second role to delegate to.
+"""
 
 from __future__ import annotations
 
@@ -10,12 +18,16 @@ from ..logging_config import compact_text, log_event
 from ..managed_context import write_managed_context
 from .codex_cli import run_codex
 from .config import (
+    AGENT_MODE_SCHEMA_IN_CONTAINER,
+    DEFAULT_AGENT_MODE,
     DEFAULT_SANDBOX,
     EXECUTION_MODES,
     LOG,
-    ORCHESTRATOR_SCHEMA_IN_CONTAINER,
     codex_model,
+    driving_role_for_agent_mode,
+    normalize_agent_mode,
     normalize_role_runtime,
+    roles_for_agent_mode,
     workspace_main_for,
 )
 from .config import container_name as container_name_for
@@ -23,11 +35,11 @@ from .docker import container_running, ensure_container
 from .prompts import (
     _implementer_prompt,
     _orchestrator_handoff_prompt,
-    _orchestrator_continue_prompt,
-    _orchestrator_prompt,
-    _orchestrator_repair_prompt,
     compose_failure_message,
     compose_final_message,
+    driver_continue_prompt,
+    driver_prompt,
+    driver_repair_prompt,
     parse_orchestrator,
     transport_failure_reason,
 )
@@ -47,24 +59,26 @@ async def run_turn(
     turn_id: str = "",
     prompt_fingerprint: str = "",
     autonomous: bool = False,
+    agent_mode: str = DEFAULT_AGENT_MODE,
     peer_dir: str | None = None,
-    orchestrator_runtime: dict[str, str] | None = None,
-    implementer_runtime: dict[str, str] | None = None,
+    role_runtimes: dict[str, dict[str, str]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run one user turn through orchestrator/implementer handoffs."""
+    """Run one user turn, in either agent mode."""
     turn_id = turn_id or "unknown"
     mode = sandbox if sandbox in EXECUTION_MODES else DEFAULT_SANDBOX
+    agent_mode = normalize_agent_mode(agent_mode)
+    single_agent = agent_mode == "single"
+    driver_role = driving_role_for_agent_mode(agent_mode)
     sessions = sessions or {}
-    orchestrator_selection = normalize_role_runtime(
-        (orchestrator_runtime or {}).get("model"),
-        (orchestrator_runtime or {}).get("effort"),
-        (orchestrator_runtime or {}).get("service_tier"),
-    )
-    implementer_selection = normalize_role_runtime(
-        (implementer_runtime or {}).get("model"),
-        (implementer_runtime or {}).get("effort"),
-        (implementer_runtime or {}).get("service_tier"),
-    )
+    role_selections = {
+        role: normalize_role_runtime(
+            (role_runtimes or {}).get(role, {}).get("model"),
+            (role_runtimes or {}).get(role, {}).get("effort"),
+            (role_runtimes or {}).get(role, {}).get("service_tier"),
+        )
+        for role in roles_for_agent_mode(agent_mode)
+    }
+    driver_selection = role_selections[driver_role]
     log_event(
         LOG,
         "turn.run.start",
@@ -74,6 +88,7 @@ async def run_turn(
         mode=mode,
         prompt_fingerprint=prompt_fingerprint,
         autonomous=autonomous,
+        agent_mode=agent_mode,
         session_roles=sorted(sessions),
     )
 
@@ -113,8 +128,11 @@ async def run_turn(
             mode,
             peer_dir,
             autonomous=autonomous,
-            orchestrator_family=codex_model(orchestrator_selection["model"]).family_id,
-            implementer_family=codex_model(implementer_selection["model"]).family_id,
+            agent_mode=agent_mode,
+            role_families={
+                role: codex_model(selection["model"]).family_id
+                for role, selection in role_selections.items()
+            },
         )
     )
     while True:
@@ -138,7 +156,7 @@ async def run_turn(
         container=container,
     )
 
-    orchestrator_session = sessions.get("orchestrator")
+    driver_session = sessions.get(driver_role)
     implementer_session = sessions.get("implementer")
     implementer_summaries: list[str] = []
     orchestrator_decision_repairs = 0
@@ -147,14 +165,14 @@ async def run_turn(
     # progress envelope before the model selects its next tool. Keep the
     # existing prompt/parser repair contract, but do not enable constrained
     # decoding for the DeepSeek family.
-    orchestrator_output_schema = (
+    driver_output_schema = (
         None
-        if codex_model(orchestrator_selection["model"]).family_id == "deepseek"
-        else ORCHESTRATOR_SCHEMA_IN_CONTAINER
+        if codex_model(driver_selection["model"]).family_id == "deepseek"
+        else AGENT_MODE_SCHEMA_IN_CONTAINER[agent_mode]
     )
-    next_orchestrator_prompt = _orchestrator_prompt(
+    next_driver_prompt = driver_prompt(
         prompt,
-        is_resume=bool(orchestrator_session),
+        agent_mode=agent_mode,
         conversation_id=conversation_id,
     )
 
@@ -165,23 +183,23 @@ async def run_turn(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
-            role="orchestrator",
+            role=driver_role,
         )
         async for ev in run_codex(
             container,
-            next_orchestrator_prompt,
-            label="orchestrator",
+            next_driver_prompt,
+            label=driver_role,
             workspace_id=workspace_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
-            model_id=orchestrator_selection["model"],
-            effort=orchestrator_selection["effort"],
-            service_tier=orchestrator_selection["service_tier"],
-            session_id=orchestrator_session,
-            output_schema=orchestrator_output_schema,
+            model_id=driver_selection["model"],
+            effort=driver_selection["effort"],
+            service_tier=driver_selection["service_tier"],
+            session_id=driver_session,
+            output_schema=driver_output_schema,
         ):
             if ev["kind"] == "session":
-                orchestrator_session = ev["session_id"]
+                driver_session = ev["session_id"]
                 yield ev
             elif ev["kind"] == "final":
                 orchestrator_text = ev["text"]
@@ -199,7 +217,7 @@ async def run_turn(
                 "turn.transport_failed",
                 conversation_id=conversation_id,
                 turn_id=turn_id,
-                role="orchestrator",
+                role=driver_role,
                 code=orchestrator_failure["code"],
                 status=orchestrator_failure["status"],
                 implementer_rounds=len(implementer_summaries),
@@ -208,13 +226,16 @@ async def run_turn(
                 "kind": "final",
                 "failure": orchestrator_failure,
                 "text": compose_failure_message(
-                    transport_failure_reason("orchestrator", orchestrator_failure),
+                    transport_failure_reason(driver_role, orchestrator_failure),
                     implementer_summaries,
                 ),
             }
             return
 
-        decision = parse_orchestrator(orchestrator_text)
+        decision = parse_orchestrator(
+            orchestrator_text,
+            allow_delegate=not single_agent,
+        )
         if decision is None:
             orchestrator_decision_repairs += 1
             log_event(
@@ -222,12 +243,14 @@ async def run_turn(
                 "orchestrator.parse_failed",
                 conversation_id=conversation_id,
                 turn_id=turn_id,
+                role=driver_role,
                 repair_count=orchestrator_decision_repairs,
                 text_preview=compact_text(orchestrator_text),
             )
             if orchestrator_decision_repairs <= MAX_ORCHESTRATOR_DECISION_REPAIRS:
-                next_orchestrator_prompt = _orchestrator_repair_prompt(
+                next_driver_prompt = driver_repair_prompt(
                     orchestrator_text,
+                    agent_mode=agent_mode,
                     conversation_id=conversation_id,
                 )
                 continue
@@ -235,7 +258,7 @@ async def run_turn(
                 "kind": "final",
                 "outcome": "final_answer",
                 "text": compose_failure_message(
-                    "I could not parse the orchestrator decision after "
+                    f"I could not parse the {driver_role} decision after "
                     f"{MAX_ORCHESTRATOR_DECISION_REPAIRS} repair attempts.",
                     implementer_summaries,
                 ),
@@ -247,6 +270,7 @@ async def run_turn(
             "orchestrator.decision",
             conversation_id=conversation_id,
             turn_id=turn_id,
+            role=driver_role,
             action=decision["action"],
             message_len=len(decision.get("message", "")),
             task_len=len(decision.get("task", "")),
@@ -267,9 +291,9 @@ async def run_turn(
             orchestrator_continuations += 1
             yield {
                 "kind": "intermediate_output",
-                "role": "orchestrator",
-                "model": orchestrator_selection["model"],
-                "effort": orchestrator_selection["effort"],
+                "role": driver_role,
+                "model": driver_selection["model"],
+                "effort": driver_selection["effort"],
                 "level": decision["action"],
                 "text": decision["message"],
             }
@@ -278,19 +302,23 @@ async def run_turn(
                     "kind": "final",
                     "outcome": "final_answer",
                     "text": (
-                        "The orchestrator repeatedly stopped at a progress "
+                        f"The {driver_role} repeatedly stopped at a progress "
                         "checkpoint before producing a terminal decision. "
                         "Please continue the conversation to retry."
                     ),
                 }
                 return
-            next_orchestrator_prompt = _orchestrator_continue_prompt(
+            next_driver_prompt = driver_continue_prompt(
                 decision["action"],
                 decision["message"],
+                agent_mode=agent_mode,
                 conversation_id=conversation_id,
             )
             continue
 
+        # Only `delegate` can reach here, and only in orchestrated mode: the
+        # single-agent parser refuses that action, so its envelope is either
+        # terminal or a continuation and the loop never falls through.
         if mode == "read-only":
             body = (
                 "This needs an implementer run, but this turn is in read-only mode. "
@@ -326,9 +354,9 @@ async def run_turn(
             workspace_id=workspace_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
-            model_id=implementer_selection["model"],
-            effort=implementer_selection["effort"],
-            service_tier=implementer_selection["service_tier"],
+            model_id=role_selections["implementer"]["model"],
+            effort=role_selections["implementer"]["effort"],
+            service_tier=role_selections["implementer"]["service_tier"],
             session_id=implementer_session,
         ):
             if ev["kind"] == "session":
@@ -368,7 +396,7 @@ async def run_turn(
         if implementer_text is None:
             implementer_text = "(implementer produced no summary)"
         implementer_summaries.append(implementer_text)
-        next_orchestrator_prompt = _orchestrator_handoff_prompt(
+        next_driver_prompt = _orchestrator_handoff_prompt(
             task,
             implementer_text,
             conversation_id=conversation_id,

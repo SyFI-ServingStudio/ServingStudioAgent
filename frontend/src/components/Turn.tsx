@@ -17,6 +17,7 @@ import { markdownHtml, normalizeBackendText } from "@/markdown";
 import { formatDuration, formatTokens, stripRolePrefix } from "@/turn";
 import type {
   IntermediateOutput,
+  Role,
   RoleNote,
   RolePhase,
   TerminalOutcome,
@@ -266,20 +267,24 @@ function HandoffCard({
 function TerminalResponseCard({
   text,
   outcome = "final_answer",
+  role = "orchestrator",
   conversationId,
 }: {
   text: string;
   outcome?: TerminalOutcome;
+  /** The asking role. Only "Input needed" is role-tinted; an answer is an answer. */
+  role?: Role;
   conversationId: string | null;
 }) {
   const needsInput = outcome === "request_user_input";
+  const asking = ROLE_STYLE[role];
   return (
     <Card
       avatar={needsInput ? <Question size={13} weight="bold" /> : <CheckCircle size={13} weight="fill" />}
-      avatarClass={needsInput ? "border-orch-line bg-orch-bg text-orch-soft" : "border-ans-line bg-ans-bg text-ans"}
+      avatarClass={needsInput ? asking.avatar : "border-ans-line bg-ans-bg text-ans"}
       title={needsInput ? "Input needed" : "Answer"}
-      accent={needsInput ? "border-l-2 border-l-orch/70" : "border-l-2 border-l-ans/70"}
-      tint={needsInput ? "tint-orch" : "tint-answer"}
+      accent={needsInput ? asking.accent : "border-l-2 border-l-ans/70"}
+      tint={needsInput ? asking.tint : "tint-answer"}
       bodyLabel={needsInput ? "clarification" : "final answer"}
     >
       <MarkdownBody source={text} conversationId={conversationId} />
@@ -395,6 +400,7 @@ export function TurnTimeline({
             key={index}
             text={card.text}
             outcome={card.outcome}
+            role={card.role}
             conversationId={conversationId}
           />
         );

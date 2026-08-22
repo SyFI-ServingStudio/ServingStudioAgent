@@ -5,11 +5,23 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from backend.codex_runtime.config import CODEXDS_MODEL as DEEPSEEK_MODEL
+from backend.codex_runtime.config import (
+    DEFAULT_CODEX_EFFORT,
+    DEFAULT_CODEX_MODEL,
+    DEFAULT_CODEX_SERVICE_TIER,
+)
 from backend.migrate_workspaces import (
     execute_migration,
     repair_completed_timestamps,
 )
 from backend.store import Store, WorkspaceRegistry
+
+# A role the conversation's mode never drives still round-trips, at defaults.
+UNUSED_ROLE_RUNTIME = {
+    "model": DEFAULT_CODEX_MODEL,
+    "effort": DEFAULT_CODEX_EFFORT,
+    "serviceTier": DEFAULT_CODEX_SERVICE_TIER,
+}
 
 
 def _write_legacy_conversation_database(database_path: Path) -> None:
@@ -175,8 +187,10 @@ class WorkspaceStoreTest(unittest.TestCase):
                 "w_main",
                 "conversation",
                 "workspace-write",
-                orchestrator_runtime={"model": DEEPSEEK_MODEL, "effort": "high"},
-                implementer_runtime={"model": "gpt-5.6-sol", "effort": "xhigh"},
+                role_runtimes={
+                    "orchestrator": {"model": DEEPSEEK_MODEL, "effort": "high"},
+                    "implementer": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                },
             )
             store.set_codex_session(
                 "w_main",
@@ -199,6 +213,7 @@ class WorkspaceStoreTest(unittest.TestCase):
                         "effort": "xhigh",
                         "serviceTier": "default",
                     },
+                    "assistant": UNUSED_ROLE_RUNTIME,
                 },
             )
             self.assertEqual(
@@ -234,8 +249,10 @@ class WorkspaceStoreTest(unittest.TestCase):
                 "w_main",
                 "conversation",
                 "workspace-write",
-                orchestrator_runtime={"model": "gpt-5.6-sol", "effort": "xhigh"},
-                implementer_runtime={"model": "gpt-5.6-sol", "effort": "xhigh"},
+                role_runtimes={
+                    "orchestrator": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                    "implementer": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                },
             )
             store.set_codex_session(
                 "w_main", "conversation", "orchestrator", "sol-session", family="gpt"
@@ -246,12 +263,14 @@ class WorkspaceStoreTest(unittest.TestCase):
             store.update_codex_runtime(
                 "w_main",
                 "conversation",
-                orchestrator_runtime={
-                    "model": "gpt-5.6-luna",
-                    "effort": "low",
-                    "serviceTier": "fast",
+                role_runtimes={
+                    "orchestrator": {
+                        "model": "gpt-5.6-luna",
+                        "effort": "low",
+                        "serviceTier": "fast",
+                    },
+                    "implementer": {"model": "gpt-5.6-sol", "effort": "max"},
                 },
-                implementer_runtime={"model": "gpt-5.6-sol", "effort": "max"},
             )
             self.assertEqual(
                 store.get("w_main", "conversation")["codex_runtime"],
@@ -266,6 +285,7 @@ class WorkspaceStoreTest(unittest.TestCase):
                         "effort": "max",
                         "serviceTier": "default",
                     },
+                    "assistant": UNUSED_ROLE_RUNTIME,
                 },
             )
             self.assertEqual(
@@ -277,8 +297,10 @@ class WorkspaceStoreTest(unittest.TestCase):
                 store.update_codex_runtime(
                     "w_main",
                     "conversation",
-                    orchestrator_runtime={"model": DEEPSEEK_MODEL, "effort": "max"},
-                    implementer_runtime={"model": "gpt-5.6-sol", "effort": "max"},
+                    role_runtimes={
+                        "orchestrator": {"model": DEEPSEEK_MODEL, "effort": "max"},
+                        "implementer": {"model": "gpt-5.6-sol", "effort": "max"},
+                    },
                 )
 
     def test_legacy_backend_columns_migrate_onto_models(self) -> None:
@@ -304,6 +326,7 @@ class WorkspaceStoreTest(unittest.TestCase):
                         "effort": "xhigh",
                         "serviceTier": "default",
                     },
+                    "assistant": UNUSED_ROLE_RUNTIME,
                 },
             )
             # The old rollout is still reusable: its backend id became a family.
@@ -317,6 +340,68 @@ class WorkspaceStoreTest(unittest.TestCase):
                     },
                 ),
                 {"orchestrator": "legacy-session"},
+            )
+            # A pre-`agent_mode` conversation keeps the two-role behavior it was
+            # created with; the new column must not reinterpret its history.
+            self.assertEqual(conversation["agent_mode"], "orchestrated")
+
+    def test_single_mode_round_trips_through_create_and_update(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            store = Store(registry)
+            store.create(
+                "w_main",
+                "conversation",
+                "workspace-write",
+                agent_mode="single",
+                role_runtimes={
+                    "assistant": {"model": DEEPSEEK_MODEL, "effort": "high"},
+                },
+            )
+            store.set_codex_session(
+                "w_main",
+                "conversation",
+                "assistant",
+                "assistant-session",
+                family="deepseek",
+            )
+            store.add_message("w_main", "conversation", "user", "start")
+
+            conversation = store.get("w_main", "conversation")
+            self.assertEqual(conversation["agent_mode"], "single")
+            self.assertEqual(
+                conversation["codex_runtime"]["assistant"],
+                {
+                    "model": DEEPSEEK_MODEL,
+                    "effort": "high",
+                    "serviceTier": "default",
+                },
+            )
+            self.assertEqual(
+                conversation["codex_sessions"], {"assistant": "assistant-session"}
+            )
+
+            # The family lock follows the mode's own role, not the orchestrator.
+            with self.assertRaisesRegex(ValueError, "family is locked"):
+                store.update_codex_runtime(
+                    "w_main",
+                    "conversation",
+                    role_runtimes={"assistant": {"model": "gpt-5.6-sol"}},
+                )
+            # An unused role may still cross families freely.
+            store.update_codex_runtime(
+                "w_main",
+                "conversation",
+                role_runtimes={
+                    "assistant": {"model": DEEPSEEK_MODEL, "effort": "max"},
+                    "orchestrator": {"model": "gpt-5.6-sol"},
+                },
+            )
+            self.assertEqual(
+                store.get("w_main", "conversation")["codex_runtime"]["orchestrator"][
+                    "model"
+                ],
+                "gpt-5.6-sol",
             )
 
     def test_generated_names_use_pending_compare_and_set(self) -> None:

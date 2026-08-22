@@ -138,9 +138,21 @@ workspace_id=$(curl -sS http://<host>:8765/api/agent/workspaces \
 
 ### Create — `POST /api/agent/workspaces/{workspace_id}/conversations`
 
-Body: `{"sandbox": "workspace-write", "autonomous": false}` (both optional;
-`autonomous` defaults **false** so the assistant will ask you questions).
-Returns the conversation object, including its `id`.
+Body: `{"sandbox": "workspace-write", "autonomous": false, "agent_mode": "orchestrated"}`
+(all optional; `autonomous` defaults **false** so the assistant will ask you
+questions). Returns the conversation object, including its `id`.
+
+`agent_mode` picks how many Codex backends drive a turn and is independent of
+`autonomous`:
+
+- `orchestrated` (default) — an orchestrator delegates bounded tasks to an
+  implementer. Better for large multi-step work; costs roughly `1 + 2D` Codex
+  calls per message, where `D` is the number of delegation rounds.
+- `single` — one `assistant` plans and implements in the same session. One Codex
+  call per message, no handoff text, and `implementer_summaries` is always `[]`.
+
+The mode is fixed once the conversation has a message: Codex sessions are per
+role, so switching would strand the sessions earlier turns built.
 
 Optional `codex_runtime` picks the model and reasoning effort per role, e.g.
 `{"codex_runtime": {"orchestrator": {"model": "gpt-5.6-terra", "effort": "high"}}}`.
@@ -163,7 +175,8 @@ curl -sS http://<host>:8765/api/agent/workspaces/$workspace_id/conversations \
 Body: `{"text": "..."}` (`text` required). Optional `sandbox_mode` and
 `autonomous_mode` are **per-turn overrides**; when omitted they inherit the
 conversation's create-time settings, so a `read-only` conversation stays
-read-only unless a turn opts up. **Synchronous** — returns after the turn
+read-only unless a turn opts up. Optional `agent_mode` only takes effect on the
+very first turn, then it is pinned. **Synchronous** — returns after the turn
 completes. Set a read timeout of at least 30 minutes and wait for this request
 itself; do not convert the call into manual GET polling.
 
@@ -181,7 +194,8 @@ Response fields:
 | `final` | The assistant's message this turn (Markdown). **May be a clarifying question** — if so, send another turn answering it. |
 | `ok` | `true` if a final answer was produced with no error. |
 | `conversation_id` | Echoes `cid`; also the `cid` for artifact retrieval (§6). |
-| `implementer_summaries` | Summaries of any delegated implementer work this turn. |
+| `agent_mode` | The mode this turn ran in — `orchestrated` or `single`. |
+| `implementer_summaries` | Summaries of any delegated implementer work this turn. Always `[]` under `agent_mode: "single"`, which never delegates. |
 | `intermediate_outputs` | Assistant commentary emitted mid-turn. Each item has `level: progress | milestone`. |
 | `tool_calls` | Transient command/tool activity (workspace/container setup, shell commands, etc.). |
 | `sessions` | Role → Codex session ids resumed across turns (informational). |
