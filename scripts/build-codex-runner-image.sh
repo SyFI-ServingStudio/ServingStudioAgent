@@ -33,6 +33,15 @@ while IFS= read -r -d '' rel_path; do
     cp -a "$source_path" "$build_context/vibesim/$rel_path"
   fi
 done < <(git -C "$main_dir" ls-files -z)
+# Copy each submodule's tracked files too, since the loop above only
+# handles plain files/symlinks and skips submodule gitlinks entirely.
+while IFS= read -r sm_path; do
+  while IFS= read -r -d '' rel_path; do
+    dest="$build_context/vibesim/$sm_path/$rel_path"
+    mkdir -p "$(dirname "$dest")"
+    cp -a "$main_dir/$sm_path/$rel_path" "$dest"
+  done < <(git -C "$main_dir/$sm_path" ls-files -z)
+done < <(git -C "$main_dir" submodule foreach --quiet --recursive 'echo "$sm_path"')
 
 docker build \
   -f "$ui_dir/docker/codex-runner.Dockerfile" \

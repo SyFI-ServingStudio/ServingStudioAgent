@@ -47,6 +47,16 @@ while IFS= read -r -d '' rel_path; do
     cp -a "$source_path" "$smoke_workspace/$rel_path"
   fi
 done < <(git -C "$main_dir" ls-files -z)
+
+# Copy each submodule's tracked files too, since the loop above only
+# handles plain files/symlinks and skips submodule gitlinks entirely.
+while IFS= read -r sm_path; do
+  while IFS= read -r -d '' rel_path; do
+    dest="$smoke_workspace/$sm_path/$rel_path"
+    mkdir -p "$(dirname "$dest")"
+    cp -a "$main_dir/$sm_path/$rel_path" "$dest"
+  done < <(git -C "$main_dir/$sm_path" ls-files -z)
+done < <(git -C "$main_dir" submodule foreach --quiet --recursive 'echo "$sm_path"')
 git -C "$smoke_workspace" init -q
 git -C "$smoke_workspace" add -A
 git -C "$smoke_workspace" \
