@@ -227,6 +227,9 @@ browser
                                     (orchestrated only; in single mode the
                                      envelope has no delegate action, and one
                                      emitted anyway is sent back for repair)
+       action=reply_user         -> (implementer only, and only when the prompt
+                                     carried the user's own words) answer the
+                                     user and end the turn without the driver
   -> explicit handoff of implementer summary back to orchestrator  [orchestrated only]
        action=final_answer       -> return reviewed result to the user
        action=request_user_input -> request genuinely required user input
@@ -310,7 +313,9 @@ land in only one of the four variants. Nothing enforces re-rendering, because
 nothing has to — a hand-edited artifact is silently overwritten on the next
 import, and `tests/test_prompts.py` asserts exactly that.
 
-The implementer returns free-form text; there is no judge, profiler, or shared
+The implementer returns its own two-action envelope — `final_answer` back to the
+orchestrator, or `reply_user` straight to a user who interrupted it and asked it
+something. There is no judge, profiler, or shared
 `profile.db` write unless the copied workspace task does it. The orchestrator
 and implementer keep separate Codex session ids. Same-role continuity uses
 `codex exec resume`; cross-role handoff does not rely on shared context and is

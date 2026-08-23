@@ -433,6 +433,7 @@ class Store:
                         sandbox TEXT NOT NULL,
                         autonomous INTEGER NOT NULL,
                         agent_mode TEXT NOT NULL DEFAULT '{DEFAULT_AGENT_MODE}',
+                        interrupted_role TEXT NOT NULL DEFAULT '',
                         orchestrator_model TEXT NOT NULL DEFAULT '{default_model}',
                         orchestrator_effort TEXT NOT NULL DEFAULT '{default_effort}',
                         orchestrator_service_tier TEXT NOT NULL DEFAULT '{default_service_tier}',
@@ -542,6 +543,14 @@ class Store:
                     connection.execute(
                         "ALTER TABLE conversations ADD COLUMN agent_mode "
                         f"TEXT NOT NULL DEFAULT '{DEFAULT_AGENT_MODE}'"
+                    )
+                if "interrupted_role" not in conversation_columns:
+                    # Empty means "no interrupt is pending". Existing databases
+                    # start there, which is exactly the old behavior: the next
+                    # turn begins at the driving role.
+                    connection.execute(
+                        "ALTER TABLE conversations ADD COLUMN interrupted_role "
+                        "TEXT NOT NULL DEFAULT ''"
                     )
                 # Pre-registry databases stored one backend id per role. A role now
                 # picks a model plus a reasoning effort, so widen those two columns
@@ -903,6 +912,37 @@ class Store:
                     conversation_id,
                 ),
             )
+
+    def set_interrupted_role(
+        self, workspace_id: str, conversation_id: str, role: str
+    ) -> None:
+        """Record which role the user's next message continues with.
+
+        Set when a turn is cancelled inside a role that already produced output
+        — so its Codex session exists and can be resumed — and kept for as long
+        as that role keeps answering the user directly. Cleared with `""` by the
+        first turn that ends anywhere else.
+        """
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            connection.execute(
+                "UPDATE conversations SET interrupted_role = ? WHERE id = ?",
+                (role, conversation_id),
+            )
+
+    def read_interrupted_role(self, workspace_id: str, conversation_id: str) -> str:
+        """Which role the next message continues with, or `""` for the driver.
+
+        Reading does not clear it: once the user is talking to the implementer,
+        a second question is as natural as the first. The turn's own ending is
+        what clears it — see `_run_browser_turn`, which writes `""` for every
+        turn that does not end on a direct reply.
+        """
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            row = connection.execute(
+                "SELECT interrupted_role FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+            return str(row["interrupted_role"]) if row else ""
 
     def update_codex_runtime(
         self,
@@ -1539,8 +1579,7 @@ class Store:
             autonomous=bool(conversation.get("autonomous", False)),
             agent_mode=conversation.get("agent_mode") or DEFAULT_AGENT_MODE,
             role_runtimes={
-                role: _imported_runtime(conversation, role)
-                for role in ALL_CODEX_ROLES
+                role: _imported_runtime(conversation, role) for role in ALL_CODEX_ROLES
             },
             peer_workspace=conversation.get("peer_workspace"),
             created_at=source_created_at,
@@ -1647,6 +1686,9 @@ class Store:
             "sandbox": row["sandbox"],
             "autonomous": bool(row["autonomous"]),
             "agent_mode": row["agent_mode"],
+            # Empty unless a turn was interrupted and its follow-up has not been
+            # sent yet. The UI reads it to say where the next message will go.
+            "interrupted_role": row["interrupted_role"],
             # Every role is returned, not just the ones this mode runs, so the
             # UI can preview the other mode's selection before the first message
             # locks agent_mode in.

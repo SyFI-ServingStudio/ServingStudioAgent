@@ -99,6 +99,9 @@ CONTAINER_RUNTIME_VERSION = os.environ.get(
 )
 ORCHESTRATOR_SCHEMA_IN_CONTAINER = f"{PROMPTS_CONTAINER_DIR}/orchestrator.schema.json"
 ASSISTANT_SCHEMA_IN_CONTAINER = f"{PROMPTS_CONTAINER_DIR}/assistant.schema.json"
+# The implementer answers in an envelope too, because it now has two exits: back
+# to the orchestrator, or straight to the user who interrupted it.
+IMPLEMENTER_SCHEMA_IN_CONTAINER = f"{PROMPTS_CONTAINER_DIR}/implementer.schema.json"
 
 EXECUTION_MODES = ("read-only", "workspace-write", "danger-full-access")
 SANDBOX_MODES = EXECUTION_MODES
@@ -161,6 +164,7 @@ def roles_for_agent_mode(agent_mode: str | None) -> tuple[str, ...]:
 def driving_role_for_agent_mode(agent_mode: str | None) -> str:
     """The role that emits the decision envelope and owns the turn's outcome."""
     return roles_for_agent_mode(agent_mode)[0]
+
 
 LOG = logging.getLogger("vibesim_ui.codex_runtime")
 
@@ -257,7 +261,9 @@ LEGACY_BACKEND_MODELS: dict[str, str] = {
     "codexds": CODEX_FAMILIES["deepseek"].default_model,
 }
 
-_MODEL_REGISTRY_CACHE: dict[str, tuple[tuple[float, ...], dict[str, CodexModelSpec]]] = {}
+_MODEL_REGISTRY_CACHE: dict[
+    str, tuple[tuple[float, ...], dict[str, CodexModelSpec]]
+] = {}
 
 
 def _catalog_models(family: CodexFamilySpec) -> dict[str, dict]:

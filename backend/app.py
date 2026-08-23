@@ -149,6 +149,14 @@ class ActiveBrowserTurn:
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     task: asyncio.Task[None] | None = None
     finished: bool = False
+    # The Codex role this turn is currently inside, and whether it has produced
+    # anything yet. `current_role` is what an interrupt lands on, so the next
+    # turn can resume that role's session; `role_ready` is why interrupting is
+    # safe at all — before it, the role's rollout does not yet hold the prompt
+    # carrying the handoff. Both are rebuilt on a reconnect from the replayed
+    # `role_start` / `role_ready` events, so no extra state crosses the wire.
+    current_role: str = ""
+    role_ready: bool = False
 
     async def publish(self, event: str) -> None:
         async with self.condition:
@@ -442,9 +450,7 @@ class RoleRuntime(BaseModel):
 
     model: str = DEFAULT_CODEX_MODEL
     effort: str = DEFAULT_CODEX_EFFORT
-    service_tier: str = Field(
-        default=DEFAULT_CODEX_SERVICE_TIER, alias="serviceTier"
-    )
+    service_tier: str = Field(default=DEFAULT_CODEX_SERVICE_TIER, alias="serviceTier")
 
     # `model_` is Pydantic's own namespace; `model` here is a plain field name.
     model_config = ConfigDict(protected_namespaces=(), populate_by_name=True)
@@ -604,9 +610,7 @@ class RegisterManagedCitationDictionary(BaseModel):
 
     resource_kind: Literal[
         "aggregate", "run", "prediction", "kernel_profile", "kernel_measurement"
-    ] = Field(
-        default="aggregate", alias="resourceKind"
-    )
+    ] = Field(default="aggregate", alias="resourceKind")
     experiment_id: str | None = Field(default=None, alias="experimentId")
     prediction_id: str | None = Field(default=None, alias="predictionId")
     run_id: str | None = Field(default=None, alias="runId")
@@ -627,6 +631,10 @@ class SendMessage(BaseModel):
     analyzer_context: AnalyzerTurnContext | None = Field(
         default=None, alias="analyzerContext"
     )
+    # Which role this turn opens at, overriding what the conversation carries.
+    # Sent only when the user redirected the conversation — leaving the side
+    # conversation an interrupt opened — so `None` means "use the stored one".
+    resume_role: str | None = Field(default=None, alias="resumeRole")
 
 
 class AgentSendMessage(BaseModel):
@@ -1237,7 +1245,9 @@ def register_managed_analyzer_citations(
     try:
         if body.resource_kind == "run":
             if body.run_id is None or body.resource_path is None:
-                raise ValueError("run citation registration requires runId and resourcePath")
+                raise ValueError(
+                    "run citation registration requires runId and resourcePath"
+                )
             dictionary = build_run_citation_dictionary(
                 workspace_id=capability.workspace_id,
                 run_id=body.run_id,
@@ -1256,7 +1266,11 @@ def register_managed_analyzer_citations(
             )
             resource_id = body.prediction_id
         elif body.resource_kind == "kernel_profile":
-            if body.profile_id is None or body.resource_path is None or body.analysis is None:
+            if (
+                body.profile_id is None
+                or body.resource_path is None
+                or body.analysis is None
+            ):
                 raise ValueError(
                     "kernel profile citation registration requires profileId, "
                     "resourcePath, and analysis"
@@ -1294,7 +1308,10 @@ def register_managed_analyzer_citations(
                 capability.workspace_id,
                 body.experiment_id,
             )
-            if workspace_experiment is not None and workspace_experiment["status"] != "ready":
+            if (
+                workspace_experiment is not None
+                and workspace_experiment["status"] != "ready"
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail="Analyzer experiment is not ready",
@@ -1842,6 +1859,15 @@ async def send_message(
     )
     turn_id = uuid.uuid4().hex[:10]
     previous_sessions = dict(conv.get("codex_sessions") or {})
+    # Read, not consumed: the turn's own ending decides whether it survives.
+    # `_run_browser_turn` rewrites it — to the replying role, or to `""`. A
+    # request that names one is the user redirecting the conversation, so it
+    # both wins and is persisted.
+    if body.resume_role is None:
+        resume_role = store.read_interrupted_role(workspace_id, cid)
+    else:
+        resume_role = body.resume_role
+        store.set_interrupted_role(workspace_id, cid, resume_role)
     store.update_runtime_settings(
         workspace_id,
         cid,
@@ -1896,6 +1922,7 @@ async def send_message(
             analyzer_context=body.analyzer_context,
             active_turn=active_turn,
             runtimes=runtimes,
+            resume_role=resume_role,
         )
     )
     return _turn_stream_response(active_turn)
@@ -1920,12 +1947,27 @@ async def cancel_message(workspace_id: str, cid: str) -> dict:
     active_turn = _active_browser_turns.get((workspace_id, cid))
     if active_turn is None or active_turn.task is None or active_turn.task.done():
         return {"cancelled": False}
+    # Read before cancelling: `_run_browser_turn` clears the active turn as it
+    # unwinds. Only a role that has produced output is worth recording — before
+    # that its rollout does not hold the prompt carrying the handoff, so there
+    # is nothing to resume and the next turn should start at the driving role.
+    interrupted_role = active_turn.current_role if active_turn.role_ready else ""
     active_turn.task.cancel()
     try:
         await active_turn.task
     except asyncio.CancelledError:
         pass
-    return {"cancelled": True}
+    if interrupted_role:
+        store.set_interrupted_role(workspace_id, cid, interrupted_role)
+    log_event(
+        LOG,
+        "turn.interrupted",
+        workspace_id=workspace_id,
+        conversation_id=cid,
+        turn_id=active_turn.turn_id,
+        role=interrupted_role,
+    )
+    return {"cancelled": True, "interrupted_role": interrupted_role}
 
 
 async def _run_browser_turn(
@@ -1942,6 +1984,7 @@ async def _run_browser_turn(
     active_turn: ActiveBrowserTurn,
     runtimes: dict[str, dict[str, str]] | None = None,
     agent_mode: str = DEFAULT_AGENT_MODE,
+    resume_role: str = "",
 ) -> None:
     runtimes = runtimes or _role_runtimes(None)
     lock = _lock_for(workspace_id)
@@ -1950,6 +1993,7 @@ async def _run_browser_turn(
         final_outcome: str | None = None
         failure: dict[str, str] | None = None
         cancelled = False
+        replying_role = ""
         intermediate_outputs: list[dict[str, str]] = []
         # Persist render-relevant events on completion; retain all SSE events in
         # ActiveBrowserTurn during execution so a refreshed client can replay them.
@@ -1966,6 +2010,7 @@ async def _run_browser_turn(
                 autonomous=autonomous,
                 agent_mode=agent_mode,
                 role_runtimes=runtimes,
+                resume_role=resume_role or None,
             ):
                 kind = ev.get("kind")
                 if kind == "session":
@@ -1993,6 +2038,12 @@ async def _run_browser_turn(
                                 "session_id": ev.get("session_id"),
                             },
                         )
+                    )
+                elif kind in {"role_start", "role_ready"}:
+                    active_turn.current_role = str(ev.get("role") or "")
+                    active_turn.role_ready = kind == "role_ready"
+                    await active_turn.publish(
+                        _sse(kind, {"role": active_turn.current_role})
                     )
                 elif kind == "implementer":
                     implementer_text = str(ev.get("text") or "")
@@ -2046,6 +2097,10 @@ async def _run_browser_turn(
                     )
                 elif kind == "final":
                     final_text = ev.get("text") or ""
+                    # Set only when a non-driving role answered the user itself;
+                    # the next message then continues with it instead of going
+                    # back through the driver.
+                    replying_role = str(ev.get("role") or "")
                     event_failure = ev.get("failure")
                     if isinstance(event_failure, dict):
                         # No orchestrator decision was ever made, so there is no
@@ -2054,7 +2109,9 @@ async def _run_browser_turn(
                         # status and the suppressed auto-naming off. The runtime's
                         # own text is kept as the body: it names the status and
                         # the surviving work, and is already free of host detail.
-                        failure = _failure_for_code(str(event_failure.get("code") or ""))
+                        failure = _failure_for_code(
+                            str(event_failure.get("code") or "")
+                        )
                         final_outcome = None
                     else:
                         outcome = ev.get("outcome")
@@ -2083,13 +2140,21 @@ async def _run_browser_turn(
             )
         except asyncio.CancelledError:
             cancelled = True
-            final_text = "Stopped."
+            # Name the role: this message is the durable record of where the
+            # interrupt landed, and therefore of who the next message continues
+            # with. `cancel_message` writes the same role to the conversation.
+            final_text = (
+                f"Stopped while the {active_turn.current_role} was working."
+                if active_turn.role_ready and active_turn.current_role
+                else "Stopped."
+            )
             final_outcome = None
             log_event(
                 LOG,
                 "turn.cancelled",
                 conversation_id=cid,
                 turn_id=turn_id,
+                role=active_turn.current_role,
             )
         except Exception as exc:  # surface backend failures to the UI
             failure = _turn_failure(exc)
@@ -2115,6 +2180,19 @@ async def _run_browser_turn(
                 citation_dictionary_id = (
                     citation_dictionary.identity if citation_dictionary else None
                 )
+                # Rebuilt from the append-only event log rather than kept from
+                # memory. Experiment cards are written there by the managed-run
+                # callbacks, from their own request handlers, so the log is the
+                # only place that holds the true interleaving of narration and
+                # experiments — the order the user just watched. Collecting the
+                # experiments separately and splicing them in at the end instead
+                # made every card jump on the turn's last frame: experiments to
+                # the tail, and the two halves of the call one had split back
+                # into one. The in-memory list stays as the fallback for a turn
+                # whose events never reached the store.
+                recovered_activity = _recoverable_turn_activity(workspace_id, turn_id)
+                if recovered_activity:
+                    activity = recovered_activity
                 activity.append(
                     {
                         "kind": "error" if failure else "final",
@@ -2126,9 +2204,6 @@ async def _run_browser_turn(
                         ),
                     }
                 )
-                managed_activity = _managed_turn_activity(workspace_id, turn_id)
-                if managed_activity:
-                    activity[-1:-1] = managed_activity
                 store.add_message(
                     workspace_id,
                     cid,
@@ -2152,6 +2227,13 @@ async def _run_browser_turn(
                     if failure is None and not cancelled and final_text != "(no answer)"
                     else False
                 )
+                # Where the next message goes. A cancelled turn already wrote its
+                # own landing role in `cancel_message`, and a failed one should
+                # keep whatever it had so a retry reaches the same role; every
+                # other ending either continues a direct reply or returns the
+                # conversation to the driving role.
+                if not cancelled and failure is None:
+                    store.set_interrupted_role(workspace_id, cid, replying_role)
                 await active_turn.publish(
                     _sse(
                         "done",
@@ -2163,6 +2245,7 @@ async def _run_browser_turn(
                             "citation_dsl_version": "v2" if analyzer_context else None,
                             "failure": failure,
                             "naming_scheduled": naming_scheduled,
+                            "interrupted_role": replying_role,
                         },
                     )
                 )

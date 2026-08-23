@@ -75,6 +75,36 @@ class WorkspaceStoreTest(unittest.TestCase):
         (main_dir / "logs").mkdir(parents=True)
         return WorkspaceRegistry(root / "agent-workspaces", main_dir=main_dir)
 
+    def test_interrupted_role_survives_reading_and_is_cleared_by_writing(self) -> None:
+        """Once the user is talking to the implementer, a second question is as
+        natural as the first, so reading must not end the conversation with it.
+        Clearing is the turn's job, through the same setter."""
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            store = Store(registry)
+            store.create("w_main", "conversation", "workspace-write")
+
+            self.assertEqual(
+                store.get("w_main", "conversation")["interrupted_role"], ""
+            )
+            store.set_interrupted_role("w_main", "conversation", "implementer")
+            self.assertEqual(
+                store.get("w_main", "conversation")["interrupted_role"], "implementer"
+            )
+
+            self.assertEqual(
+                store.read_interrupted_role("w_main", "conversation"), "implementer"
+            )
+            self.assertEqual(
+                store.read_interrupted_role("w_main", "conversation"), "implementer"
+            )
+
+            store.set_interrupted_role("w_main", "conversation", "")
+            self.assertEqual(store.read_interrupted_role("w_main", "conversation"), "")
+            self.assertEqual(
+                store.get("w_main", "conversation")["interrupted_role"], ""
+            )
+
     def test_pages_backwards_without_mutating_history(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             registry = self.make_registry(temporary_directory)

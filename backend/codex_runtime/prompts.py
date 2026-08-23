@@ -63,8 +63,7 @@ def _assistant_prompt(
 ) -> str:
     del is_resume
     return (
-        f"{_assistant_contract(conversation_id)}"
-        f"\n\nNewest user message:\n{user_text}\n"
+        f"{_assistant_contract(conversation_id)}\n\nNewest user message:\n{user_text}\n"
     )
 
 
@@ -189,6 +188,31 @@ def driver_continue_prompt(
     )
 
 
+def implementer_steer_prompt(message: str) -> str:
+    """Deliver a user correction to an implementer they interrupted mid-task.
+
+    Unlike `_implementer_prompt` this is not a new delegated task: the session
+    being resumed still holds the original one, and the user stopped it
+    precisely because they wanted that task done differently. Saying so is what
+    keeps the model from re-reading and re-running work it already finished.
+
+    The `user:` marker is load-bearing, not decoration: it is the only thing
+    that distinguishes a message the user typed from a task the orchestrator
+    delegated, and the implementer's contract keys `reply_user` off exactly
+    that. Nothing else in an implementer prompt carries it.
+    """
+    return (
+        f"{_role_prompt('implementer.txt')}\n\n"
+        "The user interrupted you while you were working on the task above, and "
+        "sent the message below. Read it first: if it asks you something, answer "
+        "it with `reply_user`. If it corrects how you were going about the task, "
+        "continue from where you stopped — keep the work you already completed, "
+        "drop or redo only what the message contradicts, and end with "
+        "`final_answer` as usual.\n\n"
+        f"user: {message}\n"
+    )
+
+
 def _implementer_prompt(
     task: str,
     *,
@@ -244,35 +268,45 @@ def parse_orchestrator(
         message_is_empty = message is None or (
             isinstance(message, str) and not message.strip()
         )
-        task_is_empty = task is None or (
-            isinstance(task, str) and not task.strip()
-        )
-        if action in {"progress", "milestone"} and isinstance(
-            message, str
-        ) and message.strip() and task_is_empty:
+        task_is_empty = task is None or (isinstance(task, str) and not task.strip())
+        if (
+            action in {"progress", "milestone"}
+            and isinstance(message, str)
+            and message.strip()
+            and task_is_empty
+        ):
             return {
                 "action": action,
                 "message": _normalize_orchestrator_text_field(message),
             }
         if action in {"delegate", "run_implementer"} and not allow_delegate:
             continue
-        if action in {"delegate", "run_implementer"} and isinstance(
-            task, str
-        ) and task.strip() and message_is_empty:
+        if (
+            action in {"delegate", "run_implementer"}
+            and isinstance(task, str)
+            and task.strip()
+            and message_is_empty
+        ):
             return {
                 "action": "delegate",
                 "task": _normalize_orchestrator_text_field(task),
             }
-        if action in {"final_answer", "respond", "user_message"} and isinstance(
-            message, str
-        ) and message.strip() and task_is_empty:
+        if (
+            action in {"final_answer", "respond", "user_message"}
+            and isinstance(message, str)
+            and message.strip()
+            and task_is_empty
+        ):
             return {
                 "action": "final_answer",
                 "message": _normalize_orchestrator_text_field(message),
             }
-        if action == "request_user_input" and isinstance(
-            message, str
-        ) and message.strip() and task_is_empty:
+        if (
+            action == "request_user_input"
+            and isinstance(message, str)
+            and message.strip()
+            and task_is_empty
+        ):
             return {
                 "action": "request_user_input",
                 "message": _normalize_orchestrator_text_field(message),
@@ -288,6 +322,45 @@ def parse_orchestrator(
                 "message": json.dumps(payload, ensure_ascii=False, indent=2),
             }
     return None
+
+
+def parse_implementer(
+    text: str,
+    *,
+    allow_reply_user: bool,
+) -> dict[str, str]:
+    """Read one implementer result envelope, falling back to the raw text.
+
+    An unparseable answer is not repaired the way the driver's is: the work it
+    describes is already done, and the summary is text either way. So anything
+    that is not a recognizable envelope becomes a `final_answer` carrying the
+    model's own words, which is exactly the pre-envelope behaviour.
+
+    `allow_reply_user=False` is the delegated path, where the prompt carried no
+    `user:` line. A `reply_user` there would end the turn on an answer to a
+    question nobody asked, so it is demoted rather than obeyed — the
+    orchestrator still gets its summary and decides how the turn ends.
+    """
+    for candidate in _json_candidates(text):
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        message = payload.get("message")
+        if not isinstance(message, str) or not message.strip():
+            continue
+        action = payload.get("action")
+        if action not in {"final_answer", "reply_user"}:
+            continue
+        if action == "reply_user" and not allow_reply_user:
+            action = "final_answer"
+        return {
+            "action": action,
+            "message": _normalize_orchestrator_text_field(message),
+        }
+    return {"action": "final_answer", "message": text}
 
 
 def compose_final_message(

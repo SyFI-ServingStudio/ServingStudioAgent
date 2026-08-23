@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 from ..logging_config import compact_text, log_event
 from .codex_command import build_codex_exec_command
@@ -67,21 +67,33 @@ class CodexExecCall:
         await self._write_prompt(process)
         stderr_task = asyncio.create_task(self._drain_stderr(process, output))
 
+        # Opens this role's interrupt blind window — see `_stream_process_output`
+        # for the pairing `role_ready`.
+        yield {"kind": "role_start", "role": self.request.label}
+
         # Codex says nothing until its first item, so without this the UI would
         # still read "checking Docker Codex container..." through CLI startup,
         # session load and the model's time to first token — usually the longest
         # stretch of the wait, and the one users most want narrated.
         yield self._waiting_event(0.0, session_ready=False)
 
+        wait = _FirstOutputWait(started)
         try:
             output.prime_rollout_offset()
-            async for event in self._stream_process_output(process, output, started):
+            async for event in self._stream_process_output(process, output, wait):
                 yield event
         except asyncio.CancelledError:
             await self._handle_cancelled(process)
             raise
         finally:
             await self._finish_stderr_task(stderr_task)
+
+        # A call can produce nothing a reader sees until its final answer — a
+        # one-line reply with no tool use is the common case. The rollout holds
+        # this call's prompt by then, so the blind window has to close here or
+        # an armed interrupt would wait for an event that never comes.
+        if wait.note_call_end():
+            yield {"kind": "role_ready", "role": self.request.label}
 
         if output.timed_out:
             yield output.timeout_event()
@@ -159,13 +171,12 @@ class CodexExecCall:
         self,
         process: asyncio.subprocess.Process,
         output: CodexOutputCollector,
-        started: float,
+        wait: _FirstOutputWait,
     ) -> AsyncIterator[CodexEvent]:
         assert process.stdout is not None
         stdout_buffer = b""
         read_task = asyncio.create_task(process.stdout.read(8192))
         idle_deadline = _new_idle_deadline()
-        wait = _FirstOutputWait(started)
 
         try:
             while True:
@@ -182,8 +193,8 @@ class CodexExecCall:
                 if rollout_events:
                     idle_deadline = _new_idle_deadline()
                 for event in rollout_events:
-                    wait.note(event)
-                    yield event
+                    for noted in self._noted(wait, event):
+                        yield noted
                 if not done:
                     if wait.due():
                         yield self._waiting_event(wait.tick(), wait.session_ready)
@@ -197,17 +208,22 @@ class CodexExecCall:
                 complete_lines, stdout_buffer = _split_stdout_lines(stdout_buffer)
                 for raw_line in complete_lines:
                     for event in output.events_from_stdout_line(raw_line):
-                        wait.note(event)
-                        yield event
+                        for noted in self._noted(wait, event):
+                            yield noted
                 read_task = asyncio.create_task(process.stdout.read(8192))
         finally:
             await self._cancel_read_task(read_task)
 
+        # These tail drains can carry a call's only output — a short answer that
+        # arrived in one read, say — so they go through `_noted` too, or the
+        # blind window would never close for that call.
         if stdout_buffer.strip():
             for event in output.events_from_stdout_line(stdout_buffer):
-                yield event
+                for noted in self._noted(wait, event):
+                    yield noted
         for event in output.poll_rollout_intermediate_outputs():
-            yield event
+            for noted in self._noted(wait, event):
+                yield noted
         if output.timed_out:
             process.kill()
         await process.wait()
@@ -215,7 +231,22 @@ class CodexExecCall:
         # already reached EOF. Refresh once more so final_event can recover the
         # durable handoff instead of reporting a false empty result.
         for event in output.poll_rollout_intermediate_outputs():
-            yield event
+            for noted in self._noted(wait, event):
+                yield noted
+
+    def _noted(self, wait: _FirstOutputWait, event: CodexEvent) -> Iterator[CodexEvent]:
+        """Yield `event`, preceded by `role_ready` if it is this call's first output.
+
+        `role_ready` closes the interrupt blind window: until a role has produced
+        something, the prompt that carries the handoff (a delegated task, or an
+        implementer summary on its way back) is not yet durable in its rollout,
+        so interrupting there would drop it. Emitted before the event itself so a
+        client that arms an interrupt sees the window close first, and exactly
+        once — `_FirstOutputWait.note` latches.
+        """
+        if wait.note(event):
+            yield {"kind": "role_ready", "role": self.request.label}
+        yield event
 
     async def _cancel_read_task(self, read_task: asyncio.Task[bytes]) -> None:
         if read_task.done():
@@ -280,11 +311,27 @@ class _FirstOutputWait:
         self.first_output_seen = False
         self.next_tick = started + FIRST_OUTPUT_TICK_SECONDS
 
-    def note(self, event: CodexEvent) -> None:
+    def note(self, event: CodexEvent) -> bool:
+        """Record one event; return True only on the call that sees first output.
+
+        The `session` event is Codex answering the CLI rather than the model, so
+        it does not count as output — the rollout does not yet hold this call's
+        prompt. Callers use the True edge to emit `role_ready`.
+        """
         if event.get("kind") == "session":
             self.session_ready = True
-            return
+            return False
+        if self.first_output_seen:
+            return False
         self.first_output_seen = True
+        return True
+
+    def note_call_end(self) -> bool:
+        """Latch at the end of a silent call; True if that is what closes it."""
+        if self.first_output_seen:
+            return False
+        self.first_output_seen = True
+        return True
 
     def due(self) -> bool:
         if self.first_output_seen:

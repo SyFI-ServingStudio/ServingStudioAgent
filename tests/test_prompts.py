@@ -16,6 +16,7 @@ from backend.codex_runtime.prompts import (
     _orchestrator_repair_prompt,
     compose_failure_message,
     compose_final_message,
+    parse_implementer,
     parse_orchestrator,
     transport_failure_reason,
 )
@@ -147,7 +148,9 @@ class RolePromptTest(unittest.TestCase):
         self.assertIn("/workspace/conversation-123_plan.md", prompt)
         self.assertIn("/workspace/conversation-123_progress.md", prompt)
         self.assertIn("user-visible intermediate output", prompt)
-        self.assertIn("then immediately continue with the next genuine tool call", prompt)
+        self.assertIn(
+            "then immediately continue with the next genuine tool call", prompt
+        )
         self.assertIn("Never\nconcatenate two envelopes", prompt)
         self.assertTrue(prompt.endswith("Newest user message:\nAnalyze the sweep.\n"))
 
@@ -176,12 +179,13 @@ class RolePromptTest(unittest.TestCase):
             "Continue.",
             is_resume=True,
         )
-        self.assertEqual(
-            implementer_prompt,
-            "You are implementor. Read and follow `/workspace/AGENTS.md`, especially "
-            "the Implementer Role section.\n\nTask:\nContinue.\n",
-        )
+        self.assertTrue(implementer_prompt.startswith("You are implementor."))
         self.assertIn("Read and follow `/workspace/AGENTS.md`", implementer_prompt)
+        # The envelope contract rides along on every call, resumed or not: the
+        # rollout's earlier turns are not a reliable place to keep it.
+        self.assertIn("`final_answer`", implementer_prompt)
+        self.assertIn("`reply_user`", implementer_prompt)
+        self.assertTrue(implementer_prompt.endswith("Task:\nContinue.\n"))
 
     def test_implementer_handoff_reasserts_orchestrator_contract(self) -> None:
         prompt = _orchestrator_handoff_prompt(
@@ -211,6 +215,38 @@ class RolePromptTest(unittest.TestCase):
         self.assertEqual(
             question,
             {"action": "request_user_input", "message": "Which GPU?"},
+        )
+
+    def test_parse_implementer_separates_the_two_recipients(self) -> None:
+        """`reply_user` ends the turn, `final_answer` goes back to the
+        orchestrator, and anything else is the summary it always was."""
+        self.assertEqual(
+            parse_implementer(
+                '{"action":"reply_user","message":"Reprofiling."}',
+                allow_reply_user=True,
+            ),
+            {"action": "reply_user", "message": "Reprofiling."},
+        )
+        self.assertEqual(
+            parse_implementer(
+                '{"action":"final_answer","message":"Reran it."}',
+                allow_reply_user=True,
+            ),
+            {"action": "final_answer", "message": "Reran it."},
+        )
+        # Nothing in a delegated prompt came from the user, so a reply there is
+        # demoted rather than obeyed.
+        self.assertEqual(
+            parse_implementer(
+                '{"action":"reply_user","message":"Reran it."}',
+                allow_reply_user=False,
+            ),
+            {"action": "final_answer", "message": "Reran it."},
+        )
+        # Free text predates the envelope and stays a summary.
+        self.assertEqual(
+            parse_implementer("Reran it with uv.", allow_reply_user=True),
+            {"action": "final_answer", "message": "Reran it with uv."},
         )
 
     def test_parse_legacy_actions_normalizes_without_reexposing_them(self) -> None:
@@ -246,18 +282,16 @@ class RolePromptTest(unittest.TestCase):
 
     def test_commentary_envelopes_preserve_progress_level(self) -> None:
         self.assertEqual(
-            parse_commentary(
-                '{"action":"progress","message":"Checking.","task":""}'
-            ),
+            parse_commentary('{"action":"progress","message":"Checking.","task":""}'),
             ("Checking.", "progress"),
         )
         self.assertEqual(
-            parse_commentary(
-                '{"action":"milestone","message":"Validated.","task":""}'
-            ),
+            parse_commentary('{"action":"milestone","message":"Validated.","task":""}'),
             ("Validated.", "milestone"),
         )
-        self.assertEqual(parse_commentary("Legacy prose."), ("Legacy prose.", "progress"))
+        self.assertEqual(
+            parse_commentary("Legacy prose."), ("Legacy prose.", "progress")
+        )
 
     def test_parse_rejects_invalid_action_field_combinations(self) -> None:
         invalid_decisions = [

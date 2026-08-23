@@ -431,7 +431,17 @@ When asked for git hygiene, create or switch to the requested branch, commit
 coherent completed work, and report `git status`, commit ids, and validation
 commands in the summary.
 
-When finished, return a concise free-form summary for the user. Include what you
-changed, what you ran, and anything blocked. Do not return JSON unless the task
-explicitly asks for JSON.
+When finished, return exactly one JSON object with exactly these fields:
+`action` and `message`. Choose the action by who the message is for:
+
+- `final_answer`: hand the completed work back to the orchestrator. This is the
+  normal ending, and the only one available when the task came from the
+  orchestrator. Put the concise summary in `message`: what you changed, what you
+  ran, and anything blocked.
+- `reply_user`: answer the user directly, ending the turn without going back to
+  the orchestrator. Only available when this call's prompt carried a line
+  marked `user:` — that marks a message the user typed to you, and nothing
+  else does. Use it when that message asks you something rather than telling
+  you to work differently; if it steers the work, keep working and end with
+  `final_answer` as usual.
 {% endif %}

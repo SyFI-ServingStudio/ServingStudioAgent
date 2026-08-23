@@ -49,9 +49,7 @@ class FirstOutputWaitTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
 
-        tool_calls = [
-            event["text"] for event in events if event["kind"] == "tool_call"
-        ]
+        tool_calls = [event["text"] for event in events if event["kind"] == "tool_call"]
 
         # Immediately, before Codex has said anything at all.
         self.assertEqual(
@@ -138,6 +136,53 @@ class UpstreamFailureTests(unittest.IsolatedAsyncioTestCase):
             events[-1]["failure"], {"code": "upstream_unavailable", "status": 503}
         )
         self.assertNotIn("cayenne", events[-1]["text"])
+
+
+class InterruptGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_blind_window_opens_at_the_start_and_closes_exactly_once(
+        self,
+    ) -> None:
+        """`role_start`/`role_ready` bracket the window an interrupt must not fall in.
+
+        Until a role has produced something, the prompt carrying the handoff — a
+        delegated task, or an implementer summary on its way back — is not yet
+        durable in its rollout, so cancelling there would drop it. A call whose
+        only output is its final answer is the case worth pinning: nothing
+        reaches the client until the very end, and the window still has to close
+        or a client waiting on it would wait forever.
+        """
+        with (
+            patch.object(codex_cli, "FIRST_OUTPUT_TICK_SECONDS", 0.1),
+            patch.object(
+                codex_cli,
+                "build_codex_exec_command",
+                return_value=[sys.executable, "-c", FAKE_CODEX],
+            ),
+        ):
+            events = [
+                event
+                async for event in run_codex(
+                    "container",
+                    "question",
+                    label="implementer",
+                    workspace_id="w_test",
+                    conversation_id="conversation-1",
+                    turn_id="turn-1",
+                    model_id="gpt-5.6-sol",
+                    effort="xhigh",
+                )
+            ]
+
+        kinds = [event["kind"] for event in events]
+        self.assertEqual(kinds[0], "role_start")
+        self.assertEqual(events[0]["role"], "implementer")
+        self.assertEqual(kinds.count("role_ready"), 1)
+        self.assertEqual(events[kinds.index("role_ready")]["role"], "implementer")
+        # The session event is Codex answering the CLI, not the model, and the
+        # ticking waiting line is this process talking to itself; neither counts
+        # as the role having spoken.
+        self.assertLess(kinds.index("session"), kinds.index("role_ready"))
+        self.assertLess(kinds.index("role_ready"), kinds.index("final"))
 
 
 if __name__ == "__main__":
