@@ -213,6 +213,12 @@ def _sse(event: str, data: dict) -> str:
 
 
 _TURN_FAILURES: dict[str, str] = {
+    "agent_call_timeout": (
+        "The Agent stalled without producing output. Continue the conversation to retry."
+    ),
+    "agent_invalid_output": (
+        "The Agent did not return a valid decision. Continue the conversation to retry."
+    ),
     "runtime_storage_full": (
         "The Agent runtime could not start because the host disk is full. "
         "Free space, then retry this question."

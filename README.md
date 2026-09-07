@@ -1,7 +1,7 @@
 # VibeSim Agent Backend
 
 A shared workspace/conversation backend for VibeSim. The integrated VibeSimUI
-talks to this FastAPI service, which drives **`codex exec` inside Docker** and
+talks to this FastAPI service, which drives **Codex or Claude Code inside Docker** and
 records durable workspace, conversation, turn, and managed-job ownership state.
 Rust Analyzer remains the read-only authority for result catalogs and payloads.
 
@@ -99,6 +99,71 @@ uv run python -m backend.migrate_workspaces \
 ```
 
 ## Run
+
+### Claude backend
+
+Each active role can select Claude independently: use Claude in `single` mode,
+or combine a Codex orchestrator with a Claude implementer. The existing model
+picker discovers the Claude family through `/api/codex-backends`; no separate
+browser build is required to populate it. The `codex_runtime` API field and
+`codex_sessions` table retain their historical names for compatibility.
+
+Provide one credential in the **backend process environment**:
+
+- `ANTHROPIC_API_KEY` for the Anthropic API.
+- `ANTHROPIC_AUTH_TOKEN` for a compatible gateway, with `ANTHROPIC_BASE_URL`.
+- `CLAUDE_CODE_OAUTH_TOKEN` for a token provisioned for Claude Code automation.
+
+Only credential presence is checked in the catalog; account access and model
+availability are checked by the actual call. No host Claude login/settings or
+conversation history is copied. Credentials are passed to Docker by environment
+variable name, never embedded in CLI arguments. Keep only the intended auth
+method configured. Calls receive current backend credentials even when reusing
+a container.
+
+The catalog offers explicit `claude-sonnet-5` and `claude-opus-5` model IDs,
+with `low`/`medium`/`high`/`xhigh`/`max` efforts and the `default` service tier.
+Both models passed live structured-output requests at `xhigh` and `max` through
+this deployment's configured gateway. Its `/v1/models` endpoint returns 403,
+so this is a verified selection, not an exhaustive provider model inventory.
+Existing `sonnet`/`opus` selections resolve to these pinned versions. Set
+`CLAUDE_MODEL` to add a custom model ID (unknown models retain conservative
+low/medium/high efforts).
+
+Rebuild the runner with `./scripts/build-codex-runner-image.sh` before enabling
+Claude. The image installs `@anthropic-ai/claude-code@2.1.250`; the build argument
+`CLAUDE_NPM_PACKAGE` can override that pin. The runner label is now
+`prebuilt-agent-runner-v11`, which also makes `run.sh` rebuild an older image.
+For an isolated development deployment, set a distinct `CODEX_DOCKER_IMAGE`,
+`VIBESIM_WORKSPACES_ROOT`, and `PORT` before building or starting the backend.
+
+Each role persists Claude state under `codex/<conversation-id>/<role>/claude/`.
+The same role resumes its saved Claude session on later turns. Switching to a
+different family after messages exist remains disallowed. Instructions are
+explicitly loaded from the selected `/workspace/AGENTS.md`; the role's skills
+directory points at `/workspace/skills`. Analyzer MCP is configured explicitly.
+Tool permissions follow the same Docker/role-instruction policy as the Codex
+runner. Only the final validated `structured_output` can route a turn; streamed
+progress and tool events cannot trigger delegation or finish a conversation.
+
+Run the CPU regression suite with:
+
+```bash
+uv run python -m unittest discover -s tests
+```
+
+It covers CLI protocol conversion, real subprocess pipes, timeout/cancellation,
+single and mixed-role dispatch, persistence, and the existing Codex behavior.
+It makes no model requests. After providing credentials and rebuilding the
+image, validate a new single-Claude conversation with a small file-read task,
+resume it with a follow-up, cancel an active task, and repeat with a Codex
+orchestrator plus Claude implementer. These live checks require model access
+and the running Analyzer service for MCP queries.
+
+Claude protocol references: [programmatic usage](https://code.claude.com/docs/en/headless)
+and [CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+### Start the service
 
 ```bash
 cd user-facing-ui
@@ -574,7 +639,7 @@ Docker GPU forwarding.
 - `RUST_TOOLCHAIN` — Rust toolchain baked into the image by the build script,
   default `stable`.
 - `CODEX_RUNNER_IMAGE_VERSION` — expected image label, default
-  `prebuilt-codex-runner-v10`. `run.sh` rebuilds when this label differs or when
+  `prebuilt-agent-runner-v11`. `run.sh` rebuilds when this label differs or when
   the baked `main/uv.lock` hash differs. Ordinary VibeSim source changes do not
   rebuild the image; Cargo compiles first-party crates inside each workspace
   against the dependency-only target seed.
@@ -640,3 +705,25 @@ configuration into a conversation-specific `codex-home` inside the selected
 workspace, then bind-mounts that clean home into Docker as
 `/home/<user>/.codex`. Conversations share the workspace repo and experiments,
 while `tmp`, sessions, and rollout logs stay isolated per conversation.
+
+### Claude startup credential discovery
+
+`run.sh` launches the backend through `scripts/with_claude_env.py`. Existing
+nonempty authentication environment variables take precedence. Otherwise the
+launcher reads simple `claude` alias/function definitions from local shell
+startup files (`.bash_profile`, `.profile`, `.bashrc`, `.bash_aliases`, `.zshrc`).
+It recognizes leading literal assignments and inherited `$VAR`/`${VAR}` values
+followed by `claude` or `command claude "$@"`. It does not source these files,
+execute wrappers, follow sourced files, or support arbitrary shell code.
+Only ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN and
+ANTHROPIC_BASE_URL are imported. An explicitly configured authentication method
+never inherits a different wrapper's endpoint or token. A mismatched explicit
+base URL also prevents fallback. No credential values are logged or saved.
+Set `CLAUDE_DISCOVER_SHELL_ENV=0` to disable discovery. For custom launchers use:
+
+```bash
+python3 scripts/with_claude_env.py uv run --frozen uvicorn backend.app:app
+```
+
+Restart the backend after changing shell definitions. This enables the menu
+when credentials are found; provider validity still requires a real request.

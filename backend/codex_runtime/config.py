@@ -53,6 +53,21 @@ CODEX_REASONING_EFFORT = os.environ.get("CODEX_REASONING_EFFORT", "xhigh")
 DEFAULT_CODEX_SERVICE_TIER = "default"
 CODEXDS_MODEL = os.environ.get("CODEXDS_MODEL", "deepseek-ai/DeepSeek-V4-Flash-0731")
 CODEXDS_REASONING_EFFORT = os.environ.get("CODEXDS_REASONING_EFFORT", "max")
+CLAUDE_MODEL_ALIASES = {"sonnet": "claude-sonnet-5", "opus": "claude-opus-5"}
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5")
+CLAUDE_MODEL = CLAUDE_MODEL_ALIASES.get(CLAUDE_MODEL, CLAUDE_MODEL)
+# Explicit versions verified against this deployment. Aliases remain readable
+# for existing conversations, but new selections pin the model version.
+CLAUDE_MODELS = {
+    "claude-sonnet-5": ("Claude Sonnet 5", ("low", "medium", "high", "xhigh", "max")),
+    "claude-opus-5": ("Claude Opus 5", ("low", "medium", "high", "xhigh", "max")),
+}
+CLAUDE_AUTH_ENVIRONMENT = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
+CLAUDE_ENVIRONMENT = (*CLAUDE_AUTH_ENVIRONMENT, "ANTHROPIC_BASE_URL")
 # Bearer token gating the agent-facing HTTP API (/api/agent/*, /api/eval).
 # Unset -> no auth, so local dev and the same-host eval harness keep working.
 # Set it when exposing the backend to cross-machine agents.
@@ -95,7 +110,7 @@ _host_hf_home = os.environ.get("HF_HOME", "").strip()
 HOST_HF_HOME = Path(_host_hf_home).expanduser() if _host_hf_home else None
 CODEX_DOCKER_HF_HOME = "/model"
 CONTAINER_RUNTIME_VERSION = os.environ.get(
-    "CODEX_RUNNER_IMAGE_VERSION", "prebuilt-codex-runner-v10"
+    "CODEX_RUNNER_IMAGE_VERSION", "prebuilt-agent-runner-v11"
 )
 ORCHESTRATOR_SCHEMA_IN_CONTAINER = f"{PROMPTS_CONTAINER_DIR}/orchestrator.schema.json"
 ASSISTANT_SCHEMA_IN_CONTAINER = f"{PROMPTS_CONTAINER_DIR}/assistant.schema.json"
@@ -189,9 +204,14 @@ class CodexFamilySpec:
     default_effort: str
     fallback_efforts: tuple[str, ...]
     required_environment: tuple[str, ...] = ()
+    runner: str = "codex"
 
     @property
     def available(self) -> bool:
+        if self.runner == "claude":
+            return any(
+                os.environ.get(name, "").strip() for name in CLAUDE_AUTH_ENVIRONMENT
+            )
         return self.host_codex_home.joinpath("config.toml").is_file() and all(
             os.environ.get(name, "").strip() for name in self.required_environment
         )
@@ -241,12 +261,23 @@ CODEX_FAMILIES: dict[str, CodexFamilySpec] = {
         fallback_efforts=("high", "xhigh", "max"),
         required_environment=("VLLM_API_KEY",),
     ),
+    "claude": CodexFamilySpec(
+        family_id="claude",
+        label="Claude",
+        host_codex_home=Path.home() / ".claude",
+        catalog_filenames=(),
+        default_model=CLAUDE_MODEL,
+        default_effort="high",
+        fallback_efforts=("low", "medium", "high"),
+        runner="claude",
+    ),
 }
 
 # Which catalog entries a conversation may actually pick. The catalogs carry far
 # more (older generations, hidden internal models); this keeps the selector to
 # the models this deployment is meant to run.
 MODEL_ALLOWLIST: dict[str, tuple[str, ...]] = {
+    "claude": tuple(dict.fromkeys((CLAUDE_MODEL, *CLAUDE_MODELS))),
     "gpt": ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
     "deepseek": (CODEXDS_MODEL,),
 }
@@ -257,6 +288,7 @@ DEFAULT_CODEX_EFFORT = CODEX_FAMILIES[DEFAULT_CODEX_FAMILY].default_effort
 
 # Pre-registry conversations stored a backend id. Reads map them onto models.
 LEGACY_BACKEND_MODELS: dict[str, str] = {
+    **CLAUDE_MODEL_ALIASES,
     "traditional": CODEX_FAMILIES["gpt"].default_model,
     "codexds": CODEX_FAMILIES["deepseek"].default_model,
 }
@@ -306,6 +338,8 @@ def _family_registry(family: CodexFamilySpec) -> dict[str, CodexModelSpec]:
         )
         # A missing or stale catalog must not remove a configured model from the
         # UI; fall back to the family's conservative effort ladder instead.
+        if family.runner == "claude" and model_id in CLAUDE_MODELS:
+            efforts = CLAUDE_MODELS[model_id][1]
         efforts = efforts or family.fallback_efforts
         default_effort = (
             family.default_effort
@@ -322,7 +356,14 @@ def _family_registry(family: CodexFamilySpec) -> dict[str, CodexModelSpec]:
         )
         registry[model_id] = CodexModelSpec(
             model_id=model_id,
-            label=str((entry or {}).get("display_name") or model_id),
+            label=str(
+                (entry or {}).get("display_name")
+                or (
+                    CLAUDE_MODELS.get(model_id, (model_id, ()))[0]
+                    if family.runner == "claude"
+                    else model_id
+                )
+            ),
             family_id=family.family_id,
             efforts=efforts,
             default_effort=(
@@ -396,6 +437,7 @@ def codex_model_catalog() -> list[dict[str, object]]:
             "label": model.label,
             "family": model.family_id,
             "familyLabel": model.family.label,
+            "runner": model.family.runner,
             "efforts": list(model.efforts),
             "defaultEffort": model.default_effort,
             "serviceTiers": list(model.service_tiers),
@@ -411,8 +453,12 @@ def codex_family_catalog() -> list[dict[str, object]]:
         {
             "id": family.family_id,
             "label": family.label,
+            "runner": family.runner,
             "available": family.available,
             "requiredEnvironment": list(family.required_environment),
+            "credentialEnvironmentAlternatives": (
+                list(CLAUDE_AUTH_ENVIRONMENT) if family.runner == "claude" else []
+            ),
         }
         for family in CODEX_FAMILIES.values()
     ]

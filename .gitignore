@@ -17,3 +17,6 @@ frontend/dist/
 backend/prompts/AGENTS*.md
 backend/prompts/orchestrator.txt
 backend/prompts/assistant.txt
+
+# Local runtime probes and reports
+.artifacts/

@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 default_image_owner="$(id -un | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_.-' '-')"
 default_image_owner="${default_image_owner%-}"
 export CODEX_DOCKER_IMAGE="${CODEX_DOCKER_IMAGE:-vibesim-ui-codex-runner:${default_image_owner:-codex}}"
-export CODEX_RUNNER_IMAGE_VERSION="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-codex-runner-v10}"
+export CODEX_RUNNER_IMAGE_VERSION="${CODEX_RUNNER_IMAGE_VERSION:-prebuilt-agent-runner-v11}"
 export CODEX_DOCKER_GPUS="${CODEX_DOCKER_GPUS-all}"
 export CODEX_DOCKER_DG_USE_LOCAL_VERSION="${CODEX_DOCKER_DG_USE_LOCAL_VERSION:-0}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$PWD/.uv-cache}"
@@ -30,4 +30,4 @@ if [ "${CODEX_SKIP_IMAGE_BUILD:-0}" != "1" ]; then
   fi
 fi
 
-exec uv run uvicorn backend.app:app --host "${HOST:-0.0.0.0}" --port "${PORT:-8765}" "$@"
+exec python3 scripts/with_claude_env.py uv run uvicorn backend.app:app --host "${HOST:-0.0.0.0}" --port "${PORT:-8765}" "$@"

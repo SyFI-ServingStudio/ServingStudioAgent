@@ -78,6 +78,21 @@ def build_codex_exec_command(request: CodexExecRequest) -> list[str]:
 
 
 def _docker_exec_prefix(request: CodexExecRequest) -> list[str]:
+    return docker_exec_prefix(
+        request,
+        runtime_environment={
+            "CODEX_HOME": role_codex_home_in_container(request.label),
+        },
+    )
+
+
+def docker_exec_prefix(
+    request: CodexExecRequest,
+    *,
+    runtime_environment: dict[str, str],
+    inherited_environment: tuple[str, ...] = (),
+) -> list[str]:
+    """The shared workspace environment; credentials stay out of argv."""
     return [
         "docker",
         "exec",
@@ -86,8 +101,12 @@ def _docker_exec_prefix(request: CodexExecRequest) -> list[str]:
         f"{CODEX_DOCKER_UID}:{CODEX_DOCKER_GID}",
         "-e",
         f"HOME={CODEX_DOCKER_HOME}",
-        "-e",
-        f"CODEX_HOME={role_codex_home_in_container(request.label)}",
+        *(
+            arg
+            for name, value in runtime_environment.items()
+            for arg in ("-e", f"{name}={value}")
+        ),
+        *(arg for name in inherited_environment for arg in ("-e", name)),
         "-e",
         f"USER={CODEX_DOCKER_USER}",
         "-e",

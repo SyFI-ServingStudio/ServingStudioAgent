@@ -16,6 +16,7 @@ from .config import (
     ANALYZER_MCP_CONTAINER_DIR,
     ANALYZER_MCP_DIR,
     ANALYZER_MCP_SOURCE,
+    CLAUDE_ENVIRONMENT,
     CODEX_DOCKER_CODEX_ROOT,
     CODEX_DOCKER_DG_USE_LOCAL_VERSION,
     CODEX_DOCKER_GID,
@@ -227,6 +228,17 @@ def _prepare_role_codex_home(
     session created against one provider from being resumed by the other role.
     """
     family = codex_family(family_id)
+    if family.runner == "claude":
+        if not family.available:
+            raise RuntimeError(
+                "Claude credentials are missing; configure ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN or CLAUDE_CODE_OAUTH_TOKEN"
+            )
+        home = role_codex_home_for(workspace_id, conversation_id, role) / "claude"
+        home.mkdir(parents=True, exist_ok=True, mode=0o700)
+        skills = home / "skills"
+        if not skills.is_symlink() and not skills.exists():
+            skills.symlink_to("/workspace/skills", target_is_directory=True)
+        return home
     host_codex_home = family.host_codex_home
     if not host_codex_home.exists():
         raise RuntimeError(
@@ -409,6 +421,11 @@ def ensure_container(
         f"&& test -d {role_codex_home_in_container(role)!r} "
         for role in family_selection
     )
+    claude_required = any(
+        codex_family(family).runner == "claude" for family in family_selection.values()
+    )
+    if claude_required:
+        role_home_ready_clause += "&& command -v claude >/dev/null 2>&1 "
     log_event(
         LOG,
         "container.ensure.start",
@@ -583,6 +600,10 @@ def ensure_container(
         # Passing only the name keeps the secret value out of command logs;
         # Docker copies it from the backend process environment.
         cmd.extend(["-e", environment_name])
+    if claude_required:
+        for environment_name in CLAUDE_ENVIRONMENT:
+            if os.environ.get(environment_name, "").strip():
+                cmd.extend(["-e", environment_name])
     if CODEX_DOCKER_GPUS:
         cmd.extend(["--gpus", CODEX_DOCKER_GPUS])
     cmd.extend([CODEX_DOCKER_IMAGE, "sleep", "infinity"])
@@ -603,7 +624,8 @@ def ensure_container(
             container,
             "bash",
             "-lc",
-            _docker_init_script(backend_fingerprint),
+            _docker_init_script(backend_fingerprint)
+            + ("\ncommand -v claude >/dev/null\n" if claude_required else ""),
         ],
         timeout=300,
     )

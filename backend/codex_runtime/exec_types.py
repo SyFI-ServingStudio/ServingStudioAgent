@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 from .config import (
     DEFAULT_CODEX_EFFORT,
@@ -32,6 +33,7 @@ class CodexExecRequest:
     service_tier: str = DEFAULT_CODEX_SERVICE_TIER
     session_id: str | None = None
     output_schema: str | None = None
+    execution_id: str = field(default_factory=lambda: uuid4().hex)
 
     @property
     def family_id(self) -> str:

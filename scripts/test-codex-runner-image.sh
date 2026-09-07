@@ -97,7 +97,7 @@ require_writable_env_dir CARGO_HOME
 require_writable_env_dir UV_PROJECT_ENVIRONMENT
 require_writable_env_dir UV_CACHE_DIR
 
-for tool in cargo cc ld mold protoc python rustc uv; do
+for tool in cargo cc claude codex ld mold protoc python rustc uv; do
   command -v "$tool" >/dev/null || fail "required tool is missing: $tool"
 done
 

@@ -48,7 +48,7 @@ class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
                         turn_module, "ensure_container", return_value="container"
                     ),
                     patch.object(turn_module, "write_managed_context"),
-                    patch.object(turn_module, "run_codex", fake_run_codex),
+                    patch.object(turn_module, "run_agent", fake_run_codex),
                     patch.object(turn_module.asyncio, "to_thread", fake_to_thread),
                 ):
                     events = [
@@ -117,7 +117,7 @@ class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(turn_module, "container_running", return_value=True),
                 patch.object(turn_module, "ensure_container", return_value="container"),
                 patch.object(turn_module, "write_managed_context"),
-                patch.object(turn_module, "run_codex", fake_run_codex),
+                patch.object(turn_module, "run_agent", fake_run_codex),
                 patch.object(turn_module.asyncio, "to_thread", fake_to_thread),
             ):
                 events = [
@@ -199,7 +199,7 @@ class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(turn_module, "container_running", return_value=True),
                 patch.object(turn_module, "ensure_container", return_value="container"),
                 patch.object(turn_module, "write_managed_context"),
-                patch.object(turn_module, "run_codex", fake_run_codex),
+                patch.object(turn_module, "run_agent", fake_run_codex),
                 patch.object(turn_module.asyncio, "to_thread", fake_to_thread),
             ):
                 events = [
@@ -262,7 +262,7 @@ class OrchestratorDecisionTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(turn_module, "container_running", return_value=True),
                 patch.object(turn_module, "ensure_container", return_value="container"),
                 patch.object(turn_module, "write_managed_context"),
-                patch.object(turn_module, "run_codex", fake_run_codex),
+                patch.object(turn_module, "run_agent", fake_run_codex),
                 patch.object(turn_module.asyncio, "to_thread", fake_to_thread),
             ):
                 events = [
@@ -323,7 +323,7 @@ async def _run(
             patch.object(turn_module, "container_running", return_value=True),
             patch.object(turn_module, "ensure_container", return_value="container"),
             patch.object(turn_module, "write_managed_context"),
-            patch.object(turn_module, "run_codex", fake_run_codex),
+            patch.object(turn_module, "run_agent", fake_run_codex),
             patch.object(turn_module.asyncio, "to_thread", fake_to_thread),
         ):
             return [

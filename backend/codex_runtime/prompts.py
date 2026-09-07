@@ -403,12 +403,16 @@ def transport_failure_reason(role: str, failure: dict[str, Any]) -> str:
     Names the transport as the cause so an outage is not read as a model or
     parsing problem, which is what the generic wording used to imply.
     """
-    if failure.get("code") == "codex_call_timeout":
+    if failure.get("code") in {"codex_call_timeout", "agent_call_timeout"}:
         return (
             f"The {role} produced no output before its idle timeout, so this "
             "turn has no answer. The call reached no decision — this is a "
             "runtime stall, not a model or parsing problem."
         )
+    if failure.get("code") == "agent_invalid_output":
+        return f"The {role} did not return a valid decision. Continue the conversation to retry."
+    if failure.get("code") == "agent_runtime_failure":
+        return f"The {role} could not complete its agent call. Check the runner configuration and credentials, then retry."
     status = failure.get("status") or 0
     if failure.get("code") == "upstream_rate_limited":
         return (

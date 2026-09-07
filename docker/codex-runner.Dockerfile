@@ -12,7 +12,7 @@ ARG APP_UID=1001
 ARG APP_GID=1001
 ARG APP_USER=kanzhu
 ARG RUST_TOOLCHAIN=stable
-ARG RUNNER_VERSION=prebuilt-codex-runner-v10
+ARG RUNNER_VERSION=prebuilt-agent-runner-v11
 ARG VIBESIM_LOCK_SHA=unknown
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -187,6 +187,14 @@ RUN cd /workspace \
   && mv /workspace/target "${VIBESIM_BAKED_TARGET}"
 
 WORKDIR /workspace
+
+# Keep the Claude CLI layer independent of the CUDA/Python/Cargo caches.
+USER root
+ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code@2.1.250
+RUN npm install -g --include=optional "${CLAUDE_NPM_PACKAGE}" \
+  && command -v claude \
+  && claude --version
+USER ${APP_UID}:${APP_GID}
 
 # Metadata labels last so bumping the runner/codex version does not invalidate
 # the expensive apt/node/rust/prewarm layers above.

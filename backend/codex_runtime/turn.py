@@ -16,7 +16,7 @@ from typing import Any
 
 from ..logging_config import compact_text, log_event
 from ..managed_context import write_managed_context
-from .codex_cli import run_codex
+from .agent_cli import run_agent
 from .config import (
     AGENT_MODE_SCHEMA_IN_CONTAINER,
     DEFAULT_AGENT_MODE,
@@ -126,9 +126,9 @@ async def run_turn(
 
     runtime_container_name = container_name_for(workspace_id, conversation_id)
     if await asyncio.to_thread(container_running, runtime_container_name):
-        yield {"kind": "tool_call", "text": "checking Docker Codex container..."}
+        yield {"kind": "tool_call", "text": "checking Docker agent container..."}
     else:
-        yield {"kind": "tool_call", "text": "starting Docker Codex container..."}
+        yield {"kind": "tool_call", "text": "starting Docker agent container..."}
     container_started = loop.time()
     container_task = asyncio.create_task(
         asyncio.to_thread(
@@ -154,7 +154,7 @@ async def run_turn(
         elapsed = loop.time() - container_started
         yield {
             "kind": "tool_call",
-            "text": f"Docker Codex container check still running ({elapsed:.0f}s)...",
+            "text": f"Docker agent container check still running ({elapsed:.0f}s)...",
         }
 
     log_event(
@@ -316,7 +316,7 @@ async def run_turn(
             turn_id=turn_id,
             role=driver_role,
         )
-        async for ev in run_codex(
+        async for ev in run_agent(
             container,
             next_driver_prompt,
             label=driver_role,
@@ -520,7 +520,7 @@ async def _run_implementer(
         turn_id=turn_id,
         role="implementer",
     )
-    async for ev in run_codex(
+    async for ev in run_agent(
         container,
         prompt,
         label="implementer",
