@@ -542,6 +542,7 @@ def ensure_container(
         "docker",
         "run",
         "-d",
+        "--init",
         "--name",
         container,
         "--add-host",

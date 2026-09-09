@@ -391,6 +391,7 @@ class ClaudeStorageTests(unittest.TestCase):
                     role_families={"assistant": "claude"},
                 )
             command = execute.call_args_list[0].args[0]
+            self.assertIn("--init", command)
             self.assertIn("ANTHROPIC_API_KEY", command)
             self.assertNotIn("never-log-me", " ".join(command))
             self.assertIn("command -v claude", execute.call_args_list[1].args[0][-1])
