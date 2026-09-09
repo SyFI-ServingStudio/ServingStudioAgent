@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from backend.codex_runtime import config
 from backend.codex_runtime.codex_command import build_codex_exec_command
 from backend.codex_runtime.config import (
     ASSISTANT_SCHEMA_IN_CONTAINER,
@@ -9,6 +11,7 @@ from backend.codex_runtime.config import (
 )
 from backend.codex_runtime.exec_types import CodexExecRequest
 from backend.managed_context import MANAGED_CONTEXT_CONTAINER_PATH
+from model_catalog_fixture import install_model_catalog
 
 
 def _request(
@@ -36,6 +39,9 @@ def _request(
 
 
 class CodexCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        install_model_catalog(self)
+
     def test_deepseek_gets_an_explicit_model_and_effort(self) -> None:
         """Neither may fall back to the profile's config.toml default.
 
@@ -64,6 +70,16 @@ class CodexCommandTests(unittest.TestCase):
         self.assertIn("gpt-5.6-luna", command)
         self.assertIn('model_reasoning_effort="medium"', command)
         self.assertIn('service_tier="fast"', command)
+
+    def test_missing_catalog_does_not_enable_fast_service(self) -> None:
+        with (
+            patch.object(config, "_catalog_models", return_value={}),
+            patch.object(config, "_MODEL_REGISTRY_CACHE", {}),
+        ):
+            command = build_codex_exec_command(
+                _request(model_id="gpt-5.6-luna", service_tier="fast")
+            )
+        self.assertFalse(any("service_tier=" in option for option in command))
 
     def test_deepseek_does_not_receive_an_unsupported_service_tier(self) -> None:
         command = build_codex_exec_command(

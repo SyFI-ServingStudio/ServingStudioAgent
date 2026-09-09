@@ -15,6 +15,7 @@ from backend.migrate_workspaces import (
     repair_completed_timestamps,
 )
 from backend.store import Store, WorkspaceRegistry
+from model_catalog_fixture import install_model_catalog
 
 # A role the conversation's mode never drives still round-trips, at defaults.
 UNUSED_ROLE_RUNTIME = {
@@ -69,6 +70,9 @@ def _write_legacy_conversation_database(database_path: Path) -> None:
 
 
 class WorkspaceStoreTest(unittest.TestCase):
+    def setUp(self) -> None:
+        install_model_catalog(self)
+
     def make_registry(self, temporary_directory: str) -> WorkspaceRegistry:
         root = Path(temporary_directory)
         main_dir = root / "main"
