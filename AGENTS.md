@@ -13,12 +13,12 @@ Always answer in English in the user-facing chat.
 
 ## Workspace Model
 
-- The source project is `../main`.
+- The source project is `../VibeSim`.
 - Runtime state lives under `../agent-workspaces/<workspace-id>/`.
 - A managed workspace owns one copied repo and may contain many conversations;
   those conversations intentionally share files, branches, logs, and
   experiments.
-- `w_main` points to the real `../main` development checkout. Other workspaces
+- `w_main` points to the real `../VibeSim` development checkout. Other workspaces
   copy only its git-tracked files and initialize their own local git repo.
 - Each conversation keeps an isolated Codex home, session set, temporary state,
   rollout log, and Docker container.

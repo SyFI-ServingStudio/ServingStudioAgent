@@ -10,6 +10,24 @@ from backend.store import WorkspaceRegistry
 
 
 class WorkspaceRuntimeTest(unittest.TestCase):
+    def test_default_registry_uses_renamed_sibling_checkout(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "VibeSim"
+            (source / "logs").mkdir(parents=True)
+            agent_store = root / "VibeSimAgent" / "backend" / "store.py"
+            with patch("backend.store.__file__", str(agent_store)):
+                registry = WorkspaceRegistry(root / "agent-workspaces")
+            descriptor = registry.get("w_main")
+            descriptor_root = root / "agent-workspaces" / "w_main"
+            self.assertEqual(
+                (descriptor_root / descriptor["repo_path"]).resolve(), source
+            )
+            self.assertEqual(
+                (descriptor_root / descriptor["logs_path"]).resolve(), source / "logs"
+            )
+            self.assertFalse((root / "main").exists())
+
     def test_prepare_materializes_external_symlink_target(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             temporary_root = Path(temporary_directory)

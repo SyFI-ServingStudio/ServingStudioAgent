@@ -6,7 +6,7 @@ set -euo pipefail
 
 ui_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workspace_dir="$(cd "$ui_dir/.." && pwd)"
-main_dir="$workspace_dir/main"
+main_dir="$workspace_dir/VibeSim"
 
 default_image_owner="$(id -un | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_.-' '-')"
 default_image_owner="${default_image_owner%-}"
@@ -101,7 +101,7 @@ for tool in cargo cc claude codex ld mold protoc python rustc uv; do
   command -v "$tool" >/dev/null || fail "required tool is missing: $tool"
 done
 
-# Exercise the linker selected by main/.cargo/config.toml before the expensive
+# Exercise the linker selected by VibeSim/.cargo/config.toml before the expensive
 # workspace build so a broken image fails with a small, local diagnostic.
 native_smoke_dir="$(mktemp -d /workspace/.runner-native-smoke.XXXXXX)"
 trap '\''rm -rf "$native_smoke_dir"'\'' EXIT

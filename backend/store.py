@@ -84,7 +84,7 @@ def default_workspaces_root() -> Path:
 
 
 def default_main_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "main"
+    return Path(__file__).resolve().parents[2] / "VibeSim"
 
 
 class WorkspaceRegistry:

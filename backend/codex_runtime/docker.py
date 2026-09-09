@@ -311,7 +311,7 @@ fi
 
 if [ ! -d "$APP_HOME" ] || [ ! -w "$APP_HOME" ]; then
   echo "prebuilt Docker image '$RUNTIME_IMAGE' does not provide writable home $APP_HOME for $APP_UID:$APP_GID" >&2
-  echo "rebuild it with: user-facing-ui/scripts/build-codex-runner-image.sh" >&2
+  echo "rebuild it with: VibeSimAgent/scripts/build-codex-runner-image.sh" >&2
   exit 127
 fi
 
@@ -345,7 +345,7 @@ fi
 for tool in bash cargo git just node npm nvcc python python3 rustc uv codex; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "prebuilt Docker image '$RUNTIME_IMAGE' is missing required tool: $tool" >&2
-    echo "build it with: user-facing-ui/scripts/build-codex-runner-image.sh" >&2
+    echo "build it with: VibeSimAgent/scripts/build-codex-runner-image.sh" >&2
     exit 127
   fi
 done

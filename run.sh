@@ -22,7 +22,7 @@ fi
 if [ "${CODEX_SKIP_IMAGE_BUILD:-0}" != "1" ]; then
   image_version="$(docker image inspect -f '{{ index .Config.Labels "org.vibesim.ui.codex-runner.version" }}' "$CODEX_DOCKER_IMAGE" 2>/dev/null || true)"
   image_lock_sha="$(docker image inspect -f '{{ index .Config.Labels "org.vibesim.ui.main-lock-sha" }}' "$CODEX_DOCKER_IMAGE" 2>/dev/null || true)"
-  current_lock_sha="$(sha256sum ../main/uv.lock | awk '{print $1}')"
+  current_lock_sha="$(sha256sum ../VibeSim/uv.lock | awk '{print $1}')"
   if [ "${CODEX_FORCE_IMAGE_BUILD:-0}" = "1" ] \
     || [ "$image_version" != "$CODEX_RUNNER_IMAGE_VERSION" ] \
     || [ "$image_lock_sha" != "$current_lock_sha" ]; then

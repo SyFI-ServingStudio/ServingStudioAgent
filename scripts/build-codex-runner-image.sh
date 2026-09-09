@@ -3,7 +3,7 @@ set -euo pipefail
 
 ui_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workspace_dir="$(cd "$ui_dir/.." && pwd)"
-main_dir="$workspace_dir/main"
+main_dir="$workspace_dir/VibeSim"
 cd "$ui_dir"
 
 default_image_owner="$(id -un | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9_.-' '-')"

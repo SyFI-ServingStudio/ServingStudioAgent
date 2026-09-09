@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared "copy main/ the way the runner sees it" helper.
+# Shared "copy VibeSim/ the way the runner sees it" helper.
 #
 # `build-codex-runner-image.sh` (build context) and `test-codex-runner-image.sh`
 # (smoke workspace) must assemble byte-identical trees: the test exists to prove
@@ -49,7 +49,7 @@ _main_tree_copy_tracked_files() {
 
 # copy_main_tree <main_dir> <destination_root>
 #
-# Copies main/'s tracked files plus the tracked files of every submodule that is
+# Copies VibeSim/'s tracked files plus the tracked files of every submodule that is
 # not in MAIN_TREE_SKIPPED_SUBMODULES. Fails loudly on an uninitialized
 # submodule rather than producing a tree that cannot build.
 copy_main_tree() {

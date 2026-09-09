@@ -10,7 +10,7 @@ For a complete deployment, clone the
 meta-repository and follow its `reproduce.md`.
 
 A workspace owns one repo/logs root and may contain many conversations. A
-managed workspace gets one isolated copy of git-tracked files from `../main`;
+managed workspace gets one isolated copy of git-tracked files from `../VibeSim`;
 all conversations in that workspace reuse it. `w_main` points at the real
 development checkout and is never copied or rewritten by workspace creation.
 Each conversation still gets its own Codex home and Docker container.
@@ -166,7 +166,7 @@ and [CLI reference](https://code.claude.com/docs/en/cli-reference).
 ### Start the service
 
 ```bash
-cd user-facing-ui
+cd VibeSimAgent
 ./run.sh
 # then open http://<host>:8765
 ```
@@ -186,7 +186,7 @@ sources by `analyzer_resource_id`. Simulation sweeps are discovered directly
 from Analyzer and linked to conversations through experiment relationships.
 
 The backend uses a prebuilt local Docker image for the Codex runner. If the image
-is missing, its VibeSim runner label is stale, or its baked `main/uv.lock` hash
+is missing, its VibeSim runner label is stale, or its baked `VibeSim/uv.lock` hash
 does not match the current checkout, `run.sh` builds it once from
 `docker/codex-runner.Dockerfile`; later turns and later conversations reuse that
 image. The image is based on CUDA 12.8 devel and includes Node/Codex, `uv`, git,
@@ -207,7 +207,7 @@ set to the matching `/home/<user>` path.
 To rebuild the runner image explicitly:
 
 ```bash
-cd user-facing-ui
+cd VibeSimAgent
 export CODEX_DOCKER_IMAGE="vibesim-ui-codex-runner:${USER}"
 CODEX_FORCE_IMAGE_BUILD=1 ./scripts/build-codex-runner-image.sh
 ```
@@ -222,7 +222,7 @@ valid for one account and unusable by another. Keep the same
 After building the image, run the non-GPU acceptance test:
 
 ```bash
-cd user-facing-ui
+cd VibeSimAgent
 ./scripts/test-codex-runner-image.sh build
 ```
 
@@ -250,7 +250,7 @@ build that must not be treated as ready for agent conversations.
 The compatibility chat shell can run its Vite frontend against the same backend:
 
 ```bash
-cd user-facing-ui
+cd VibeSimAgent
 ./run.sh
 # in another shell
 cd frontend
@@ -389,7 +389,7 @@ The four `backend/prompts/AGENTS*.md` files hold the
 detailed shared role and skill instructions. One is mounted read-only into each
 conversation container as `/workspace/AGENTS.md`; this preserves Codex's native
 project-instruction discovery and per-conversation mode without changing shared
-workspace contents. The tracked blank `main/AGENTS.md` is a fail-safe bind
+workspace contents. The tracked blank `VibeSim/AGENTS.md` is a fail-safe bind
 target—Codex skips it outside the managed container, and Docker refuses to start
 if a workspace lacks that target. The workspace keeps `.codex/skills ->
 ../skills` so Codex can discover the copied repo-local skills. Later turns
@@ -587,7 +587,7 @@ Docker GPU forwarding.
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `backend/app.py`                            | FastAPI routes + SSE streaming + Vite static serving                                                     |
 | `backend/codex_runtime/config.py`           | environment, path, mode, prompt-fingerprint settings                                                     |
-| `backend/codex_runtime/workspace.py`        | per-workspace `main/` copy and local git bootstrap                                                       |
+| `backend/codex_runtime/workspace.py`        | per-workspace `VibeSim/` copy and local git bootstrap                                                       |
 | `backend/codex_runtime/docker.py`           | Docker container lifecycle and isolated Codex home setup                                                 |
 | `backend/codex_runtime/exec_types.py`       | shared Codex execution request/event types                                                               |
 | `backend/codex_runtime/codex_command.py`    | Docker + `codex exec` command construction                                                               |
@@ -640,7 +640,7 @@ Docker GPU forwarding.
   default `stable`.
 - `CODEX_RUNNER_IMAGE_VERSION` — expected image label, default
   `prebuilt-agent-runner-v11`. `run.sh` rebuilds when this label differs or when
-  the baked `main/uv.lock` hash differs. Ordinary VibeSim source changes do not
+  the baked `VibeSim/uv.lock` hash differs. Ordinary VibeSim source changes do not
   rebuild the image; Cargo compiles first-party crates inside each workspace
   against the dependency-only target seed.
 - `CODEX_SKIP_RUNNER_IMAGE_TEST=1` — skip the post-build non-GPU runner
@@ -654,7 +654,7 @@ Docker GPU forwarding.
 - `CODEX_DOCKER_GPUS` — value passed to `docker run --gpus`, default `all`.
   Set it to an empty string to run without GPU forwarding.
 - `CODEX_DOCKER_DG_USE_LOCAL_VERSION` — DeepGEMM build mode inside Docker,
-  default `0`. This is the repo-supported DeepGEMM path from `main/justfile`;
+  default `0`. This is the repo-supported DeepGEMM path from `VibeSim/justfile`;
   it keeps DeepGEMM enabled while avoiding install-time build-clone assertions.
 - `CODEX_DOCKER_UID`, `CODEX_DOCKER_GID`, `CODEX_DOCKER_USER`,
   `CODEX_DOCKER_HOME` — optional container identity override. Defaults to the

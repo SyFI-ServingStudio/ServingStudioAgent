@@ -14,12 +14,12 @@ from backend.agents_prompt import ensure_rendered
 
 WORKSPACE = Path(__file__).resolve().parents[3]
 UI_DIR = Path(__file__).resolve().parents[2]
-MAIN_DIR = WORKSPACE / "main"
+MAIN_DIR = WORKSPACE / "VibeSim"
 AGENT_WORKSPACES_ROOT = Path(
     os.environ.get("VIBESIM_WORKSPACES_ROOT", WORKSPACE / "agent-workspaces")
 ).expanduser()
 # Legacy state is migration input only. New runtime code must not create data
-# below user-facing-ui/workspaces.
+# below VibeSimAgent/workspaces.
 LEGACY_WORKSPACES_DIR = UI_DIR / "workspaces"
 PROMPTS_DIR = UI_DIR / "backend" / "prompts"
 PROMPTS_CONTAINER_DIR = "/opt/vibesim/prompts"
