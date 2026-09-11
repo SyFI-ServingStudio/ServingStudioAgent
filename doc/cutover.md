@@ -1,10 +1,53 @@
 # Agent Deployment Cutover
 
-This is a preparation record, not authorization to switch a running service.
-Provider resume, stopped-state migration rehearsal and final image acceptance
-must pass before the Phase 6 cutover in `plan.md`. The old deployment remains active.
+The production cutover completed on 2026-09-11. The records below include both
+the completed operation and its historical preparation evidence.
 
-## Frozen Candidate
+## Completed Cutover
+
+Deployed runtime code is Agent `0fcc625` (including source cleanup `202db36`),
+launcher `38d46f7` and UI `ece7120`; documentation commits may advance the Agent pin.
+
+The owner explicitly authorized migration while `areal_banking_prod` and
+`areal_keepalive` retained their broad writable mounts. Their full identities and
+mounts were captured and rechecked as external exceptions; neither was stopped.
+Additional old Agent instances sharing the state on ports 63040 and 63043 were
+stopped by audited process identity, along with the old UI/Analyzer entries and
+the original five-service stack. Four owned runtime containers were stopped and retained.
+
+An independent backup contains 95,208 entries and 33,589,997,727 unique bytes.
+The main checkout's logs were additionally backed up (8,336,629,261 bytes), and
+its previous tracked source was archived before fast-forwarding to launcher
+`38d46f7`. Other external experiment repositories and logs remain at their
+original paths; the Agent state backup does not claim to cover them.
+All seven databases converted successfully into `agent-workspaces-v2`.
+The original state inventory still matched the independent backup after migration.
+Selection publication and final source verification completed at 20:45:34 UTC.
+
+The new services run on `tmp/agent-production.sock`, with scripts and logs in
+`tmp/agent-refactor-deployment/`. The provider YAML, startup configuration,
+selection, shutdown receipt and backups are retained in `tmp/agent-cutover-final/`;
+these paths are live deployment dependencies. Agent and Analyzer share the
+migrated registry. UI ports 5177 and 63042 remain available. Agent ports 63040,
+63043 and 18765 forward to 8765; Analyzer ports 63041, 63044 and 18787 forward to 8787.
+
+Production verification passed: all four historical conversations retained
+their ten messages and original metadata, five turns replayed, all service
+addresses responded, and eight old/new callback endpoints rejected missing
+credentials. Desktop and mobile browser checks rendered the 264-result catalog
+without page errors or horizontal overflow. One new Claude and one new Codex
+turn succeeded in an isolated test workspace; their conversations and containers
+were removed, the test workspace was archived, and host authentication files
+were unchanged. No historical conversation was sent to a provider during cutover.
+
+Evidence: `migration-complete.json`, `backup-report.json`, `verification.json`,
+`browser.json` and `provider-smoke.json` under the control directory. Initial
+startup probe and obsolete npm-script errors were corrected and their logs
+retained. The old deployment is stopped; its source and state remain recovery
+assets. With new writes admitted, recovery must preserve those writes rather
+than replacing current state with the old snapshot.
+
+## Pre-Cutover Candidate
 
 The implemented component candidates are Agent `e90d58b`, integrated launcher `38d46f7`
 and UI `ece7120`. These are local commits, not deployed revisions. The local
@@ -60,7 +103,7 @@ the implementer role prefix and received a refusal. It is not a passing baseline
 These results complete private provider acceptance, not production migration,
 observation, legacy retirement or an actual OAuth refresh.
 
-## Observed Deployment
+## Prior Deployment
 
 On 2026-09-11, the workspace's five `agent-workspaces/services/*.sh` scripts
 describe this deployment. Script contents are not proof of a process's current
@@ -209,20 +252,20 @@ The candidate checkout contains only the new implementation. The independently
 running old checkout and its source archive remain available; retire those deployment
 assets only after acceptance and observation. Keep state backups through the rollback window.
 
-## Current Stop Audit
+## Initial Stop Audit
 
 The final read-only inventory found seven workspaces with no running turns. All
 historical provider sessions use GPT; their configured models are `gpt-5.6-sol`
 and `gpt-5.6-luna`. Existing callback aliases remain necessary for copied launchers.
 
-The shutdown audit currently rejects two non-Agent containers, `areal_banking_prod`
+The initial shutdown audit rejected two non-Agent containers, `areal_banking_prod`
 and `areal_keepalive`, with writable mounts of all `/raid`. Their ownership is not
-established by the Agent deployment. No service or container was stopped, and no
-production migration target was created. Checking current open files would not
-prove that these containers cannot write later; their owners must resolve this
-mount scope before recapturing the audit. Do not bypass this rejection.
+established by the Agent deployment. At that stage no service was stopped and no
+target was created. The owner subsequently accepted them remaining active; the
+completed operation above records the explicit audited exceptions. This does not
+establish that those external containers are physically prevented from writing.
 
 The retained legacy source is commit `e26ad6d`. Its private archive is
 `tmp/agent-cutover-final/legacy-agent.tar`, SHA256
 `b7036bc7ff3982681c5382c877365bd6906cf2e6f01f516e9ce80193282e9952`.
-This is a source archive, not the still-pending stopped-state data backup.
+This is a source archive, separate from the completed state backup above.

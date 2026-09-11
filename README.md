@@ -5,7 +5,7 @@ conversations, turns, provider sessions and managed jobs. VibeSimUI is the brows
 application; Rust Analyzer owns numerical results and their catalogs.
 
 This branch implements the new `vibesim_agent` service. Private Codex/Claude
-migration and resume acceptance has passed; production cutover remains outstanding.
+migration and resume acceptance and the production cutover passed on 2026-09-11.
 `run.sh` starts this service. The browser application lives in VibeSimUI.
 The separately retained old deployment is documented in
 [Legacy Backend](LEGACY_BACKEND.md); its commands require the frozen old checkout.

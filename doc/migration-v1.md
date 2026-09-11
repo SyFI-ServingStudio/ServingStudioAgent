@@ -90,9 +90,17 @@ exact panes, script hashes and source-mounted container identities for review.
 have exited, then disables container restart and stops the audited containers.
 Containers and writable layers are retained. New containers, changed identities,
 foreign processes and active broader writable mounts fail instead of expanding ownership.
-Unrelated broader mounts are ignored only when the container is explicitly stopped
+By default, unrelated broader mounts are ignored only when the container is explicitly stopped
 and its restart policy is `no` or `unless-stopped`; they are never adopted as owned
 containers. Unknown state or other restart policies fail the broader-mount check.
+An operator may explicitly accept specified external containers remaining active
+with `capture_deployment(..., external_containers=(full_id, ...))`. The report
+records each complete ID, name, image and mount inventory; every shutdown check
+revalidates them, ignoring mount order but preserving all fields and duplicates.
+These exceptions can have broader mounts only, never direct source mounts, and
+are never stopped by the adapter. Unknown broader writers still fail. This is
+an explicit acceptance of possible external writes, not filesystem isolation;
+source-change detection and independent backup verification remain necessary.
 The owner must separately exclude independent host writers; manual restarts are
 outside this dedicated deployment contract. No old service is restarted on exit.
 
