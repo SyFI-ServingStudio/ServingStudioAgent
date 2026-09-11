@@ -56,8 +56,8 @@ guarantees. The new state root is deliberately private (`0700`).
 workspaces, through scratch copies. It rejects mixed, unknown or damaged formats.
 This inspection does not establish that old writers have stopped.
 
-`tools/startup_selection.py` provides the selection-record component for the
-planned managed startup. Before first publication, it checks the original source
+`tools/startup_selection.py` provides the selection-record component for
+managed cutover. Before first publication, it checks the original source
 and migrated target against the successful migration report, the actual provider
 and runner mappings, the migration mode and the target database format. The
 record resides outside both state roots and external workspace repo/log paths.
@@ -118,7 +118,10 @@ does not restart old services. The target selection record still independently
 validates the migration and provider mappings; this receipt cannot replace it.
 
 The managed entry below connects these components. These checks do not prove
-provider resume or exclude independent writers.
+provider resume or exclude independent writers. Use it for cutover, then validate
+the published target with `selected-root` and adopt ordinary `serve` with that
+target as `VIBESIM_AGENT_WORKSPACES_ROOT`. Do not make the old shutdown receipt,
+container inventory or boot ID permanent normal-startup dependencies.
 
 ### Recovery After A Host Reboot
 
@@ -148,23 +151,19 @@ to ordinary current-state startup:
    services' selected paths before reopening admission. Preserve new writes;
    never replace the target with the old snapshot.
 
-This is a manual deployment transition, not automatic reboot recovery. Retain
-the original evidence and record the replacement service configuration. Partial
-or unpublished migrations require separate inspection and cannot use this path.
-
-The adapter and coordinator have also passed an isolated real tmux/Docker exercise:
-parent and child service processes terminated, container restart was disabled,
-legacy state was migrated, and a second coordinator invocation preserved new data.
-Unrelated fixture resources survived the owned shutdown; all fixture resources
-were then cleaned up. This exercised the coordinator, not a production cutover or
-an actual new application restart.
+Perform this ordinary-startup transition as part of a successful cutover rather
+than waiting for a reboot. Retain the original evidence and record the replacement
+service configuration. Partial or unpublished migrations require separate
+inspection and cannot use this path.
 
 ## Managed Startup Entry
 
 `python -m vibesim_agent serve --startup-config /absolute/deployment/startup.json`
 holds the shutdown/migration context through application creation, Uvicorn serving
-and shutdown. Without this option, `serve` retains explicit initialized-state
-behavior. New application settings and runtime namespaces use the selected root.
+and shutdown. This is the cutover entry, not the permanent production startup
+command. Without this option, `serve` uses the initialized root configured by
+`VIBESIM_AGENT_WORKSPACES_ROOT`. Application settings and runtime namespaces use
+the selected root during cutover.
 Failure never automatically restarts the legacy service or overwrites a target.
 
 The JSON file has exactly these fields (all file paths must be absolute):
@@ -220,12 +219,11 @@ selection, changed configuration or changed external paths fails the command;
 the caller must propagate failure instead of falling back to another registry.
 It is a root resolver, not an Analyzer supervisor or proof that Agent is healthy.
 
-A private real CLI rehearsal has passed two Uvicorn application lifetimes through
-this entry: automatic migration, HTTP conversation creation and workspace rename,
-normal SIGTERM shutdown, restart, persisted HTTP data, unchanged selection/receipt
-and unchanged legacy source. `selected-root` returned the same target in both
-lifetimes. This exercise used no provider requests and started no Analyzer process;
-provider resume, coordinated deployment and production switching remain pending.
+After validating the result, persist the returned absolute target in the ordinary
+Agent and Analyzer service configuration. Start Agent with `serve` and no
+`--startup-config`; Analyzer reads that target's `registry.json`. Keep the selection
+and receipt as migration evidence. Their validation does not replace HTTP health,
+provider resume or coordinated service checks.
 
 `verified=true` means the assembled state passed conversion and file checks.
 `resume_verified`, `external_paths_verified` and `execution_isolation_verified`
@@ -365,16 +363,6 @@ copies; hardlink groups crossing a shared/role merge are not guaranteed to stay
 linked, while the original tree preserves those relationships. A migration must
 not mark real resume validation complete from file presence alone.
 
-## Remaining Acceptance
-
-Private stopped-state migration and independent external repository rehearsals
-have passed, as have real GPT resume for both roles, application/container
-recreation, orchestration and network stream/cancellation checks. These checks
-do not migrate the production workspaces. Claude resume remains unverified;
-the recorded baseline attempts failed with upstream account-pool errors.
-The final production stopped-state snapshot, dependency review, cutover and
-rollback checks remain outstanding. See [cutover evidence](cutover.md).
-
 ## Real Resume Rehearsal
 
 Prepare each external repository in its own bundle with
@@ -445,14 +433,10 @@ state and repositories remain unchanged. Restart the new service at the same
 root and repeat. For orchestrated mode, verify orchestrator and implementer
 sessions separately. Check targeted cancellation and a subsequent resume too.
 
-The real-state preflight found four GPT assistant sessions; no historical
-orchestrator/implementer sessions or Claude sessions were present. Build missing
-dual-role and Claude baselines using the old implementation
-in a separate fixture workspace and container. After it creates real historical
-sessions, stop its writers, migrate that fixture and verify the same session IDs
-with the new implementation. Keep the `/workspace` cwd and CLI/backend identity
-consistent. Cover both historical roles before claiming Claude dual-role resume;
-single-role success alone does not establish that result. The private GPT
-dual-role baseline and migrated resume checks have passed. Claude baseline and
-dual-role resume remain pending; file and database conversion tests do not
-substitute for them.
+When existing data lacks a required provider or role, create a baseline using the
+legacy implementation in a separate fixture workspace and container. After it
+creates real sessions, stop its writers, migrate the fixture and verify the same
+session IDs with the current implementation. Keep the `/workspace` cwd and
+CLI/backend identity consistent. Cover both historical roles before claiming
+dual-role resume; single-role success and database/file conversion do not
+establish that result. Complete the [cutover checks](cutover.md) separately.

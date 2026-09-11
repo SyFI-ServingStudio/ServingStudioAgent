@@ -1,140 +1,85 @@
-# Agent Deployment Cutover
+# Deployment Cutover
 
-The production cutover completed on 2026-09-11. The records below include both
-the completed operation and its historical preparation evidence.
+Use this procedure when replacing a legacy Agent deployment. Keep deployment
+scripts, provider configuration, logs, audit records and backups outside Git and
+outside both state roots. Use durable deployment paths, not disposable temporary
+directories. See [Migration](migration-v1.md) for converter and startup formats.
 
-## Completed Cutover
+## Prepare
 
-Deployed runtime code is Agent `0fcc625` (including source cleanup `202db36`),
-launcher `38d46f7` and UI `ece7120`; documentation commits may advance the Agent pin.
+Record the Agent, VibeSim launcher and VibeSimUI revisions, immutable runner image,
+dependency lock hashes, Analyzer executable and service configuration. Validate
+their integration before admitting production writes. Existing copied launchers
+still require the [legacy callback aliases](managed-jobs.md).
 
-The owner explicitly authorized migration while `areal_banking_prod` and
-`areal_keepalive` retained their broad writable mounts. Their full identities and
-mounts were captured and rechecked as external exceptions; neither was stopped.
-Additional old Agent instances sharing the state on ports 63040 and 63043 were
-stopped by audited process identity, along with the old UI/Analyzer entries and
-the original five-service stack. Four owned runtime containers were stopped and retained.
+Identify every service port, process, supervisor and container that can write the
+source state or external repositories. Follow the parent workspace's port and
+ownership conventions. Do not stop unrelated services or infer ownership from a
+name. Record broad writable mounts as well as direct state mounts. An explicitly
+accepted external writer is still able to change files; it is not isolated by
+the audit exception.
 
-An independent backup contains 95,208 entries and 33,589,997,727 unique bytes.
-The main checkout's logs were additionally backed up (8,336,629,261 bytes), and
-its previous tracked source was archived before fast-forwarding to launcher
-`38d46f7`. Other external experiment repositories and logs remain at their
-original paths; the Agent state backup does not claim to cover them.
-All seven databases converted successfully into `agent-workspaces-v2`.
-The original state inventory still matched the independent backup after migration.
-Selection publication and final source verification completed at 20:45:34 UTC.
+Prepare provider mappings using the exact profile paths, endpoints and connection
+IDs intended for the new service. Keep credentials in their configured sources,
+not migration reports or scripts. Supply shell-wrapper credentials explicitly or
+retain the required wrapper; Agent does not inspect interactive shell functions.
 
-The new services run on `tmp/agent-production.sock`, with scripts and logs in
-`tmp/agent-refactor-deployment/`. The provider YAML, startup configuration,
-selection, shutdown receipt and backups are retained in `tmp/agent-cutover-final/`;
-these paths are live deployment dependencies. Agent and Analyzer share the
-migrated registry. UI ports 5177 and 63042 remain available. Agent ports 63040,
-63043 and 18765 forward to 8765; Analyzer ports 63041, 63044 and 18787 forward to 8787.
+## Stop And Back Up
 
-Production verification passed: all four historical conversations retained
-their ten messages and original metadata, five turns replayed, all service
-addresses responded, and eight old/new callback endpoints rejected missing
-credentials. Desktop and mobile browser checks rendered the 264-result catalog
-without page errors or horizontal overflow. One new Claude and one new Codex
-turn succeeded in an isolated test workspace; their conversations and containers
-were removed, the test workspace was archived, and host authentication files
-were unchanged. No historical conversation was sent to a provider during cutover.
+Close admission, drain or cancel active work, and stop old backends, runtime
+containers, jobs and restart supervisors. Confirm that all relevant writers remain
+stopped before copying state. A process inventory or two matching file scans alone
+does not prove an instantaneous snapshot.
 
-Evidence: `migration-complete.json`, `backup-report.json`, `verification.json`,
-`browser.json` and `provider-smoke.json` under the control directory. Initial
-startup probe and obsolete npm-script errors were corrected and their logs
-retained. The old deployment is stopped; its source and state remain recovery
-assets. With new writes admitted, recovery must preserve those writes rather
-than replacing current state with the old snapshot.
+Create and verify an independent backup of the complete state root, including
+SQLite sidecars and provider homes. Back up external repositories and logs
+separately where required; the state root does not contain those bytes. Retain
+the old source revision, images and service configuration for recovery. A source
+archive or migration manifest alone is not a data backup.
 
-## Pre-Cutover Candidate
+Run the offline converter with an absent target, or use the audited managed
+cutover entry. Never initialize the old state with `init`, and never serve an
+incomplete migration target. Keep first-start logs outside the target.
 
-The implemented component candidates are Agent `e90d58b`, integrated launcher `38d46f7`
-and UI `ece7120`. These are local commits, not deployed revisions. The local
-`tmp/agent-refactor-deployment/release.sh` records full commits and artifact hashes;
-later documentation-only commits may advance its Agent pin without changing code.
-Its UI script now selects `wt-agent-ui-compat`, containing the accepted settings,
-citations and pagination fixes. Historical main workspace paths remain unchanged.
+## Switch And Verify
 
-Before managed startup can stop the old deployment, the candidate backend checks
-the Agent/UI revisions, tracked changes and unexpected untracked files, the
-complete integrated main commit and both dependency lock hashes, Analyzer checksum
-and local immutable runner image with its uv-lock label. Each bridge also checks Agent source. The current
-main checkout still requires launcher integration; this check rejects it before
-migration. Existing copied workspaces retain the tested legacy callback aliases.
+After successful conversion and selection publication, validate historical reads,
+message identities, SSE replay, citations, workspace discovery and managed
+callbacks. Verify required provider resumes in isolated fixtures using the
+original session IDs; conversion success does not establish resumability.
+Run [browser integration checks](browser-acceptance.md) against the matching UI
+and Analyzer. Confirm Agent and Analyzer use the same registry.
 
-The accepted Node22 runner image is
-`sha256:9dc036db25b06d1c28d6f7dcaac60987e8441788fdc0c26d9dc95a6dc01475a4`
-(tag `vibesim-agent-runner:kanzhu-refactor-v12-node22`). Build evidence is
-`tmp/agent-final-image-96v01nld/report.json`; real runtime evidence is
-`tmp/agent-runtime-real-fft3c7rt/report.json`. The accepted Analyzer executable is
-`tmp/agent-analyzer-build-mwml3zse/repo/target/release/analyze`, SHA256
-`1a3ff3f88d1d936fa87443e6e5fc3a283a84b651a6aadc9d2f38d844f56f13aa`.
-The candidate scripts pin these artifacts. The older image observations below
-describe earlier evidence and the original deployment, not this candidate.
+Before adopting the permanent service configuration, resolve the published target
+with the same provider configuration used for cutover:
 
-Version checks do not establish provider acceptance or current deployment
-ownership. A fresh stop audit, final backup/migration,
-production cutover and observation are still required. No candidate script has
-been installed or started; only read-only release checks have run.
+```bash
+uv run --frozen python -m vibesim_agent selected-root \
+  --startup-config /deployment/control/startup.json
+```
 
-## Private Acceptance
+Check the command succeeds, then configure its exact returned absolute path as
+`VIBESIM_AGENT_WORKSPACES_ROOT`. Configure Analyzer with
+`--workspace-registry /deployment/current-state/registry.json`, substituting that
+same validated target. Normal Agent starts use:
 
-The final Agent regression passed 828 tests in 40.058 seconds after fixing Docker
-management commands to use closed standard input. Provider prompt pipes are unchanged.
-The following real checks used the accepted image, private synthetic repositories
-and official provider connections; they did not send production history.
+```bash
+uv run --frozen python -m vibesim_agent serve
+```
 
-- Claude legacy migration: `tmp/agent-claudeme-tracking-final/baseline.json` and
-  `migration-resume.json`. The frozen old backend created both role sessions;
-  both retained their original IDs, recalled exact identifiers and advanced their
-  original transcripts across two new application lifespans and container recreations.
-- Mixed delegation: `tmp/agent-mixed-orchestration-kynwx7p7/report.json`.
-  Real HTTP ASGI orchestration ran Claude, Codex, then the original Claude session;
-  the implementer wrote the specified file and history, SSE and replay agreed.
-- Cancel then continue: `tmp/agent-cancel-resume-final/report.json`.
-  Real TCP cancellation stopped an observed live tool process before container
-  removal; the next turn used the same Codex session and recalled the exact marker.
+Do not pass `--startup-config` on every production restart. That entry retains
+legacy shutdown checks, including boot ID and audited container identities.
+Ordinary startup validates the current schema and ownership without requiring
+obsolete deployment containers or a pre-reboot receipt. Ensure the old deployment
+cannot restart; ordinary `serve` does not enforce legacy shutdown.
 
-All three reports passed source/profile preservation and private credential/container
-cleanup checks. The TCP test also released its service port. Earlier failed fixtures
-remain recorded separately; in particular, the original Claude marker fixture omitted
-the implementer role prefix and received a refusal. It is not a passing baseline.
-These results complete private provider acceptance, not production migration,
-observation, legacy retirement or an actual OAuth refresh.
-
-## Prior Deployment
-
-On 2026-09-11, the workspace's five `agent-workspaces/services/*.sh` scripts
-describe this deployment. Script contents are not proof of a process's current
-environment; recheck the owned processes at cutover.
-
-| Service | Current Address | Target Change |
-| --- | --- | --- |
-| Agent | `127.0.0.1:8765` | New package and migrated state root |
-| Agent bridge | `172.17.0.1:18765` | Forward to the same Agent port |
-| Analyzer | `127.0.0.1:8787` | Read the migrated `registry.json` |
-| Analyzer bridge | `172.17.0.1:18787` | Forward to the same Analyzer port |
-| UI | `127.0.0.1:5177` | Preserve proxy targets and strict port selection |
-
-These are existing deployment ports, not ports for a concurrent rehearsal.
-Check occupancy and ownership before changing services. Use the root
-`reproduce.md` per-user convention for a separate deployment and never silently
-change ports. Revalidate the Docker bridge address on the actual host.
-
-The five services were rechecked on the dedicated tmux socket
-`/tmp/tmux-1003/vibesim-kanzhu` (`tmux -L vibesim-kanzhu`), with one pane per named
-service and each pane launching its corresponding script above. This is not a
-session named `vibesim-kanzhu` on the default socket. The default socket hosts
-other work, and root `scripts/services.sh` uses yet another socket for its three
-services. Neither is an interchangeable stop command for this deployment.
-The new `tools/tmux_deployment.py` adapter targets only an explicitly audited
-dedicated server. Do not treat script names or this observation as a permanent
-process identity; capture and validate live evidence before an actual cutover.
+Keep executable release code and mutable workspace data separate. Check release
+artifacts when deploying, but do not require an editable external `w_main`
+checkout to remain clean or at one commit for normal service restarts.
 
 ## Configuration Changes
 
-| Old Agent Key | New Host Key |
+| Legacy Key | Current Key |
 | --- | --- |
 | `VIBESIM_WORKSPACES_ROOT` | `VIBESIM_AGENT_WORKSPACES_ROOT` |
 | `CODEX_DOCKER_IMAGE` | `VIBESIM_RUNNER_IMAGE` |
@@ -142,130 +87,21 @@ process identity; capture and validate live evidence before an actual cutover.
 | `VIBESIM_MANAGED_BACKEND_URL` | `VIBESIM_AGENT_MANAGED_BACKEND_URL` |
 | `OPENROUTE_KEY` | `OPENROUTER_API_KEY` |
 
-Set `VIBESIM_AGENT_MAIN_DIR`, `VIBESIM_AGENT_BIND` and `VIBESIM_AGENT_PORT`
-explicitly. Replace `uvicorn backend.app:app` with
-`uv run --frozen python -m vibesim_agent serve`. Remove retired Agent keys from
-the service environment; adding new keys alongside them fails startup.
-`python -m vibesim_agent env-reference` supplies the full supported key list.
-Preserve naming credentials when replacing `OPENROUTE_KEY`: an existing nonblank
-`OPENROUTER_API_KEY` takes precedence; otherwise carry over the old value, then
-unset the retired key. The local candidate environment performs this fallback
-without writing the credential to disk.
+Remove retired keys rather than leaving both spellings set. Set main directory,
+bind address, port, callback URL and Analyzer URL explicitly for the deployment.
+Use `python -m vibesim_agent env-reference` for the full supported key list.
 
-The new optional `serve --startup-config /absolute/deployment/startup.json` entry
-can own the reviewed shutdown and automatic migration sequence. Its configuration
-and the corresponding read-only `selected-root` command are described in
-[Managed Startup Entry](migration-v1.md#managed-startup-entry). When adopting this
-entry, start Analyzer only after selection succeeds, with the returned registry
-path and the same provider configuration. Keep first-start logs outside the
-unpublished target. The local candidate scripts use this shared startup configuration;
-they have been reviewed but have not been installed or executed.
+## Recovery
 
-The old launch script runs `scripts/with_claude_env.py`. The new package does
-not discover shell authentication itself. Preserve that wrapper until explicit
-provider configuration replaces its behavior, or supply the complete standard
-Claude authentication and endpoint variables before starting the process.
-Do not copy credentials into scripts, migration reports or commits. Generate
-migration scopes using the same profile paths and endpoints as the final service.
+Before new writes are admitted, a failed cutover can return to the old deployment
+against its untouched state after the new services are stopped. No migration
+failure automatically restarts the old deployment.
 
-The local candidate scripts are in `tmp/agent-refactor-deployment/` at the
-workspace root. They target `wt-agent-refactor`, the existing `VibeSim` main
-checkout. Both services require the same absolute `VIBESIM_STARTUP_CONFIG` path;
-Agent performs managed startup and Analyzer obtains the published target through
-`selected-root`. They retain the Claude wrapper and existing ports, use the root
-`.env` for temporary/cache paths, and select the accepted immutable runner image.
-Analyzer selects the accepted absolute executable and verifies its SHA256;
-conflicting image or binary overrides are rejected. An arbitrary existing binary
-may expose a different API prefix. They are not installed or executed.
-The existing `agent-workspaces/services/claude.env`, when present, remains an
-external deployment asset; candidate logs go to
-`tmp/agent-refactor-deployment/logs/`, outside both state roots. Preserve
-that credential file without copying its contents into the migration record.
-The companion launcher changes must be integrated into the selected source before
-building the final image; rebuilding does not update old workspace copies.
+After new writes begin, preserve the target. Restoring an old snapshot would lose
+those writes; use forward repair or a separately verified reconciliation instead.
+Keep backups and migration evidence according to the deployment retention policy.
 
-A private rehearsal with a separately built Analyzer has verified that both
-services select the migrated root, and Agent archive/restore changes update the
-Analyzer catalog without restarting it or changing the resource ID. The test used
-a synthetic prediction catalog fixture. It does not establish numerical analysis,
-provider resume or acceptance of the production ports, bridges and final image.
-
-A separate private migration/resume rehearsal has passed for both GPT roles:
-two calls per role kept the original session IDs, recalled exact baseline markers
-and appended to the original transcripts across application and container recreation.
-All historical sessions, including failed Claude sessions, were preserved by the
-conversion. A later GPT turn also passed through the HTTP ASGI application and
-real provider/container delegation: implementer created a scoped file, orchestrator
-resumed its session to finish, and history/SSE/replay agreed. Only the test file
-and two required conversation records changed. These are GPT-only checks;
-Claude acceptance was outstanding at that point; the later results above close it.
-A separate real TCP/Uvicorn GPT test has
-verified incremental SSE and targeted cancellation of an observed live tool process,
-including process exit before container removal, session retention, history/replay
-and repeated cancellation. A follow-up real-network disconnect/reconnect test also
-passed: the same turn/process survived closing the message stream, GET stream
-replayed the original event prefix, and cancellation completed without a new
-message submission. Those earlier Claude baseline attempts returned
-`503 No available accounts` from the configured gateway; the later acceptance
-above uses the user's official `claudeme` connection.
-
-## Image Evidence
-
-The observed backend script selects `vibesim-ui-codex-runner:kanzhu-claude`,
-image `64d658b3b7f333d09ab53737d1552c13a3e8ac4fd0bdca5fd57e6eb9e3dac731`.
-The real build smoke test and new ContainerManager acceptance used
-`vibesim-ui-codex-runner:kanzhu`, image
-`9c9c0826ff764ac018b008ef303bb057a6aa83d92cbfc996e63be4bc2bbff7a9`.
-Their version and lock labels match; their image IDs do not. Acceptance of one
-does not validate the other. Record the accepted final image ID before cutover.
-
-Two inspected running conversation containers used other immutable image IDs:
-
-| Container Suffix | Image SHA256 |
-| --- | --- |
-| `w_15682108fec5-83b4a53c323f` | `23cda76bb520da4d6baef463334ed43ae5c9906eb23e05789dd867a714bb6b5a` |
-| `w_0a324903b8df-441877f79e3c` | `277e117ed58d7ef9bc7f57976806fefc1001c97313650e92677cc8a187b91e89` |
-
-Preserve old image IDs and per-container configuration with the deployment backup.
-Do not infer a running container's image from the current service script or tag.
-
-## Switch And Rollback
-
-The workspace owner coordinates the switch. Freeze the accepted Agent and
-launcher commits, image ID, provider scopes, target paths and service scripts.
-Record the operator and time in the local execution log. Stop admission, drain
-or cancel turns and jobs, then stop all owned writers before the final snapshot.
-The new state root changes container ownership names; new startup recovery will
-not adopt or clean up old containers. Confirm old runtime processes have exited
-using the old deployment's ownership information before asserting quiescence.
-Follow [Offline Workspace Migration](migration-v1.md); never initialize or run
-the new schema against the original state. Start only after conversion and
-file verification succeed, with Analyzer reading the same migrated registry.
-
-Before reopening writes, verify historical reads, SSE replay, citations, provider
-resume and container-to-host managed callbacks. If this fails, stop the new
-services and restore the old deployment against its untouched original state.
-The simple rollback window ends when user writes resume. After that point,
-preserve the new state and reconcile those writes through a verified reverse
-conversion or forward repair; never restore an old snapshot over new data.
-The candidate checkout contains only the new implementation. The independently
-running old checkout and its source archive remain available; retire those deployment
-assets only after acceptance and observation. Keep state backups through the rollback window.
-
-## Initial Stop Audit
-
-The final read-only inventory found seven workspaces with no running turns. All
-historical provider sessions use GPT; their configured models are `gpt-5.6-sol`
-and `gpt-5.6-luna`. Existing callback aliases remain necessary for copied launchers.
-
-The initial shutdown audit rejected two non-Agent containers, `areal_banking_prod`
-and `areal_keepalive`, with writable mounts of all `/raid`. Their ownership is not
-established by the Agent deployment. At that stage no service was stopped and no
-target was created. The owner subsequently accepted them remaining active; the
-completed operation above records the explicit audited exceptions. This does not
-establish that those external containers are physically prevented from writing.
-
-The retained legacy source is commit `e26ad6d`. Its private archive is
-`tmp/agent-cutover-final/legacy-agent.tar`, SHA256
-`b7036bc7ff3982681c5382c877365bd6906cf2e6f01f516e9ce80193282e9952`.
-This is a source archive, separate from the completed state backup above.
+If a migrated deployment still uses the managed entry and a reboot invalidates
+its receipt, follow [the ordinary-startup transition](migration-v1.md#recovery-after-a-host-reboot).
+Do not modify the recorded boot ID or restart the legacy service solely to obtain
+a fresh receipt. Partial or unpublished targets require inspection before reuse.

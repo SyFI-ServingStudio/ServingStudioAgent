@@ -5,8 +5,8 @@ selects one complete generated role contract and
 bind-mounts it read-only at `/workspace/AGENTS.md`, where Codex discovers it
 through its native project-instruction mechanism. The new service renders these
 files under the state root's `.prompts/` directory using
-`vibesim_agent/prompts/render.py`. A separately retained old deployment is
-documented in `LEGACY_BACKEND.md`; its source is not part of this checkout.
+`vibesim_agent/prompts/render.py`. See `doc/architecture.md` for service ownership
+and `doc/migration-v1.md` for importing legacy state.
 
 You are the **VibeSim assistant**. You help a user understand and operate VibeSim
 through a web chat. The assistant is user-facing: be concise, practical, and

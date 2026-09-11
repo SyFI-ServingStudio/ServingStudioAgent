@@ -4,11 +4,9 @@ VibeSim Agent runs Codex and Claude Code in Docker and owns durable workspaces,
 conversations, turns, provider sessions and managed jobs. VibeSimUI is the browser
 application; Rust Analyzer owns numerical results and their catalogs.
 
-This branch implements the new `vibesim_agent` service. Private Codex/Claude
-migration and resume acceptance and the production cutover passed on 2026-09-11.
-`run.sh` starts this service. The browser application lives in VibeSimUI.
-The separately retained old deployment is documented in
-[Legacy Backend](LEGACY_BACKEND.md); its commands require the frozen old checkout.
+`run.sh` starts the `vibesim_agent` service. The browser application lives in
+VibeSimUI. See [Architecture](doc/architecture.md) for component ownership and
+[Deployment Cutover](doc/cutover.md) when replacing a legacy deployment.
 
 For workspace setup, use the parent workspace's `README.md` and `reproduce.md`.
 Run commands below from this checkout with Python 3.12 and `uv`, after sourcing
@@ -56,19 +54,24 @@ Retired Agent environment keys are rejected by name, without printing their valu
 Provider defaults use `VIBESIM_PROVIDER_<ID>_*`; role defaults remain GPT, with
 per-conversation model selection available through the API.
 
-For multiple accounts or endpoints using the same CLI, set
-`VIBESIM_AGENT_PROVIDERS_FILE` to an absolute YAML path. Named connections select
+For multiple accounts or endpoints using the same CLI, copy
+`examples/providers.yaml` to `providers.yaml` in this Agent checkout and edit it.
+The private file is ignored by Git and loaded automatically, regardless of the
+working directory. `VIBESIM_AGENT_PROVIDERS_FILE` can select a different absolute
+path explicitly. If neither is present, built-in environment configuration is
+used; an invalid selected file fails startup. Named connections select
 their own profile or credential reference and all three role defaults; see
 [Named Provider Connections](doc/providers.md) and [example YAML](examples/providers.yaml).
 
-For a reviewed legacy deployment, `serve --startup-config /absolute/startup.json`
-detects the stored format, stops the explicitly audited legacy stack when needed,
-migrates into an independent target, and persists its selection for later starts.
-`selected-root --startup-config /absolute/startup.json` reads that same selection
-for Analyzer without starting a migration. Both commands require the same provider
-configuration. See [managed startup configuration](doc/migration-v1.md#managed-startup-entry)
-for the deployment file and shutdown constraints. The existing production scripts
-have not been switched to this entry.
+For a legacy deployment, `serve --startup-config /absolute/startup.json` is the
+cutover entry: it validates the audited shutdown scope, migrates into an independent
+target and publishes a selection record. Once migration is verified, resolve that
+target with `selected-root --startup-config /absolute/startup.json`, set
+`VIBESIM_AGENT_WORKSPACES_ROOT` to the returned absolute path, and use ordinary
+`serve` for subsequent starts. Configure Analyzer with the same target's
+`registry.json`. Both cutover commands require the same provider configuration.
+Do not permanently couple normal service restarts to the legacy shutdown receipt.
+See [managed startup configuration](doc/migration-v1.md#managed-startup-entry).
 
 ## Runner Image Preparation
 
@@ -119,7 +122,8 @@ The image does not currently provide Docker for nested profiling containers.
 A cold profile cache that needs a container-backed kernel, such as the preset's
 `kv_cache_append:vllm_cuda`, fails with `docker is required for container profiling`.
 GPU visibility and prebuilt dependency caches alone do not satisfy that runtime
-requirement; full cold-cache timing acceptance is still outstanding.
+requirement. Validate the intended cold-cache profiling path separately from
+image startup and warm-cache simulation.
 
 ## State And Migration
 
@@ -140,12 +144,13 @@ logs keep their original locations in production mode.
 Automatic migration runs at managed service startup, before requests are accepted,
 when `serve --startup-config ...` detects supported legacy state. It stops the
 explicitly audited old deployment, verifies conversion, and publishes the target
-selection. Later starts reuse that selection. Plain `serve` rejects an old schema;
+selection. After cutover, configure ordinary `serve` with the validated target.
+Plain `serve` rejects an old schema;
 `init` is only for an absent state directory.
 
 This preserves data; it does not by itself prove that a provider can resume every
-historical CLI session. GPT resume has passed isolated real-provider checks;
-Claude resume remains unverified. Mixed or unknown formats, changed deployment
+historical CLI session. Verify each required provider and role against an isolated
+historical session. Mixed or unknown formats, changed deployment
 identities and incomplete targets fail without overwriting them. A crash can
 leave an incomplete unpublished target requiring inspection. Once users write to
 the new state, reverting to an old snapshot would lose those new writes.
@@ -217,8 +222,8 @@ uv run --frozen python -m unittest discover -s tests -v
 Local tests cover storage conversion, startup recovery, provider parsing and HTTP
 behavior. They do not establish real provider availability, GPU profiling or
 production cutover. Frozen legacy fixtures allow the new suite to run without
-importing `backend`; [baseline documentation](doc/refactor-baseline.md) describes
-the separately retained legacy snapshot tooling.
+importing a legacy backend. Legacy snapshot tools require a separately retained
+source checkout; they do not inventory the current router-based application.
 
-[Browser acceptance](doc/browser-acceptance.md) records the retired frontend's
-capabilities, their VibeSimUI owners and completed live integration checks.
+[Browser acceptance](doc/browser-acceptance.md) describes integration checks for
+VibeSimUI, Agent and Analyzer.

@@ -1,6 +1,6 @@
 # Managed Job Callbacks
 
-The refactored Agent accepts all four job kinds at
+Agent accepts all four job kinds at
 `POST /api/agent/v1/internal/jobs/register`. Requests use the current turn's
 Bearer capability, not the tools API token. Register before creating official
 artifacts; a failed registration must not become an unmanaged invocation.
@@ -95,10 +95,6 @@ routes; this is not a test of a running old backend, Docker networking, or
 provider execution. Ordinary Agent test discovery does not assume external
 source checkouts are available.
 
-The local 2026-09-11 inventory found legacy run and job clients in all seven
-existing workspaces. Each client file had one common SHA256 across the seven,
-including the baseline checkout used by the compatibility check. This supports
-retaining the tested legacy callbacks; it does not update those copies or
-validate their container/runtime configuration. The archived `w_glm52_tp4`
-repository was inspected at its known archive location because its descriptor
-still points to a missing path; that descriptor was left untouched.
+Inventory launcher copies in active and archived workspaces before retiring a
+callback alias. Updating the main checkout or runner image does not update those
+copies, and callback compatibility does not validate their container configuration.

@@ -1,9 +1,15 @@
 # Named Provider Connections
 
-Set `VIBESIM_AGENT_PROVIDERS_FILE` to an absolute YAML path before starting the
-Agent. [providers.yaml](../examples/providers.yaml) illustrates separate Codex,
-Claude gateway and Claude personal-login connections. Without that variable,
-the existing environment-only `gpt`, `deepseek` and `claude` setup is unchanged.
+Copy [providers.yaml](../examples/providers.yaml) to `providers.yaml` in the Agent
+checkout and edit your connections. This private file is ignored by Git and
+loaded automatically from the Agent checkout, independently of the current
+working directory. An explicit `VIBESIM_AGENT_PROVIDERS_FILE` absolute path takes
+precedence. If neither file is configured or present, built-in environment
+configuration remains available. An invalid selected file fails startup.
+
+The example illustrates separate Codex, Claude gateway and Claude personal-login
+connections. Without a selected file, the environment-only `gpt`, `deepseek` and
+`claude` setup is unchanged.
 
 The file replaces the provider list and all three role defaults. Provider-specific
 `VIBESIM_PROVIDER_*` overrides are rejected when YAML is selected, so a shell's old
@@ -51,23 +57,11 @@ without inheriting the host's gateway setting.
 Claude home authentication copies only `.credentials.json` into the isolated
 runtime home. CLI-refreshed credentials remain there; a changed host credential
 file supplies a new copy on the next prepare. Personal history/settings are not
-copied and refreshed credentials are not written back into the host login. This
-file-based path has local fixture coverage. A real `claudeme` acceptance run also
-passed with the accepted runner: two assistant calls retained the same session and
-recalled an exact synthetic marker after container recreation. The original session
-JSONL advanced, host credentials stayed unchanged, and test containers and credential
-copies were removed (`tmp/agent-claudeme-lqxfakyw/report.json` at the workspace root).
-This first run proves login and single-role resume, not token refresh.
-
-Subsequent private acceptance also passed for legacy Claude state: the frozen old
-backend created both role sessions, migration preserved them, and both roles
-recalled their original tracking identifiers across two application lifespans and
-container recreations. Session IDs stayed fixed and original transcripts advanced;
-source data and host credentials stayed unchanged. Evidence is
-`tmp/agent-claudeme-tracking-final/migration-resume.json` at the workspace root.
-Mixed Claude orchestrator / Codex implementer delegation and Codex continuation
-after targeted cancellation also passed; see [cutover evidence](cutover.md#private-acceptance).
-These runs do not demonstrate an actual OAuth token refresh or production cutover.
+copied and refreshed credentials are not written back into the host login.
+Validate login, original-session resume and token refresh separately: a successful
+turn or a resumed session does not demonstrate an actual OAuth refresh. Use an
+isolated conversation and retain the profile path and endpoint across restart
+checks. See [browser and execution validation](browser-acceptance.md).
 
 ## Sessions And Compatibility
 
