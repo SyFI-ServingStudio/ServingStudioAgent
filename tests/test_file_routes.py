@@ -1,4 +1,4 @@
-"""Untokened workspace file preview: /api/file, /api/file/meta, /api/file/list.
+"""Untokened workspace file preview: /api/agent/v1/file, /api/agent/v1/file/meta, /api/agent/v1/file/list.
 
 These routes widened from an image-only whitelist to any workspace file, so the
 guard is the contract: containment inside the workspace, a build/VCS/credential

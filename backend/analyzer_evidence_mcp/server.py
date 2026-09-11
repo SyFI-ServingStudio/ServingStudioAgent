@@ -24,46 +24,64 @@ MAX_EVIDENCE_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 20.0
 LOCAL_START_TIMEOUT_SECONDS = 15.0
 TOOL_NAME = "read_analyzer_resource"
+# The Analyzer's read-only tree. The prefix names the service, so this backend's
+# own routes can sit at /api/agent/v1/ without either one owning bare /api/.
+ANALYZER_API_ROOT = "/api/analyzer/v1/"
 
 ENDPOINT_GUIDE = """Read one existing Analyzer protocol-v1 JSON resource.
 
-Start with /api/v1/sweeps?status=ready&limit=5 for recent candidates, or
-/api/v1/sweeps/latest for the newest ready candidate. Verify display_name,
-ordered axes, deployment, trace, status, and time against the user's request;
-latest does not by itself prove semantic relevance. Then read
-/api/v1/sweeps/{sweep_id}/payload to discover coordinate domains, metric keys,
-and opaque run_id values. Run resources include descriptor, summary, topology, model, workload,
-and subjects/{subject_id}/{report|payload}. Subject ids include concurrency,
-request-state, slo-general, throughput, utilization, batch, kv-occupancy,
-kernel-input-distribution, kernel-time-share, optimality, and
-workload-conservation. Deeper resources are:
-/runs/{run_id}/workers/{pool_tag}/{worker_id}/operations[?offset=&limit=],
-/operations/seek?...,
-/iterations/{iter_id}/optimality-kernel-ladder,
-/iterations/{iter_id}/optimality-waterfall,
-/operations/{iter_id}/{batch_id}/{operation_id}/cost-tree, and a cost-tree
-leaf's /kernel-throughput-analysis.
+Every address follows one grammar, so you can construct one instead of
+discovering it:
 
-Offline timing predictions are separate first-class resources. Start with
-/predictions, then follow /predictions/{prediction_id}/descriptor and /cases.
-Exact evidence is available below
-/predictions/{prediction_id}/cases/{case_id}/operations/{operation_id}/cost-tree,
-with the same leaf /kernel-throughput-analysis, case optimality-kernel-ladder,
-case optimality-waterfall, and prediction-level kernel-input-distribution
-resources. Prediction responses intentionally contain no pool or worker identity.
+  /api/analyzer/v1/{kind}/{id}[/{scope}]/subjects/{name}/{report|payload}
 
-Kernel profiling and measurement results are first-class resources too. Start
-with /kernel-profiles or /kernel-measurements, then follow their descriptor
-links. A profile exposes /kernel-profiles/{profile_id}/curve. A measurement
-exposes /kernel-measurements/{measurement_id}/summary and only the plot links
-declared by its descriptor. Resolve GPU ceilings with
-/hardware/gpus?name={gpu_name}; catalog TFLOPS are dense peaks and interconnect
-bandwidth includes both bidirectional and derived one-way values.
+{kind} is runs, sweeps, predictions, alignments, kernel-profiles, or
+kernel-measurements. {scope} narrows inside a result and is one of
+workers/{pool_tag}/{worker_id}, .../iterations/{iter_id},
+.../operations/{iter_id}/{batch_id}/{operation_id}, .../leaves/{leaf_id}, or a
+prediction's cases/{case_id}. Each {kind}/{id}/descriptor says which subjects
+exist and which of report/payload each one serves; it does not contain URLs,
+because the grammar above already gives them.
+
+Start with /api/analyzer/v1/sweeps?status=ready&limit=5 for recent candidates,
+or /api/analyzer/v1/sweeps/latest for the newest ready candidate. Verify
+display_name, ordered axes, deployment, trace, status, and time against the
+user's request; latest does not by itself prove semantic relevance. Then read
+/api/analyzer/v1/sweeps/{sweep_id}/subjects/sweep/payload to discover
+coordinate domains, metric keys, and opaque run_id values.
+
+Run subject ids are concurrency, request-state, slo-general, throughput,
+utilization, batch, kv-occupancy, kernel-input-distribution, kernel-time-share,
+optimality, and workload-conservation, plus summary, topology, model and
+workload. Deeper run resources are
+/runs/{run_id}/workers/{pool_tag}/{worker_id}/subjects/operations/payload
+[?offset=&limit=], the same worker's subjects/operations/seek,
+.../iterations/{iter_id}/subjects/optimality-kernel-ladder/payload,
+.../subjects/optimality-waterfall/payload,
+.../operations/{iter_id}/{batch_id}/{operation_id}/subjects/cost-tree/payload,
+and that operation's .../leaves/{leaf_id}/subjects/
+kernel-throughput-analysis/payload.
+
+Offline timing predictions are separate first-class resources with no pool or
+worker identity. Start with /predictions, then
+/predictions/{prediction_id}/descriptor and .../subjects/cases/payload. Exact
+evidence sits below /predictions/{prediction_id}/cases/{case_id}/, with the same
+operations, leaves, optimality-kernel-ladder and optimality-waterfall subjects,
+plus a prediction-level subjects/kernel-input-distribution/payload.
+
+Kernel profiling and measurement results are first-class too. Start with
+/kernel-profiles or /kernel-measurements and read their descriptor. A profile
+exposes subjects/curve/payload; a measurement exposes subjects/summary/report
+and the plots its descriptor names, at
+/kernel-measurements/{measurement_id}/plots/{plot_name}. Resolve GPU ceilings
+with /hardware/gpus?name={gpu_name}; catalog TFLOPS are dense peaks and
+interconnect bandwidth includes both bidirectional and derived one-way values.
 
 Set source="host" for an experiment selected in the Analyzer UI. Set
 source="workspace" for simulations created inside this agent workspace.
-Only relative GET paths below /api/v1/ are accepted. Values are returned exactly
-from Analyzer; this tool does not estimate, aggregate, or reinterpret metrics.
+Only relative GET paths below /api/analyzer/v1/ are accepted. Values are
+returned exactly from Analyzer; this tool does not estimate, aggregate, or
+reinterpret metrics.
 
 In a managed UI turn, reading an exact sweep payload from either source returns
 one compact block: resource, ordered axes, metric metadata, and rows. Every raw
@@ -221,8 +239,10 @@ def _base_url(source: str | None = None) -> str:
 
 def validate_resource_path(resource_path: str) -> str:
     """Keep the generic adapter inside the Analyzer's read-only protocol tree."""
-    if not isinstance(resource_path, str) or not resource_path.startswith("/api/v1/"):
-        raise AnalyzerToolError("path must start with /api/v1/")
+    if not isinstance(resource_path, str) or not resource_path.startswith(
+        ANALYZER_API_ROOT
+    ):
+        raise AnalyzerToolError(f"path must start with {ANALYZER_API_ROOT}")
     parsed = urlsplit(resource_path)
     if parsed.scheme or parsed.netloc or parsed.fragment:
         raise AnalyzerToolError("path must be relative and must not contain a fragment")
@@ -248,18 +268,30 @@ def _managed_context() -> dict[str, Any] | None:
     return context
 
 
+def _resource_segments(safe_path: str) -> list[str]:
+    """The path below the Analyzer API root, as segments.
+
+    Matchers work on the resource, not on the mount point, so moving the
+    service under a different prefix is a change to one constant rather than to
+    every positional index in this file.
+    """
+    path = urlsplit(safe_path).path
+    if not path.startswith(ANALYZER_API_ROOT):
+        return []
+    return path[len(ANALYZER_API_ROOT) :].strip("/").split("/")
+
+
 def _exact_sweep_id(safe_path: str, payload: Any) -> str | None:
     """Return the path-bound sweep id only for an exact protocol payload read."""
-    parsed_path = urlsplit(safe_path)
-    path_segments = parsed_path.path.strip("/").split("/")
+    path_segments = _resource_segments(safe_path)
     if (
         len(path_segments) != 5
-        or path_segments[:3] != ["api", "v1", "sweeps"]
-        or path_segments[4] != "payload"
+        or path_segments[0] != "sweeps"
+        or path_segments[2:] != ["subjects", "sweep", "payload"]
         or not isinstance(payload, dict)
     ):
         return None
-    path_sweep_id = path_segments[3]
+    path_sweep_id = path_segments[1]
     payload_sweep_id = payload.get("sweep_id")
     if payload_sweep_id != path_sweep_id:
         raise AnalyzerToolError(
@@ -290,7 +322,7 @@ def _register_sweep_citations(
     ).encode("utf-8")
     registration_url = urljoin(
         f"{backend_url.rstrip('/')}/",
-        "api/internal/analyzer-citations/register",
+        "api/agent/v1/internal/analyzer-citations/register",
     )
     registration_request = Request(
         registration_url,
@@ -322,11 +354,11 @@ def _register_sweep_citations(
 
 def _prediction_target_from_path(safe_path: str) -> dict[str, Any] | None:
     parsed_path = urlsplit(safe_path)
-    segments = parsed_path.path.strip("/").split("/")
-    if len(segments) < 5 or segments[:3] != ["api", "v1", "predictions"]:
+    segments = _resource_segments(safe_path)
+    if len(segments) < 3 or segments[0] != "predictions":
         return None
-    prediction_id = segments[3]
-    suffix = segments[4:]
+    prediction_id = segments[1]
+    suffix = segments[2:]
     target: dict[str, Any] = {
         "predictionId": prediction_id,
         "caseId": None,
@@ -339,36 +371,39 @@ def _prediction_target_from_path(safe_path: str) -> dict[str, Any] | None:
     requested_mode = query.get("mode", ["unlocked"])[0]
     if requested_mode in {"unlocked", "batch_locked"}:
         target["optimalityMode"] = requested_mode
-    if suffix in (["descriptor"], ["cases"]):
-        return target
-    if len(suffix) == 3 and suffix[0] == "cases" and suffix[2] in {
-        "optimality-waterfall",
-        "optimality-kernel-ladder",
-    }:
-        target["caseId"] = suffix[1]
-        target["panelId"] = (
-            "optimality-breakdown"
-            if suffix[2] == "optimality-waterfall"
-            else "optimality-kernel-ladder"
-        )
+    if suffix in (["descriptor"], ["subjects", "cases", "payload"]):
         return target
     if (
         len(suffix) == 5
         and suffix[0] == "cases"
-        and suffix[2] == "operations"
-        and suffix[4] == "cost-tree"
+        and suffix[2] == "subjects"
+        and suffix[3] in {"optimality-waterfall", "optimality-kernel-ladder"}
+        and suffix[4] == "payload"
     ):
-        target.update(
-            {"caseId": suffix[1], "operationId": suffix[3], "panelId": "cost-tree"}
+        target["caseId"] = suffix[1]
+        target["panelId"] = (
+            "optimality-breakdown"
+            if suffix[3] == "optimality-waterfall"
+            else "optimality-kernel-ladder"
         )
         return target
     if (
         len(suffix) == 7
         and suffix[0] == "cases"
         and suffix[2] == "operations"
-        and suffix[4] == "cost-tree"
+        and suffix[4:] == ["subjects", "cost-tree", "payload"]
+    ):
+        target.update(
+            {"caseId": suffix[1], "operationId": suffix[3], "panelId": "cost-tree"}
+        )
+        return target
+    if (
+        len(suffix) == 9
+        and suffix[0] == "cases"
+        and suffix[2] == "operations"
+        and suffix[4] == "leaves"
         and suffix[5].isdigit()
-        and suffix[6] == "kernel-throughput-analysis"
+        and suffix[6:] == ["subjects", "kernel-throughput-analysis", "payload"]
     ):
         target.update(
             {
@@ -402,7 +437,7 @@ def _register_managed_dictionary(request_payload: dict[str, Any]) -> dict[str, A
     registration_request = Request(
         urljoin(
             f"{backend_url.rstrip('/')}/",
-            "api/internal/analyzer-citations/register",
+            "api/agent/v1/internal/analyzer-citations/register",
         ),
         data=request_body,
         headers={
@@ -472,16 +507,20 @@ def _register_kernel_citations(
     payload: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Register exact profile/measurement JSON without exposing job identity."""
-    segments = urlsplit(safe_path).path.strip("/").split("/")
-    if len(segments) != 5 or segments[:2] != ["api", "v1"]:
+    segments = _resource_segments(safe_path)
+    if len(segments) < 3:
         return None
-    if segments[2] == "kernel-profiles" and segments[4] in {"descriptor", "curve"}:
+    view = segments[2:]
+    if segments[0] == "kernel-profiles" and view in (
+        ["descriptor"],
+        ["subjects", "curve", "payload"],
+    ):
         resource_kind = "kernel_profile"
         identifier_key = "profileId"
-    elif segments[2] == "kernel-measurements" and segments[4] in {
-        "descriptor",
-        "summary",
-    }:
+    elif segments[0] == "kernel-measurements" and view in (
+        ["descriptor"],
+        ["subjects", "summary", "report"],
+    ):
         resource_kind = "kernel_measurement"
         identifier_key = "measurementId"
     else:
@@ -489,7 +528,7 @@ def _register_kernel_citations(
     dictionary = _register_managed_dictionary(
         {
             "resourceKind": resource_kind,
-            identifier_key: segments[3],
+            identifier_key: segments[1],
             "resourcePath": safe_path,
             "analysis": payload,
         }
@@ -511,13 +550,13 @@ def _register_kernel_citations(
 
 
 def _register_run_citations(safe_path: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-    segments = urlsplit(safe_path).path.strip("/").split("/")
-    if len(segments) < 5 or segments[:3] != ["api", "v1", "runs"]:
+    segments = _resource_segments(safe_path)
+    if len(segments) < 3 or segments[0] != "runs":
         return None
     dictionary = _register_managed_dictionary(
         {
             "resourceKind": "run",
-            "runId": segments[3],
+            "runId": segments[1],
             "resourcePath": safe_path,
         }
     )

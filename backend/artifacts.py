@@ -10,7 +10,7 @@ Two guard levels share one containment check:
     ``/api/agent/*/artifacts*`` routes, where an authenticated agent may reach a
     build/VCS tree by exact path on purpose.
   - ``guard_preview`` — containment plus a denylist. Backs the untokened
-    browser ``/api/file*`` routes, which must never hand out VCS internals or
+    browser ``/api/agent/v1/file*`` routes, which must never hand out VCS internals or
     credential-shaped files.
 
 Framework-agnostic on purpose: functions raise plain builtins so the FastAPI

@@ -28,19 +28,19 @@ fi
 json_get() { uv run python -c 'import sys,json; d=json.load(sys.stdin); print(d'"$1"')'; }
 post_body() { uv run python -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])))' "$1"; }
 
-echo "== 0. GET /api/agent/skill (public) =="
-curl -fsS "$BASE/api/agent/skill" | grep -q "VibeSim" && echo "  ok: skill doc served"
+echo "== 0. GET /api/agent/v1/tools/skill (public) =="
+curl -fsS "$BASE/api/agent/v1/tools/skill" | grep -q "VibeSim" && echo "  ok: skill doc served"
 
 if [ -n "$TOKEN" ]; then
   echo "== 0b. POST workspace conversation without token -> expect 401 =="
   code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-    "$BASE/api/agent/workspaces/$WORKSPACE_ID/conversations" \
+    "$BASE/api/agent/v1/tools/workspaces/$WORKSPACE_ID/conversations" \
     -H 'Content-Type: application/json' -d '{}')"
   [ "$code" = "401" ] && echo "  ok: rejected ($code)" || { echo "  FAIL: got $code"; exit 1; }
 fi
 
 echo "== 1. create conversation (agent_mode=$AGENT_MODE) =="
-conv="$(curl -fsS -X POST "$BASE/api/agent/workspaces/$WORKSPACE_ID/conversations" "${AUTH[@]}" \
+conv="$(curl -fsS -X POST "$BASE/api/agent/v1/tools/workspaces/$WORKSPACE_ID/conversations" "${AUTH[@]}" \
   -H 'Content-Type: application/json' \
   -d "$(post_body "{\"sandbox\":\"read-only\",\"autonomous\":false,\"agent_mode\":\"$AGENT_MODE\"}")")"
 cid="$(echo "$conv" | json_get '["id"]')"
@@ -50,7 +50,7 @@ echo "  cid=$cid"
 turn() {  # $1 = prompt text
   local body; body="$(uv run python -c 'import json,sys; print(json.dumps({"text":sys.argv[1]}))' "$1")"
   curl -fsS -X POST \
-    "$BASE/api/agent/workspaces/$WORKSPACE_ID/conversations/$cid/messages" "${AUTH[@]}" \
+    "$BASE/api/agent/v1/tools/workspaces/$WORKSPACE_ID/conversations/$cid/messages" "${AUTH[@]}" \
     -H 'Content-Type: application/json' -d "$body"
 }
 
@@ -65,11 +65,11 @@ r2="$(turn "$PROMPT2")"
 echo "  ok=$(echo "$r2" | json_get '["ok"]') final_len=$(echo "$r2" | uv run python -c 'import sys,json;print(len(json.load(sys.stdin)["final"]))')"
 
 echo "== 4. history =="
-hist="$(curl -fsS "${AUTH[@]}" "$BASE/api/agent/workspaces/$WORKSPACE_ID/conversations/$cid")"
+hist="$(curl -fsS "${AUTH[@]}" "$BASE/api/agent/v1/tools/workspaces/$WORKSPACE_ID/conversations/$cid")"
 echo "  messages=$(echo "$hist" | uv run python -c 'import sys,json;print(len(json.load(sys.stdin)["messages"]))')  (expect 4: 2 user + 2 assistant)"
 
 echo "== 5. delete =="
 curl -fsS -X DELETE "${AUTH[@]}" \
-  "$BASE/api/agent/workspaces/$WORKSPACE_ID/conversations/$cid" >/dev/null && echo "  deleted"
+  "$BASE/api/agent/v1/tools/workspaces/$WORKSPACE_ID/conversations/$cid" >/dev/null && echo "  deleted"
 
 echo "== conversation smoke OK =="

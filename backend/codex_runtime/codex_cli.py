@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 from ..logging_config import compact_text, log_event
 from .codex_command import build_codex_exec_command
@@ -62,13 +63,15 @@ class CodexExecCall:
     async def run(self) -> AsyncIterator[CodexEvent]:
         self._log_start()
         started = asyncio.get_event_loop().time()
-        process = await self._start_process()
         output = CodexOutputCollector(self.request)
-        await self._write_prompt(process)
-        stderr_task = asyncio.create_task(self._drain_stderr(process, output))
 
         # Opens this role's interrupt blind window — see `_stream_process_output`
-        # for the pairing `role_ready`.
+        # for the pairing `role_ready`. Published before anything here can
+        # suspend, because it is what tells a canceller that this role's rollout
+        # does not hold the handoff prompt yet. Emitted after startup instead,
+        # process creation and prompt delivery — both of which suspend, and the
+        # second of which is the handoff itself — sat inside the *previous*
+        # role's ready window, where a Stop is authorised at once.
         yield {"kind": "role_start", "role": self.request.label}
 
         # Codex says nothing until its first item, so without this the UI would
@@ -78,15 +81,26 @@ class CodexExecCall:
         yield self._waiting_event(0.0, session_ready=False)
 
         wait = _FirstOutputWait(started)
+        process: asyncio.subprocess.Process | None = None
+        stderr_task: asyncio.Task[None] | None = None
         try:
+            process = await self._start_process()
+            await self._write_prompt(process)
+            stderr_task = asyncio.create_task(self._drain_stderr(process, output))
             output.prime_rollout_offset()
             async for event in self._stream_process_output(process, output, wait):
                 yield event
         except asyncio.CancelledError:
-            await self._handle_cancelled(process)
+            # `process` is None when the cancel arrived before it existed, and
+            # otherwise it may be only half set up — spawned, with its prompt
+            # partly written. It still has to be stopped: a container process
+            # nobody is reading from outlives the turn that started it.
+            if process is not None:
+                await self._handle_cancelled(process)
             raise
         finally:
-            await self._finish_stderr_task(stderr_task)
+            if stderr_task is not None:
+                await self._finish_stderr_task(stderr_task)
 
         # A call can produce nothing a reader sees until its final answer — a
         # one-line reply with no tool use is the common case. The rollout holds
@@ -252,8 +266,7 @@ class CodexExecCall:
         if read_task.done():
             return
         read_task.cancel()
-        with contextlib.suppress(BaseException):
-            await read_task
+        await _await_stopped(read_task)
 
     async def _handle_cancelled(self, process: asyncio.subprocess.Process) -> None:
         log_event(
@@ -294,8 +307,34 @@ class CodexExecCall:
     async def _finish_stderr_task(self, stderr_task: asyncio.Task[None]) -> None:
         if not stderr_task.done():
             stderr_task.cancel()
-        with contextlib.suppress(BaseException):
-            await stderr_task
+        await _await_stopped(stderr_task)
+
+
+async def _await_stopped(task: asyncio.Task[Any]) -> None:
+    """Wait for a helper task we have cancelled, without losing a Stop.
+
+    Awaiting a cancelled task raises `CancelledError` — and so does being
+    cancelled *while* awaiting it. Same exception, opposite meanings, and
+    suppressing both is what a bare `suppress(BaseException)` here used to do.
+
+    The cost is not theoretical. Both call sites sit in a `finally`, which is
+    exactly where a Stop arriving at the end of a role lands. Swallowed, the
+    turn walks on into its next role while the conversation has already recorded
+    the cancellation as delivered — so every later Stop is a no-op and the turn
+    can no longer be stopped at all.
+
+    `cancelling()` counts cancellations aimed at *this* task, which is the one
+    thing that tells the two apart. A failure of the helper itself is still
+    dropped: nothing reads its result, and it says nothing about the turn.
+    """
+    try:
+        await task
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling() > 0:
+            raise
+    except Exception:
+        pass
 
 
 class _FirstOutputWait:

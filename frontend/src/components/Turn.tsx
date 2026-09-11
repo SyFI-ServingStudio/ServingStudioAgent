@@ -7,6 +7,7 @@ import {
   FlagCheckered,
   GearSix,
   PaperPlaneRight,
+  Prohibit,
   Question,
   Sparkle,
   Warning,
@@ -276,6 +277,22 @@ function TerminalResponseCard({
   role?: Role;
   conversationId: string | null;
 }) {
+  // Stopped is deliberately neither of the other two: not the answer's green,
+  // which would claim the agent replied, and not the failure's red, which would
+  // claim something went wrong. The user ended this turn on purpose.
+  if (outcome === "cancelled") {
+    return (
+      <Card
+        avatar={<Prohibit size={13} weight="bold" />}
+        avatarClass="border-hair bg-panel2 text-zinc-400"
+        title="Stopped"
+        accent="border-l-2 border-l-white/15"
+        bodyLabel="interrupted"
+      >
+        <MarkdownBody source={text} conversationId={conversationId} />
+      </Card>
+    );
+  }
   const needsInput = outcome === "request_user_input";
   const asking = ROLE_STYLE[role];
   return (

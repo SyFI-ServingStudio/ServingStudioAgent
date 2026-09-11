@@ -62,7 +62,13 @@ export interface Tokens {
   output: number;
 }
 
-export type TerminalOutcome = "final_answer" | "request_user_input";
+/**
+ * How a turn ended, for the card that closes it. "cancelled" is here because a
+ * stopped turn is not an answer: collapsing it into `final_answer` gave the
+ * "Stopped while the planner was working." message the Answer label and the
+ * answer's styling, which reads as though the agent replied.
+ */
+export type TerminalOutcome = "final_answer" | "request_user_input" | "cancelled";
 
 /**
  * Render-relevant turn events. Mirrors the backend `activity` list persisted on

@@ -6,6 +6,8 @@ from tempfile import TemporaryDirectory
 from typing import Any, AsyncIterator
 from unittest import mock
 
+from fastapi import HTTPException
+
 from backend import app as app_module
 from backend.app import ActiveBrowserTurn, _run_browser_turn, list_codex_backends
 from backend.codex_runtime.config import ALL_CODEX_ROLES
@@ -159,3 +161,101 @@ class NextMessageTargetTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TurnReplayTest(unittest.IsolatedAsyncioTestCase):
+    """B4: drive the Agent UI from recorded history instead of a fake backend.
+
+    A hand-written fake would drift from what the real backend emits, and the
+    drift would be invisible — the fake would keep passing. Replaying stored
+    `turn_events` cannot drift, because it is the same bytes the live turn
+    published.
+    """
+
+    @staticmethod
+    def _store(root: Path) -> Store:
+        main_dir = root / "main"
+        (main_dir / "logs").mkdir(parents=True)
+        return Store(WorkspaceRegistry(root / "agent-workspaces", main_dir=main_dir))
+
+    async def _collect(self, response: Any) -> list[str]:
+        chunks: list[str] = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+        return chunks
+
+    async def test_replays_recorded_events_in_order_without_changing_them(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            store = self._store(Path(temporary_directory))
+            store.create("w_main", "conversation", "workspace-write")
+            store.start_turn("w_main", "conversation", "turn-a")
+            for index, kind in enumerate(["role_start", "delta", "final"]):
+                store.append_turn_event(
+                    "w_main", "turn-a", kind, {"text": f"event-{index}"}
+                )
+            store.finish_turn("w_main", "turn-a", "complete")
+
+            with mock.patch.object(app_module, "store", store):
+                index = app_module.list_conversation_turns("w_main", "conversation")
+                response = await app_module.replay_turn(
+                    "w_main", "conversation", "turn-a"
+                )
+                chunks = await self._collect(response)
+
+            self.assertEqual(
+                index["turns"],
+                [
+                    {
+                        "turn_id": "turn-a",
+                        "status": "complete",
+                        "created_at": mock.ANY,
+                        "updated_at": mock.ANY,
+                        "event_count": 3,
+                    }
+                ],
+            )
+            self.assertEqual(response.media_type, "text/event-stream")
+            self.assertEqual(
+                chunks,
+                [
+                    'event: role_start\ndata: {"text": "event-0"}\n\n',
+                    'event: delta\ndata: {"text": "event-1"}\n\n',
+                    'event: final\ndata: {"text": "event-2"}\n\n',
+                ],
+            )
+
+    async def test_replay_writes_nothing(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            store = self._store(Path(temporary_directory))
+            store.create("w_main", "conversation", "workspace-write")
+            store.start_turn("w_main", "conversation", "turn-a")
+            store.append_turn_event("w_main", "turn-a", "final", {"text": "done"})
+            store.finish_turn("w_main", "turn-a", "complete")
+            before = store.get("w_main", "conversation")
+
+            with mock.patch.object(app_module, "store", store):
+                response = await app_module.replay_turn(
+                    "w_main", "conversation", "turn-a"
+                )
+                await self._collect(response)
+
+            self.assertEqual(store.get("w_main", "conversation"), before)
+            self.assertEqual(
+                store.list_turn_events("w_main", "turn-a"),
+                [{"sequence": 0, "kind": "final", "payload": {"text": "done"}}],
+            )
+
+    async def test_a_turn_of_another_conversation_is_not_readable_here(self) -> None:
+        """Turn ids are global, so naming one is not permission to read it."""
+        with TemporaryDirectory() as temporary_directory:
+            store = self._store(Path(temporary_directory))
+            store.create("w_main", "mine", "workspace-write")
+            store.create("w_main", "theirs", "workspace-write")
+            store.start_turn("w_main", "theirs", "turn-theirs")
+            store.append_turn_event("w_main", "turn-theirs", "final", {"text": "x"})
+
+            with mock.patch.object(app_module, "store", store):
+                with self.assertRaises(HTTPException) as raised:
+                    await app_module.replay_turn("w_main", "mine", "turn-theirs")
+
+            self.assertEqual(raised.exception.status_code, 404)

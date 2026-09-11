@@ -22,7 +22,12 @@ from pathlib import Path
 from typing import Iterable
 
 from .codex_runtime.config import LEGACY_WORKSPACES_DIR, UI_DIR
-from .store import Store, WorkspaceRegistry, default_workspaces_root
+from .store import (
+    SERVER_MESSAGE_FIELDS,
+    Store,
+    WorkspaceRegistry,
+    default_workspaces_root,
+)
 
 LEGACY_CONVERSATIONS_PATH = UI_DIR / "conversations.json"
 
@@ -260,6 +265,20 @@ def execute_migration(
         lock_path.unlink(missing_ok=True)
 
 
+def _authored_messages(messages: list[dict]) -> list[dict]:
+    """Strip the fields the server issues, leaving what the legacy file held.
+
+    The comparison this feeds is an integrity check: it refuses to repair a
+    conversation whose *content* moved since migration. A message id and its
+    turn anchor are assigned by the store and were never in the legacy JSON, so
+    including them would make every conversation look changed.
+    """
+    return [
+        {key: value for key, value in message.items() if key not in SERVER_MESSAGE_FIELDS}
+        for message in messages
+    ]
+
+
 def repair_completed_timestamps(
     *,
     registry: WorkspaceRegistry,
@@ -296,7 +315,7 @@ def repair_completed_timestamps(
             raise RuntimeError(
                 f"timestamp repair could not find conversation: {conversation_id}"
             )
-        if imported["messages"] != conversation.get("messages", []):
+        if _authored_messages(imported["messages"]) != conversation.get("messages", []):
             raise RuntimeError(
                 "timestamp repair refused a conversation changed after migration: "
                 f"{conversation_id}"

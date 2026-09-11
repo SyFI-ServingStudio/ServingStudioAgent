@@ -3,31 +3,31 @@
 Endpoints:
   GET    /                              -> Vite frontend index
   GET    /assets/*                      -> Vite frontend assets
-  GET    /api/conversations             -> standalone shell compatibility index
-  GET/POST /api/workspaces              -> list/create durable workspaces
-  GET/PATCH /api/workspaces/{wid}       -> workspace descriptor
-  GET/POST /api/workspaces/{wid}/conversations -> list/create conversations
-  GET/DELETE /api/workspaces/{wid}/conversations/{cid} -> history/delete
-  POST   /api/workspaces/{wid}/conversations/{cid}/messages -> SSE turn
-  GET    /api/workspaces/{wid}/conversations/{cid}/stream -> reconnect
-  POST   /api/workspaces/{wid}/conversations/{cid}/cancel -> cancel
-  GET    /api/workspaces/{wid}/conversations/{cid}/experiments -> linked results
-  GET    /api/file, /api/file/meta, /api/file/list -> workspace file preview
-  POST   /api/internal/managed-runs/*   -> simulation compatibility callbacks
-  POST   /api/internal/managed-jobs/*   -> typed capability-gated job callbacks
-  POST   /api/eval                          -> JSON single-turn eval (evaluation only)
-  GET    /api/agent/skill                    -> agent skill doc (SKILL.md, public)
-  GET    /api/agent/workspaces/{wid}/artifacts -> list workspace artifacts
-  POST   /api/agent/workspaces/{wid}/conversations -> create agent conversation
-  POST   /api/agent/workspaces/{wid}/conversations/{cid}/messages -> sync turn
+  GET    /api/agent/v1/conversations             -> standalone shell compatibility index
+  GET/POST /api/agent/v1/workspaces              -> list/create durable workspaces
+  GET/PATCH /api/agent/v1/workspaces/{wid}       -> workspace descriptor
+  GET/POST /api/agent/v1/workspaces/{wid}/conversations -> list/create conversations
+  GET/DELETE /api/agent/v1/workspaces/{wid}/conversations/{cid} -> history/delete
+  POST   /api/agent/v1/workspaces/{wid}/conversations/{cid}/messages -> SSE turn
+  GET    /api/agent/v1/workspaces/{wid}/conversations/{cid}/stream -> reconnect
+  POST   /api/agent/v1/workspaces/{wid}/conversations/{cid}/cancel -> cancel
+  GET    /api/agent/v1/workspaces/{wid}/conversations/{cid}/experiments -> linked results
+  GET    /api/agent/v1/file, /api/agent/v1/file/meta, /api/agent/v1/file/list -> workspace file preview
+  POST   /api/agent/v1/internal/managed-runs/*   -> simulation compatibility callbacks
+  POST   /api/agent/v1/internal/managed-jobs/*   -> typed capability-gated job callbacks
+  POST   /api/agent/v1/tools/eval                          -> JSON single-turn eval (evaluation only)
+  GET    /api/agent/v1/tools/skill                    -> agent skill doc (SKILL.md, public)
+  GET    /api/agent/v1/tools/workspaces/{wid}/artifacts -> list workspace artifacts
+  POST   /api/agent/v1/tools/workspaces/{wid}/conversations -> create agent conversation
+  POST   /api/agent/v1/tools/workspaces/{wid}/conversations/{cid}/messages -> sync turn
 
 All agent-facing endpoints share the /api/agent/* prefix and are gated by
-`require_token` when VIBESIM_API_TOKEN is set; /api/agent/skill stays public so an
+`require_token` when VIBESIM_API_TOKEN is set; /api/agent/v1/tools/skill stays public so an
 agent can learn the contract before it holds a token. The
-`/api/agent/workspaces/*/conversations*` endpoints are the real interactive interface
+`/api/agent/v1/tools/workspaces/*/conversations*` endpoints are the real interactive interface
 (multi-turn, session + workspace continuity, reusing `store` and `run_turn`);
-`/api/eval` is single-turn and evaluation-only (kept outside the /api/agent/*
-namespace on purpose). The browser SSE endpoints (/api/workspaces/*/conversations*) are
+`/api/agent/v1/tools/eval` is single-turn and evaluation-only (kept outside the /api/agent/*
+namespace on purpose). The browser SSE endpoints (/api/agent/v1/workspaces/*/conversations*) are
 unchanged and not token-gated.
 
 Browser turns run independently of any one HTTP connection, so a refreshed page
@@ -54,7 +54,8 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Literal
+from time import monotonic
+from typing import Awaitable, AsyncIterator, Callable, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -114,7 +115,7 @@ from .managed_context import (
 )
 from .naming import schedule_auto_naming
 from .store import Store
-from .turn_result import collect_turn_event, new_turn_result
+from .turn_result import collect_turn_event, new_turn_result, read_final_event
 
 configure_logging()
 LOG = logging.getLogger("vibesim_ui.app")
@@ -153,13 +154,48 @@ class ActiveBrowserTurn:
     # anything yet. `current_role` is what an interrupt lands on, so the next
     # turn can resume that role's session; `role_ready` is why interrupting is
     # safe at all — before it, the role's rollout does not yet hold the prompt
-    # carrying the handoff. Both are rebuilt on a reconnect from the replayed
-    # `role_start` / `role_ready` events, so no extra state crosses the wire.
+    # carrying the handoff. The pair lives here, on the server, for the whole
+    # turn; a browser that reconnects rebuilds its own view of it from the
+    # replayed `role_start` / `role_ready` events, so nothing extra has to
+    # cross the wire.
+    #
+    # Written only under `condition`, by `enter_role`. A canceller decides
+    # whether interrupting is safe by reading the pair, and a pair that could be
+    # half-updated — or updated between the decision and the cancel — would make
+    # that decision about a role the turn has already left.
     current_role: str = ""
     role_ready: bool = False
+    # Whether the turn's coroutine has begun. A task cancelled before its first
+    # step never enters its own body, so none of its `finally` blocks run: the
+    # stream never ends, the registration survives, and the conversation is
+    # unusable from then on. Cancelling waits for this rather than racing it.
+    started: bool = False
+    # Set once, by whichever Stop wins, under `condition`. A second Stop joins
+    # that one instead of cancelling again — a second `task.cancel()` does not
+    # stop the turn twice, it interrupts the first cancellation's own cleanup,
+    # which is in the middle of asking the runtime to exit.
+    cancel_requested: bool = False
+    # Where that cancellation landed, and therefore what the next message
+    # resumes. Read by the turn itself when it writes its record, so the answer
+    # is stored before the conversation is free to take another message.
+    interrupted_role: str = ""
+
+    async def begin(self) -> None:
+        """Say the turn's body is running and its own cleanup now applies."""
+        async with self.condition:
+            self.started = True
+            self.condition.notify_all()
 
     async def publish(self, event: str) -> None:
         async with self.condition:
+            self.events.append(event)
+            self.condition.notify_all()
+
+    async def enter_role(self, kind: str, role: str, event: str) -> None:
+        """Record which role the turn is inside, and say so, in one step."""
+        async with self.condition:
+            self.current_role = role
+            self.role_ready = kind == "role_ready"
             self.events.append(event)
             self.condition.notify_all()
 
@@ -192,7 +228,16 @@ def _turn_stream_response(active_turn: ActiveBrowserTurn) -> StreamingResponse:
     return StreamingResponse(
         active_turn.stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            # Which turn this stream belongs to, on the response head rather
+            # than in the body. A caller learns it the moment the response
+            # arrives — before reading a single frame — which is when it needs
+            # it: `/cancel` names the conversation, and a browser that means one
+            # particular turn has to be able to say which.
+            "X-Turn-Id": active_turn.turn_id,
+        },
     )
 
 
@@ -669,12 +714,12 @@ def index() -> FileResponse:
     return FileResponse(FRONTEND / "index.html")
 
 
-@app.get("/api/workspaces")
+@app.get("/api/agent/v1/workspaces")
 def list_workspaces() -> dict:
     return {"workspaces": store.registry.list()}
 
 
-@app.get("/api/codex-backends")
+@app.get("/api/agent/v1/codex-backends")
 def list_codex_backends() -> dict:
     """Return the safe, server-owned model choices shared by both UIs.
 
@@ -699,7 +744,7 @@ def list_codex_backends() -> dict:
     }
 
 
-@app.get("/api/conversations")
+@app.get("/api/agent/v1/conversations")
 def list_all_conversations() -> dict:
     """Compatibility index for the standalone shell served at ``/``.
 
@@ -714,7 +759,7 @@ def list_all_conversations() -> dict:
     }
 
 
-@app.get("/api/jobs")
+@app.get("/api/agent/v1/jobs")
 def list_managed_jobs() -> dict:
     """Return conversation ownership overlays; Analyzer owns result catalogs."""
     fields = {
@@ -757,12 +802,12 @@ def _create_workspace(body: NewWorkspace) -> dict:
         raise
 
 
-@app.post("/api/workspaces")
+@app.post("/api/agent/v1/workspaces")
 def create_workspace(body: NewWorkspace) -> dict:
     return _create_workspace(body)
 
 
-@app.get("/api/workspaces/{workspace_id}")
+@app.get("/api/agent/v1/workspaces/{workspace_id}")
 def get_workspace(workspace_id: str) -> dict:
     try:
         return store.registry.get(workspace_id)
@@ -770,7 +815,7 @@ def get_workspace(workspace_id: str) -> dict:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
 
 
-@app.get("/api/workspaces/{workspace_id}/jobs/{resource_id}")
+@app.get("/api/agent/v1/workspaces/{workspace_id}/jobs/{resource_id}")
 def get_managed_job_resource(workspace_id: str, resource_id: str) -> dict:
     """Return only the conversation-owned overlay for an Analyzer resource.
 
@@ -810,7 +855,7 @@ def _valid_analyzer_resource_id(job_kind: str, resource_id: str | None) -> bool:
     )
 
 
-@app.patch("/api/workspaces/{workspace_id}")
+@app.patch("/api/agent/v1/workspaces/{workspace_id}")
 def update_workspace(workspace_id: str, body: UpdateWorkspace) -> dict:
     try:
         return store.registry.update(
@@ -824,7 +869,7 @@ def update_workspace(workspace_id: str, body: UpdateWorkspace) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/api/workspaces/{workspace_id}/conversations")
+@app.get("/api/agent/v1/workspaces/{workspace_id}/conversations")
 def list_conversations(workspace_id: str) -> dict:
     try:
         conversations = store.list(workspace_id)
@@ -837,7 +882,7 @@ def list_conversations(workspace_id: str) -> dict:
     }
 
 
-@app.post("/api/workspaces/{workspace_id}/conversations")
+@app.post("/api/agent/v1/workspaces/{workspace_id}/conversations")
 def create_conversation(workspace_id: str, body: NewConversation) -> dict:
     try:
         store.registry.get(workspace_id)
@@ -879,7 +924,7 @@ def create_conversation(workspace_id: str, body: NewConversation) -> dict:
     return conversation
 
 
-@app.patch("/api/workspaces/{workspace_id}/conversations/{cid}/runtime")
+@app.patch("/api/agent/v1/workspaces/{workspace_id}/conversations/{cid}/runtime")
 def update_conversation_runtime(
     workspace_id: str, cid: str, body: UpdateConversationRuntime
 ) -> dict:
@@ -961,7 +1006,7 @@ def _managed_artifact_root(
         raise HTTPException(status_code=error.status_code, detail=detail) from error
 
 
-@app.post("/api/internal/managed-runs/register")
+@app.post("/api/agent/v1/internal/managed-runs/register")
 async def register_managed_run(
     body: RegisterManagedRun,
     capability: Capability = Depends(require_managed_capability),
@@ -1075,7 +1120,7 @@ async def register_managed_run(
     }
 
 
-@app.post("/api/internal/managed-runs/{job_id}/status")
+@app.post("/api/agent/v1/internal/managed-runs/{job_id}/status")
 async def update_managed_run(
     job_id: str,
     body: UpdateManagedRun,
@@ -1130,7 +1175,7 @@ async def update_managed_run(
     return event
 
 
-@app.post("/api/internal/managed-jobs/register")
+@app.post("/api/agent/v1/internal/managed-jobs/register")
 async def register_managed_job(
     body: RegisterManagedJob,
     capability: Capability = Depends(require_managed_capability),
@@ -1192,7 +1237,7 @@ async def register_managed_job(
     }
 
 
-@app.post("/api/internal/managed-jobs/{job_id}/status")
+@app.post("/api/agent/v1/internal/managed-jobs/{job_id}/status")
 async def update_managed_job(
     job_id: str,
     body: UpdateManagedJob,
@@ -1242,7 +1287,7 @@ async def update_managed_job(
     return event
 
 
-@app.post("/api/internal/analyzer-citations/register")
+@app.post("/api/agent/v1/internal/analyzer-citations/register")
 def register_managed_analyzer_citations(
     body: RegisterManagedCitationDictionary,
     capability: Capability = Depends(require_managed_capability),
@@ -1365,7 +1410,7 @@ def register_managed_analyzer_citations(
     return snapshot
 
 
-@app.get("/api/workspaces/{workspace_id}/conversations/{cid}/experiments")
+@app.get("/api/agent/v1/workspaces/{workspace_id}/conversations/{cid}/experiments")
 def list_conversation_experiments(workspace_id: str, cid: str) -> dict:
     if store.get(workspace_id, cid) is None:
         raise HTTPException(status_code=404, detail="conversation not found")
@@ -1379,7 +1424,7 @@ def list_conversation_experiments(workspace_id: str, cid: str) -> dict:
     }
 
 
-@app.post("/api/eval")
+@app.post("/api/agent/v1/tools/eval")
 async def eval_run(body: EvalRequest, _: None = Depends(require_token)) -> dict:
     try:
         return await run_eval(
@@ -1393,7 +1438,7 @@ async def eval_run(body: EvalRequest, _: None = Depends(require_token)) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/api/agent/skill")
+@app.get("/api/agent/v1/tools/skill")
 def serve_skill() -> FileResponse:
     """Public agent-facing skill doc. Fetch this first to learn what VibeSim does,
     when to call it, what to expect, and the HTTP contract."""
@@ -1402,12 +1447,12 @@ def serve_skill() -> FileResponse:
     return FileResponse(str(SKILL_DOC), media_type="text/markdown")
 
 
-@app.get("/api/agent/workspaces")
+@app.get("/api/agent/v1/tools/workspaces")
 def agent_list_workspaces(_: None = Depends(require_token)) -> dict:
     return {"workspaces": store.registry.list()}
 
 
-@app.post("/api/agent/workspaces")
+@app.post("/api/agent/v1/tools/workspaces")
 def agent_create_workspace(
     body: NewWorkspace,
     _: None = Depends(require_token),
@@ -1426,7 +1471,7 @@ def _artifact_http_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
 
 
-@app.get("/api/agent/workspaces/{workspace_id}/artifacts")
+@app.get("/api/agent/v1/tools/workspaces/{workspace_id}/artifacts")
 def list_workspace_artifacts(
     workspace_id: str,
     subdir: str | None = Query(default=None),
@@ -1439,7 +1484,7 @@ def list_workspace_artifacts(
         raise _artifact_http_error(exc) from exc
 
 
-@app.get("/api/agent/workspaces/{workspace_id}/artifacts/download")
+@app.get("/api/agent/v1/tools/workspaces/{workspace_id}/artifacts/download")
 def download_workspace_artifact(
     workspace_id: str,
     path: str = Query(...),
@@ -1458,10 +1503,10 @@ def download_workspace_artifact(
 # workspace and resumes its orchestrator/implementer Codex sessions across turns.
 # The calling agent reads `final` and, like a human, decides whether to answer a
 # clarifying question or steer with another turn. Artifacts are fetched through
-# the workspace-scoped /api/agent/workspaces/{workspace_id}/artifacts* routes.
+# the workspace-scoped /api/agent/v1/tools/workspaces/{workspace_id}/artifacts* routes.
 
 
-@app.post("/api/agent/workspaces/{workspace_id}/conversations")
+@app.post("/api/agent/v1/tools/workspaces/{workspace_id}/conversations")
 def agent_create_conversation(
     workspace_id: str,
     body: NewConversation,
@@ -1513,7 +1558,7 @@ def agent_create_conversation(
     return conv
 
 
-@app.get("/api/agent/workspaces/{workspace_id}/conversations/{cid}")
+@app.get("/api/agent/v1/tools/workspaces/{workspace_id}/conversations/{cid}")
 def agent_get_conversation(
     workspace_id: str, cid: str, _: None = Depends(require_token)
 ) -> dict:
@@ -1523,7 +1568,7 @@ def agent_get_conversation(
     return conv
 
 
-@app.delete("/api/agent/workspaces/{workspace_id}/conversations/{cid}")
+@app.delete("/api/agent/v1/tools/workspaces/{workspace_id}/conversations/{cid}")
 def agent_delete_conversation(
     workspace_id: str, cid: str, _: None = Depends(require_token)
 ) -> dict:
@@ -1538,7 +1583,7 @@ def agent_delete_conversation(
     return {"ok": True}
 
 
-@app.post("/api/agent/workspaces/{workspace_id}/conversations/{cid}/messages")
+@app.post("/api/agent/v1/tools/workspaces/{workspace_id}/conversations/{cid}/messages")
 async def agent_send_message(
     workspace_id: str,
     cid: str,
@@ -1581,6 +1626,7 @@ async def agent_send_message(
         cid,
         "user",
         text,
+        turn_id=turn_id,
         analyzer_context=persisted_context(body.analyzer_context),
     )
     sessions = store.sessions_for_prompt(
@@ -1646,7 +1692,7 @@ async def agent_send_message(
                 and not bool(result["error"])
                 and not bool(result["failure_code"])
             )
-        except Exception as exc:  # surface backend failures in-band, like /api/eval
+        except Exception as exc:  # surface backend failures in-band, like /api/agent/v1/tools/eval
             result["error"] = str(exc)
             LOG.exception(
                 "agent.turn.error",
@@ -1697,6 +1743,7 @@ async def agent_send_message(
             cid,
             "assistant",
             result["final"],
+            turn_id=turn_id,
             intermediate_outputs=result["intermediate_outputs"] or None,
             activity=activity,
             citations=frozen_citations or None,
@@ -1735,7 +1782,7 @@ async def agent_send_message(
     return result
 
 
-@app.get("/api/workspaces/{workspace_id}/conversations/{cid}")
+@app.get("/api/agent/v1/workspaces/{workspace_id}/conversations/{cid}")
 def get_conversation(
     workspace_id: str,
     cid: str,
@@ -1766,7 +1813,7 @@ def get_conversation(
     return conv
 
 
-@app.delete("/api/workspaces/{workspace_id}/conversations/{cid}")
+@app.delete("/api/agent/v1/workspaces/{workspace_id}/conversations/{cid}")
 def delete_conversation(workspace_id: str, cid: str) -> dict:
     log_event(
         LOG,
@@ -1787,7 +1834,7 @@ def delete_conversation(workspace_id: str, cid: str) -> dict:
 # denylist. Reading is always bounded — see artifacts.MAX_PREVIEW_BYTES.
 
 
-@app.get("/api/file")
+@app.get("/api/agent/v1/file")
 def serve_file(
     path: str = Query(...), workspace_id: str = Query(default="w_main")
 ) -> Response:
@@ -1812,7 +1859,7 @@ def serve_file(
     )
 
 
-@app.get("/api/file/meta")
+@app.get("/api/agent/v1/file/meta")
 def serve_file_meta(
     path: str = Query(...), workspace_id: str = Query(default="w_main")
 ) -> dict:
@@ -1822,7 +1869,7 @@ def serve_file_meta(
         raise _artifact_http_error(exc) from exc
 
 
-@app.get("/api/file/list")
+@app.get("/api/agent/v1/file/list")
 def serve_file_list(
     path: str | None = Query(default=None),
     workspace_id: str = Query(default="w_main"),
@@ -1836,7 +1883,7 @@ def serve_file_list(
         raise _artifact_http_error(exc) from exc
 
 
-@app.post("/api/workspaces/{workspace_id}/conversations/{cid}/messages")
+@app.post("/api/agent/v1/workspaces/{workspace_id}/conversations/{cid}/messages")
 async def send_message(
     workspace_id: str, cid: str, body: SendMessage
 ) -> StreamingResponse:
@@ -1886,6 +1933,7 @@ async def send_message(
         cid,
         "user",
         text,
+        turn_id=turn_id,
         analyzer_context=persisted_context(body.analyzer_context),
     )
     sessions = store.sessions_for_prompt(
@@ -1934,7 +1982,7 @@ async def send_message(
     return _turn_stream_response(active_turn)
 
 
-@app.get("/api/workspaces/{workspace_id}/conversations/{cid}/stream")
+@app.get("/api/agent/v1/workspaces/{workspace_id}/conversations/{cid}/stream")
 async def resume_message_stream(workspace_id: str, cid: str) -> Response:
     if store.get(workspace_id, cid) is None:
         raise HTTPException(status_code=404, detail="conversation not found")
@@ -1946,25 +1994,203 @@ async def resume_message_stream(workspace_id: str, cid: str) -> Response:
     return _turn_stream_response(active_turn)
 
 
-@app.post("/api/workspaces/{workspace_id}/conversations/{cid}/cancel")
-async def cancel_message(workspace_id: str, cid: str) -> dict:
+@app.get("/api/agent/v1/workspaces/{workspace_id}/conversations/{cid}/turns")
+def list_conversation_turns(workspace_id: str, cid: str) -> dict:
+    """Which turns of this conversation were recorded, and how much of each.
+
+    The index for replay. It exists so the Agent UI can be driven from real
+    history — a recorded turn played back — instead of from a hand-written
+    fake backend that would drift from what the real one emits.
+    """
+    if store.get(workspace_id, cid) is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {"turns": store.list_turns(workspace_id, cid)}
+
+
+@app.get(
+    "/api/agent/v1/workspaces/{workspace_id}/conversations/{cid}/turns/{turn_id}/replay"
+)
+async def replay_turn(workspace_id: str, cid: str, turn_id: str) -> Response:
+    """Replay one recorded turn as the same SSE stream the live turn produced.
+
+    Read-only in the strict sense: it starts nothing, resumes nothing, and
+    writes nothing. It reads `turn_events` and re-frames them, so a browser
+    attaches with the code it already has and sees exactly what was recorded —
+    no synthesis, no interpolation, no invented ordering.
+
+    It deliberately does not pace the replay. Playback timing is a display
+    choice, and inventing one here would make the transport pretend to be the
+    original clock.
+    """
+    if store.get(workspace_id, cid) is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    # The turn id is checked against this conversation, not merely for
+    # existence: ids are global, and a caller must not read another
+    # conversation's turn by naming it here.
+    if not store.turn_belongs_to(workspace_id, cid, turn_id):
+        raise HTTPException(status_code=404, detail="turn not found")
+
+    events = store.list_turn_events(workspace_id, turn_id)
+
+    async def replay() -> AsyncIterator[str]:
+        for event in events:
+            yield _sse(event["kind"], event["payload"])
+
+    return StreamingResponse(
+        replay(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+"""How long a Stop waits for a role handoff to finish before forcing it.
+
+Long enough for a role's first token, short enough that Stop still feels like a
+button. A runtime that has not produced anything by then is not mid-handoff in
+any useful sense — it is stuck, and stopping it is what the user asked for. This
+is the one case where the guarantee below is knowingly given up: the turn is
+cancelled anyway, and the handoff it was inside is lost.
+"""
+SAFE_INTERRUPT_TIMEOUT_S = 30.0
+
+
+async def _cancel_when_safe(active_turn: ActiveBrowserTurn) -> tuple[bool, str]:
+    """Cancel the turn at a point where the handoff is not thrown away.
+
+    Between `role_start` and `role_ready` the role's rollout does not yet hold
+    the prompt carrying the handoff, so cancelling there loses the handoff
+    rather than the work — the next turn would resume a role that never received
+    its instructions.
+
+    Readiness is re-checked at the cancel rather than remembered from the
+    wake-up. Waking is not permission: a turn can become ready and move straight
+    into the next role's handoff before this coroutine is scheduled again, and a
+    cancel authorised for role A would then land in B — losing B's handoff and
+    recording a resume role that never received its instructions.
+
+    What makes the recheck sound is that nothing is awaited between it and
+    `task.cancel()`, since roles only change at an await. Both stay inside the
+    `async with` to keep that visible, next to the state they read.
+
+    This belongs to the server, not the browser. A browser sees the same two
+    events late and as a replay: a reconnecting client can be told `role_ready`
+    for a role the server has already left, and one that has not yet received
+    `role_start` believes there is no handoff in flight at all.
+
+    There is a second point that is unsafe for a different reason: before the
+    turn's coroutine has had its first step. A task cancelled there never enters
+    its own body, so none of its `finally` blocks run — the stream is never
+    ended and the registration never removed, and the conversation is unusable
+    from then on. That window is microseconds wide and closes by itself as soon
+    as this coroutine yields, so waiting for it costs nothing.
+
+    Returns whether anything was cancelled, and the role the next message should
+    resume — empty when the turn should go back to the driving role.
+    """
+    deadline = monotonic() + SAFE_INTERRUPT_TIMEOUT_S
+    async with active_turn.condition:
+        while _too_early_to_cancel(active_turn):
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                log_event(
+                    LOG,
+                    "turn.interrupt.forced",
+                    turn_id=active_turn.turn_id,
+                    role=active_turn.current_role,
+                    started=active_turn.started,
+                )
+                break
+            try:
+                await asyncio.wait_for(active_turn.condition.wait(), timeout=remaining)
+            except TimeoutError:
+                continue
+        task = active_turn.task
+        if task is None or task.done():
+            # It ended while we waited for a safe point. Nothing was interrupted.
+            return (False, "")
+        if active_turn.cancel_requested:
+            # Already being stopped. Joining rather than asking again, because a
+            # second `task.cancel()` lands inside the first cancellation's
+            # cleanup — which is waiting for the runtime process to exit — and
+            # would abandon it half way while reporting success.
+            return (True, active_turn.interrupted_role)
+        if not active_turn.started:
+            # Only reachable by way of the forced path above, which means the
+            # loop has not run this task in `SAFE_INTERRUPT_TIMEOUT_S`. Stopping
+            # it here is known to wedge the conversation, and a Stop that did
+            # nothing is a smaller harm than a conversation that can never be
+            # used again.
+            log_event(
+                LOG,
+                "turn.interrupt.refused",
+                turn_id=active_turn.turn_id,
+                reason="turn has not started",
+            )
+            return (False, "")
+        # Only a role that has produced output is worth recording: before that
+        # its rollout does not hold the prompt carrying the handoff, so there is
+        # nothing to resume and the next turn should start at the driving role.
+        active_turn.interrupted_role = (
+            active_turn.current_role if active_turn.role_ready else ""
+        )
+        active_turn.cancel_requested = True
+        task.cancel()
+    return (True, active_turn.interrupted_role)
+
+
+def _too_early_to_cancel(active_turn: ActiveBrowserTurn) -> bool:
+    """Whether cancelling right now would destroy something worth keeping."""
+    if active_turn.finished:
+        return False
+    if not active_turn.started:
+        # The turn's own cleanup does not exist yet.
+        return True
+    # Mid-handoff: the role's rollout does not hold the handoff prompt yet.
+    return bool(active_turn.current_role) and not active_turn.role_ready
+
+
+@app.post("/api/agent/v1/workspaces/{workspace_id}/conversations/{cid}/cancel")
+async def cancel_message(workspace_id: str, cid: str, turn_id: str | None = None) -> dict:
+    """Stop this conversation's running turn.
+
+    `turn_id` narrows that to one turn. Without it the request means "whatever is
+    running", which is what a reader pressing Stop means and is answered as
+    before. With it, a turn that is no longer the one running is refused rather
+    than substituted — a browser whose own turn has ended while its Stop was in
+    flight would otherwise kill a turn started somewhere else, in another tab, by
+    someone who never asked for it. The two callers differ in what they know:
+    the reader knows what is on screen, and a retry knows only which message it
+    was for.
+    """
     if store.get(workspace_id, cid) is None:
         raise HTTPException(status_code=404, detail="conversation not found")
     active_turn = _active_browser_turns.get((workspace_id, cid))
     if active_turn is None or active_turn.task is None or active_turn.task.done():
         return {"cancelled": False}
-    # Read before cancelling: `_run_browser_turn` clears the active turn as it
-    # unwinds. Only a role that has produced output is worth recording — before
-    # that its rollout does not hold the prompt carrying the handoff, so there
-    # is nothing to resume and the next turn should start at the driving role.
-    interrupted_role = active_turn.current_role if active_turn.role_ready else ""
-    active_turn.task.cancel()
+    if turn_id is not None and turn_id != active_turn.turn_id:
+        # Not an error: the turn the caller meant is over, which is the outcome
+        # the Stop was asking for. `stale` says the running turn was left alone,
+        # so a caller can tell this from "there was nothing running at all".
+        log_event(
+            LOG,
+            "turn.cancel_stale",
+            workspace_id=workspace_id,
+            conversation_id=cid,
+            requested_turn_id=turn_id,
+            running_turn_id=active_turn.turn_id,
+        )
+        return {"cancelled": False, "stale": True}
+    cancelled, interrupted_role = await _cancel_when_safe(active_turn)
+    if not cancelled:
+        return {"cancelled": False}
     try:
         await active_turn.task
     except asyncio.CancelledError:
         pass
-    if interrupted_role:
-        store.set_interrupted_role(workspace_id, cid, interrupted_role)
+    # The landing role is not written here. The turn writes it while it is
+    # finalizing, which is before it ends its stream and drops its registration
+    # — writing it after that returns would leave a window in which the
+    # conversation was free to take a message and still named the old role.
     log_event(
         LOG,
         "turn.interrupted",
@@ -1974,6 +2200,36 @@ async def cancel_message(workspace_id: str, cid: str) -> dict:
         role=interrupted_role,
     )
     return {"cancelled": True, "interrupted_role": interrupted_role}
+
+
+def _teardown_failed(cid: str, turn_id: str, step: str, error: BaseException) -> None:
+    """Say which piece of a turn's teardown failed, and carry on with the rest."""
+    LOG.exception(
+        "turn.teardown_failed",
+        exc_info=error,
+        extra={
+            "event_fields": {
+                "event": "turn.teardown_failed",
+                "conversation_id": cid,
+                "turn_id": turn_id,
+                "step": step,
+            }
+        },
+    )
+
+
+async def _step(cid: str, turn_id: str, step: str, work: Awaitable[None]) -> None:
+    try:
+        await work
+    except Exception as error:
+        _teardown_failed(cid, turn_id, step, error)
+
+
+def _sync_step(cid: str, turn_id: str, step: str, work: Callable[[], None]) -> None:
+    try:
+        work()
+    except Exception as error:
+        _teardown_failed(cid, turn_id, step, error)
 
 
 async def _run_browser_turn(
@@ -1993,18 +2249,29 @@ async def _run_browser_turn(
     resume_role: str = "",
 ) -> None:
     runtimes = runtimes or _role_runtimes(None)
-    lock = _lock_for(workspace_id)
-    async with lock:
-        final_text: str | None = None
-        final_outcome: str | None = None
-        failure: dict[str, str] | None = None
-        cancelled = False
-        replying_role = ""
-        intermediate_outputs: list[dict[str, str]] = []
-        # Persist render-relevant events on completion; retain all SSE events in
-        # ActiveBrowserTurn during execution so a refreshed client can replay them.
-        activity: list[dict] = []
-        try:
+    # The workspace lock is taken *inside* the try because a turn can be
+    # cancelled while it is still queued behind another turn in this workspace.
+    # That cancellation arrives at `async with`, so with the lock outside, the
+    # try/finally below never ran at all: the turn never ended its stream, never
+    # closed its record and never unregistered, which leaves the conversation
+    # unusable — the browser waits on a stream that will not finish, and every
+    # later message is refused as a conflict. Everything the turn reports is
+    # therefore initialised out here, where the handlers can reach it whether or
+    # not the turn ever started.
+    final_text: str | None = None
+    final_outcome: str | None = None
+    failure: dict[str, str] | None = None
+    cancelled = False
+    replying_role = ""
+    intermediate_outputs: list[dict[str, str]] = []
+    # Persist render-relevant events on completion; retain all SSE events in
+    # ActiveBrowserTurn during execution so a refreshed client can replay them.
+    activity: list[dict] = []
+    try:
+        # Before the lock, and first inside the `try`: from here on this
+        # function's own cleanup exists, which is what makes cancelling safe.
+        await active_turn.begin()
+        async with _lock_for(workspace_id):
             async for ev in run_turn(
                 workspace_id,
                 cid,
@@ -2046,11 +2313,8 @@ async def _run_browser_turn(
                         )
                     )
                 elif kind in {"role_start", "role_ready"}:
-                    active_turn.current_role = str(ev.get("role") or "")
-                    active_turn.role_ready = kind == "role_ready"
-                    await active_turn.publish(
-                        _sse(kind, {"role": active_turn.current_role})
-                    )
+                    role = str(ev.get("role") or "")
+                    await active_turn.enter_role(kind, role, _sse(kind, {"role": role}))
                 elif kind == "implementer":
                     implementer_text = str(ev.get("text") or "")
                     activity.append({"kind": "implementer", "text": implementer_text})
@@ -2107,25 +2371,14 @@ async def _run_browser_turn(
                     # the next message then continues with it instead of going
                     # back through the driver.
                     replying_role = str(ev.get("role") or "")
-                    event_failure = ev.get("failure")
-                    if isinstance(event_failure, dict):
-                        # No orchestrator decision was ever made, so there is no
-                        # outcome to report. `failure` is what the rest of this
-                        # function already keys the error card, the `failed`
-                        # status and the suppressed auto-naming off. The runtime's
-                        # own text is kept as the body: it names the status and
-                        # the surviving work, and is already free of host detail.
-                        failure = _failure_for_code(
-                            str(event_failure.get("code") or "")
-                        )
-                        final_outcome = None
-                    else:
-                        outcome = ev.get("outcome")
-                        final_outcome = (
-                            outcome
-                            if outcome in {"final_answer", "request_user_input"}
-                            else "final_answer"
-                        )
+                    final_outcome, failure_code = read_final_event(ev)
+                    if failure_code:
+                        # `failure` is what the rest of this function keys the
+                        # error card, the `failed` status and the suppressed
+                        # auto-naming off. The runtime's own text is kept as the
+                        # body: it names the status and the surviving work, and
+                        # is already free of host detail.
+                        failure = _failure_for_code(failure_code)
                 store.append_turn_event(
                     workspace_id,
                     turn_id,
@@ -2144,40 +2397,52 @@ async def _run_browser_turn(
                 final_preview=compact_text(final_text),
                 failure_code=failure["code"] if failure else "",
             )
-        except asyncio.CancelledError:
-            cancelled = True
-            # Name the role: this message is the durable record of where the
-            # interrupt landed, and therefore of who the next message continues
-            # with. `cancel_message` writes the same role to the conversation.
-            final_text = (
-                f"Stopped while the {active_turn.current_role} was working."
-                if active_turn.role_ready and active_turn.current_role
-                else "Stopped."
-            )
-            final_outcome = None
-            log_event(
-                LOG,
-                "turn.cancelled",
-                conversation_id=cid,
-                turn_id=turn_id,
-                role=active_turn.current_role,
-            )
-        except Exception as exc:  # surface backend failures to the UI
-            failure = _turn_failure(exc)
-            final_text = failure["message"]
-            final_outcome = None
-            LOG.exception(
-                "turn.error",
-                extra={
-                    "event_fields": {
-                        "event": "turn.error",
-                        "conversation_id": cid,
-                        "turn_id": turn_id,
-                        "error": str(exc),
-                    }
-                },
-            )
-        finally:
+    except asyncio.CancelledError:
+        cancelled = True
+        # Name the role: this message is the durable record of where the
+        # interrupt landed, and therefore of who the next message continues
+        # with. The same role is written to the conversation below, during this
+        # turn's finalization — see there for why it is the turn's to write.
+        #
+        # `interrupted_role` rather than `current_role`: the canceller decided
+        # which role this stop belongs to, and a forced one belongs to none.
+        final_text = (
+            f"Stopped while the {active_turn.interrupted_role} was working."
+            if active_turn.interrupted_role
+            else "Stopped."
+        )
+        final_outcome = None
+        log_event(
+            LOG,
+            "turn.cancelled",
+            conversation_id=cid,
+            turn_id=turn_id,
+            role=active_turn.current_role,
+        )
+    except Exception as exc:  # surface backend failures to the UI
+        failure = _turn_failure(exc)
+        final_text = failure["message"]
+        final_outcome = None
+        LOG.exception(
+            "turn.error",
+            extra={
+                "event_fields": {
+                    "event": "turn.error",
+                    "conversation_id": cid,
+                    "turn_id": turn_id,
+                    "error": str(exc),
+                }
+            },
+        )
+    finally:
+        # Closing the record and ending the stream are separated because they
+        # fail independently and only one of them is optional. A store write
+        # that raises here used to skip everything below it: the turn stayed
+        # in the registry with an unfinished stream, so the browser waited on
+        # a stream that would never end, every later message was refused as a
+        # conflict, and Stop reported there was nothing to stop. Losing the
+        # last message is bad; losing the conversation is worse.
+        try:
             if final_text is not None:
                 citation_dictionary = _latest_turn_citation_dictionary(
                     workspace_id, turn_id, analyzer_context
@@ -2186,6 +2451,14 @@ async def _run_browser_turn(
                 citation_dictionary_id = (
                     citation_dictionary.identity if citation_dictionary else None
                 )
+                # Decided once, for both the store and the `done` frame below.
+                # The frame used to derive it from `analyzer_context` instead —
+                # the context the turn *started* with — and a dictionary
+                # registered during the turn made the two disagree: the record
+                # said the citations were v2 and the live frame said they were
+                # not, so the same answer decoded one way on screen and another
+                # way after a reload.
+                citation_dsl_version = "v2" if citation_dictionary else None
                 # Rebuilt from the append-only event log rather than kept from
                 # memory. Experiment cards are written there by the managed-run
                 # callbacks, from their own request handlers, so the log is the
@@ -2199,15 +2472,20 @@ async def _run_browser_turn(
                 recovered_activity = _recoverable_turn_activity(workspace_id, turn_id)
                 if recovered_activity:
                     activity = recovered_activity
+                # How the turn ended, written down rather than left to be
+                # inferred from the shape of the record. A stopped turn has no
+                # orchestrator outcome, and storing it without one produced a
+                # bare `final` step — which means "answered" to every reader of
+                # the stored form, so a turn the user stopped read back as a
+                # turn that answered. One value, published on the `done` frame
+                # below as well as stored, so live and reloaded readings of the
+                # same turn cannot differ.
+                ending = "cancelled" if cancelled else final_outcome
                 activity.append(
                     {
                         "kind": "error" if failure else "final",
                         "text": final_text,
-                        **(
-                            {"outcome": final_outcome}
-                            if not failure and final_outcome is not None
-                            else {}
-                        ),
+                        **({"outcome": ending} if not failure and ending else {}),
                     }
                 )
                 store.add_message(
@@ -2215,11 +2493,12 @@ async def _run_browser_turn(
                     cid,
                     "assistant",
                     final_text,
+                    turn_id=turn_id,
                     intermediate_outputs=intermediate_outputs or None,
                     activity=activity or None,
                     citations=frozen_citations or None,
                     citation_dictionary_id=citation_dictionary_id,
-                    citation_dsl_version="v2" if citation_dictionary else None,
+                    citation_dsl_version=citation_dsl_version,
                     failure=failure,
                 )
                 naming_scheduled = (
@@ -2233,36 +2512,94 @@ async def _run_browser_turn(
                     if failure is None and not cancelled and final_text != "(no answer)"
                     else False
                 )
-                # Where the next message goes. A cancelled turn already wrote its
-                # own landing role in `cancel_message`, and a failed one should
-                # keep whatever it had so a retry reaches the same role; every
-                # other ending either continues a direct reply or returns the
-                # conversation to the driving role.
-                if not cancelled and failure is None:
-                    store.set_interrupted_role(workspace_id, cid, replying_role)
+                # Where the next message goes. Written here, by the turn, rather
+                # than by the `/cancel` handler after it returns: this runs
+                # before the stream ends and the registration is dropped, so
+                # there is no moment where the conversation is free to take
+                # another message and still says it should resume the role the
+                # last turn happened to be in.
+                #
+                # A cancelled turn lands on the role its canceller decided on.
+                # Empty means "back to the driving role" and is written rather
+                # than skipped, or a stale role would outlive the cancellation
+                # that just decided against it. A failed turn keeps whatever it
+                # had, so a retry reaches the same role; every other ending
+                # either continues a direct reply or returns the conversation to
+                # the driving role.
+                resume_role = (
+                    active_turn.interrupted_role if cancelled else replying_role
+                )
+                if cancelled or failure is None:
+                    store.set_interrupted_role(workspace_id, cid, resume_role)
+                else:
+                    resume_role = store.read_interrupted_role(workspace_id, cid)
                 await active_turn.publish(
                     _sse(
                         "done",
                         {
                             "text": final_text,
-                            "outcome": final_outcome,
+                            # The same values the store was just given, not
+                            # recomputed. A browser watching live and a browser
+                            # reloading the record have to read the turn the
+                            # same way, and this frame used to compute its own:
+                            # `final_outcome` is null for a stopped turn, which
+                            # every reader took for an answer, and
+                            # `replying_role` is not where a stopped turn landed
+                            # — so the last frame of a cancelled turn overwrote
+                            # the correct role the `/cancel` response had
+                            # already given the browser.
+                            "outcome": ending,
                             "citations": frozen_citations,
                             "citation_dictionary_id": citation_dictionary_id,
-                            "citation_dsl_version": "v2" if analyzer_context else None,
+                            "citation_dsl_version": citation_dsl_version,
                             "failure": failure,
                             "naming_scheduled": naming_scheduled,
-                            "interrupted_role": replying_role,
+                            "interrupted_role": resume_role,
                         },
                     )
                 )
-            await active_turn.finish()
-            store.finish_turn(
-                workspace_id,
-                turn_id,
-                "failed" if failure else "complete",
+        except Exception:
+            LOG.exception(
+                "turn.finalize_failed",
+                extra={
+                    "event_fields": {
+                        "event": "turn.finalize_failed",
+                        "conversation_id": cid,
+                        "turn_id": turn_id,
+                    }
+                },
             )
-            capabilities.revoke_turn(workspace_id, turn_id)
-            remove_managed_context(workspace_id, cid)
+        finally:
+            # Ordered by how badly the conversation needs each one, and nested so
+            # that a later failure cannot cost an earlier guarantee. Ending the
+            # stream and dropping the registration are the two that decide
+            # whether this conversation can be used again at all.
+            # Each step guarded on its own. Sharing one `except` meant the
+            # first failure took the rest with it — a store write that raised
+            # left an issued capability alive for its full two-hour lifetime and
+            # a managed-context file on disk, neither of which had anything to
+            # do with the failure.
+            await _step(cid, turn_id, "stream", active_turn.finish())
+            _sync_step(
+                cid,
+                turn_id,
+                "record",
+                lambda: store.finish_turn(
+                    workspace_id, turn_id, "failed" if failure else "complete"
+                ),
+            )
+            _sync_step(
+                cid,
+                turn_id,
+                "capability",
+                lambda: capabilities.revoke_turn(workspace_id, turn_id),
+            )
+            _sync_step(
+                cid,
+                turn_id,
+                "context",
+                lambda: remove_managed_context(workspace_id, cid),
+            )
             active_key = (workspace_id, cid)
             if _active_browser_turns.get(active_key) is active_turn:
                 _active_browser_turns.pop(active_key, None)

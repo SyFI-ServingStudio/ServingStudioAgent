@@ -7,7 +7,7 @@ description: Use the hosted VibeSim Agent API for ML-serving simulation, timing 
 
 **This is a skill for other agents.** It tells you *what VibeSim can do*, *when to
 reach for it*, *what to expect when you do*, and *how to call it* over plain HTTP.
-It is served live at `GET /api/agent/skill`, so you can fetch this one URL and start
+It is served live at `GET /api/agent/v1/tools/skill`, so you can fetch this one URL and start
 driving VibeSim with no framework-specific glue.
 
 VibeSim (a.k.a. VibeSim) is a **discrete-event simulator for ML serving/training
@@ -110,7 +110,7 @@ VibeSim is an **interactive assistant**, not a fire-and-forget function. Plan fo
 - **Base URL**: wherever this backend is hosted, e.g. `http://localhost:8765`.
 - If the server sets `VIBESIM_API_TOKEN`, every agent endpoint requires
   `Authorization: Bearer <token>` (missing/wrong → `401`). If unset (local dev),
-  no header is needed. `GET /api/agent/skill` is always public.
+  no header is needed. `GET /api/agent/v1/tools/skill` is always public.
 
 ---
 
@@ -122,21 +122,21 @@ as needed, and leave the conversation intact for human observation.
 
 ### Create or reuse a workspace
 
-List visible workspaces with `GET /api/agent/workspaces`. Create a managed one
-with `POST /api/agent/workspaces` and `{"displayName":"<short purpose>"}`.
+List visible workspaces with `GET /api/agent/v1/tools/workspaces`. Create a managed one
+with `POST /api/agent/v1/tools/workspaces` and `{"displayName":"<short purpose>"}`.
 The response contains its stable `workspace_id`. Reuse that id for related
 conversations and artifact access. Use `w_main` only when the caller explicitly
 wants the shared development checkout.
 
 ```bash
-workspace_id=$(curl -sS http://<host>:8765/api/agent/workspaces \
+workspace_id=$(curl -sS http://<host>:8765/api/agent/v1/tools/workspaces \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"displayName":"Llama 3 H200 rate study"}' \
   | uv run python -c 'import json, sys; print(json.load(sys.stdin)["workspace_id"])')
 ```
 
-### Create — `POST /api/agent/workspaces/{workspace_id}/conversations`
+### Create — `POST /api/agent/v1/tools/workspaces/{workspace_id}/conversations`
 
 Body: `{"sandbox": "workspace-write", "autonomous": false, "agent_mode": "orchestrated"}`
 (all optional; `autonomous` defaults **false** so the assistant will ask you
@@ -156,21 +156,21 @@ role, so switching would strand the sessions earlier turns built.
 
 Optional `codex_runtime` picks the model and reasoning effort per role, e.g.
 `{"codex_runtime": {"orchestrator": {"model": "gpt-5.6-terra", "effort": "high"}}}`.
-`GET /api/codex-backends` lists the selectable models with the efforts each one
+`GET /api/agent/v1/codex-backends` lists the selectable models with the efforts each one
 supports. `PATCH .../conversations/{cid}/runtime` changes the choice later:
 effort and sibling models are always allowed, but once the conversation has
 history it cannot cross model families (`409 conversation_runtime_locked`) —
 only the family that recorded a Codex session can resume it.
 
 ```bash
-curl -sS http://<host>:8765/api/agent/workspaces/$workspace_id/conversations \
+curl -sS http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/conversations \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"sandbox":"workspace-write","autonomous":false}'
 # -> {"id":"3f9a1c...","sandbox":"workspace-write","autonomous":false, ...}
 ```
 
-### Send a turn — `POST /api/agent/workspaces/{workspace_id}/conversations/{cid}/messages`
+### Send a turn — `POST /api/agent/v1/tools/workspaces/{workspace_id}/conversations/{cid}/messages`
 
 Body: `{"text": "..."}` (`text` required). Optional `sandbox_mode` and
 `autonomous_mode` are **per-turn overrides**; when omitted they inherit the
@@ -181,7 +181,7 @@ completes. Set a read timeout of at least 30 minutes and wait for this request
 itself; do not convert the call into manual GET polling.
 
 ```bash
-curl -sS http://<host>:8765/api/agent/workspaces/$workspace_id/conversations/3f9a1c.../messages \
+curl -sS http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/conversations/3f9a1c.../messages \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"text":"Simulate Llama-3-8B dense on 1xH200 at Poisson rate 48; report throughput and TPOT."}'
@@ -209,7 +209,7 @@ message to the same `cid`. The workspace and sessions carry over.
 
 ```bash
 curl -sS -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
-  http://<host>:8765/api/agent/workspaces/$workspace_id/conversations/3f9a1c...
+  http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/conversations/3f9a1c...
 ```
 
 Return the conversation id to the human and leave the conversation intact on
@@ -225,12 +225,12 @@ workspace. Fetch them with its `workspace_id`.
 
 ```bash
 # list
-curl -sS -G http://<host>:8765/api/agent/workspaces/$workspace_id/artifacts \
+curl -sS -G http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/artifacts \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   --data-urlencode "subdir=logs"
 
 # download one file from the listing
-curl -sS -OJ -G http://<host>:8765/api/agent/workspaces/$workspace_id/artifacts/download \
+curl -sS -OJ -G http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/artifacts/download \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   --data-urlencode "path=logs/<run>/summary.json"
 ```
@@ -241,9 +241,9 @@ heavy trees (`.git`, `target`, `node_modules`, …) are skipped.
 
 ---
 
-## 7. Evaluation-only endpoint (`POST /api/eval`)
+## 7. Evaluation-only endpoint (`POST /api/agent/v1/tools/eval`)
 
-`POST /api/eval` runs **one stateless single-turn prompt** and returns the same
+`POST /api/agent/v1/tools/eval` runs **one stateless single-turn prompt** and returns the same
 JSON shape. It exists for **capability evaluation / testcases**, not interactive
 use: there is no conversation, no cross-turn continuity, and it defaults to
 `autonomous: true`. For real agent work use the conversation interface above.
@@ -254,15 +254,15 @@ use: there is no conversation, no cross-turn continuity, and it defaults to
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/agent/skill` | public | This skill doc (`text/markdown`). |
-| GET | `/api/agent/workspaces` | token | List active workspaces. |
-| POST | `/api/agent/workspaces` | token | Create one durable managed workspace. |
-| POST | `/api/agent/workspaces/{wid}/conversations` | token | Create an interactive conversation in a workspace. |
-| POST | `/api/agent/workspaces/{wid}/conversations/{cid}/messages` | token | Run one turn; synchronous JSON. |
-| GET | `/api/agent/workspaces/{wid}/conversations/{cid}` | token | Full conversation history. |
-| DELETE | `/api/agent/workspaces/{wid}/conversations/{cid}` | token | Human/operator cleanup only; calling agents must not invoke it. |
-| GET | `/api/agent/workspaces/{wid}/artifacts` | token | List files in a workspace. |
-| GET | `/api/agent/workspaces/{wid}/artifacts/download` | token | Download one workspace file. |
+| GET | `/api/agent/v1/tools/skill` | public | This skill doc (`text/markdown`). |
+| GET | `/api/agent/v1/tools/workspaces` | token | List active workspaces. |
+| POST | `/api/agent/v1/tools/workspaces` | token | Create one durable managed workspace. |
+| POST | `/api/agent/v1/tools/workspaces/{wid}/conversations` | token | Create an interactive conversation in a workspace. |
+| POST | `/api/agent/v1/tools/workspaces/{wid}/conversations/{cid}/messages` | token | Run one turn; synchronous JSON. |
+| GET | `/api/agent/v1/tools/workspaces/{wid}/conversations/{cid}` | token | Full conversation history. |
+| DELETE | `/api/agent/v1/tools/workspaces/{wid}/conversations/{cid}` | token | Human/operator cleanup only; calling agents must not invoke it. |
+| GET | `/api/agent/v1/tools/workspaces/{wid}/artifacts` | token | List files in a workspace. |
+| GET | `/api/agent/v1/tools/workspaces/{wid}/artifacts/download` | token | Download one workspace file. |
 
 > v1 is synchronous HTTP. An MCP wrapper over these same endpoints may be added
 > later; this HTTP contract stays the source of truth.

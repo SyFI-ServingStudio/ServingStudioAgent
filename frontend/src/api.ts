@@ -16,7 +16,7 @@ export const MESSAGE_PAGE_SIZE = 20;
 const MAIN_WORKSPACE_ID = "w_main";
 
 export async function listCodexBackends(): Promise<CodexRuntimeCatalog> {
-  const response = await fetch("/api/codex-backends");
+  const response = await fetch("/api/agent/v1/codex-backends");
   if (!response.ok) {
     throw new Error(`failed to list Codex backends: ${response.status}`);
   }
@@ -34,7 +34,7 @@ function locatedConversation(
 }
 
 export async function listConversations(): Promise<ConversationListResponse> {
-  const response = await fetch("/api/conversations");
+  const response = await fetch("/api/agent/v1/conversations");
   if (!response.ok) {
     throw new Error(`failed to list conversations: ${response.status}`);
   }
@@ -57,7 +57,7 @@ export async function createConversation(
   agentMode: AgentMode,
   codexRuntime: CodexRuntimeSelection,
 ): Promise<Conversation> {
-  const response = await fetch(`/api/workspaces/${MAIN_WORKSPACE_ID}/conversations`, {
+  const response = await fetch(`/api/agent/v1/workspaces/${MAIN_WORKSPACE_ID}/conversations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -83,7 +83,7 @@ export async function getConversation(
     query.set("before", String(before));
   }
   const response = await fetch(
-    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}?${query}`,
+    `/api/agent/v1/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}?${query}`,
   );
   if (response.status === 404) {
     return null;
@@ -100,7 +100,7 @@ export async function updateConversationRuntime(
 ): Promise<Conversation> {
   const location = conversationLocation(id);
   const response = await fetch(
-    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/runtime`,
+    `/api/agent/v1/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/runtime`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -114,7 +114,7 @@ export async function updateConversationRuntime(
 export async function deleteConversation(id: string): Promise<void> {
   const location = conversationLocation(id);
   const response = await fetch(
-    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}`,
+    `/api/agent/v1/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}`,
     { method: "DELETE" },
   );
   if (!response.ok) {
@@ -141,7 +141,7 @@ export async function streamTurn(
 ): Promise<void> {
   const location = conversationLocation(conversationId);
   const response = await fetch(
-    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/messages`,
+    `/api/agent/v1/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/messages`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -165,7 +165,7 @@ export async function resumeTurn(
 ): Promise<boolean> {
   const location = conversationLocation(conversationId);
   const response = await fetch(
-    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/stream`,
+    `/api/agent/v1/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/stream`,
     { signal },
   );
   // 204 is the normal idle response; 409 is accepted for compatibility with
@@ -180,7 +180,7 @@ export async function resumeTurn(
 export async function cancelTurn(conversationId: string): Promise<boolean> {
   const location = conversationLocation(conversationId);
   const response = await fetch(
-    `/api/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/cancel`,
+    `/api/agent/v1/workspaces/${encodeURIComponent(location.workspaceId)}/conversations/${encodeURIComponent(location.conversationId)}/cancel`,
     { method: "POST" },
   );
   if (!response.ok) {
@@ -305,8 +305,13 @@ function handleSseChunk(chunk: string, handlers: StreamHandlers): void {
           handlers.done?.(text, "final_answer");
           break;
         }
+        // A null outcome with no failure is a turn that was stopped: the
+        // backend now names it, and older frames that do not are still read
+        // as answers rather than guessed at.
         const outcome: TerminalOutcome =
-          data.outcome === "request_user_input" ? "request_user_input" : "final_answer";
+          data.outcome === "request_user_input" || data.outcome === "cancelled"
+            ? data.outcome
+            : "final_answer";
         handlers.event?.({ kind: "final", text, outcome });
         handlers.done?.(text, outcome);
       }

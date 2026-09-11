@@ -42,9 +42,14 @@ from .codex_runtime.config import (
 
 WORKSPACE_ID_PATTERN = re.compile(r"^w_[a-zA-Z0-9_-]{1,64}$")
 SCHEMA_VERSION = 1
-# 7 added conversations.agent_mode plus the assistant role's three runtime
-# columns. Migration is additive and idempotent; see `_initialize_database`.
-DATABASE_SCHEMA_VERSION = 7
+# 8 added messages.turn_id, so a message can name the turn that produced it.
+# Migration is additive and idempotent; see `_initialize_database`.
+DATABASE_SCHEMA_VERSION = 8
+
+# Fields the server puts on a message that no caller supplied. Anything
+# comparing a stored message against the text it was written from has to drop
+# these first, or server-issued identity reads as a content change.
+SERVER_MESSAGE_FIELDS = ("id", "turn_id")
 NAMING_STATES = {"pending", "generated", "manual"}
 
 # One role's three per-conversation runtime columns, in a fixed order.
@@ -455,7 +460,12 @@ class Store:
                         role TEXT NOT NULL,
                         content TEXT NOT NULL,
                         ts REAL NOT NULL,
-                        metadata_json TEXT NOT NULL
+                        metadata_json TEXT NOT NULL,
+                        -- The turn that produced this message. Null for rows
+                        -- imported from the legacy JSON store, which predates
+                        -- turns; a citation into one of those can name the
+                        -- message but not a turn.
+                        turn_id TEXT
                     );
                     CREATE INDEX IF NOT EXISTS messages_conversation_order
                         ON messages(conversation_id, id);
@@ -615,6 +625,17 @@ class Store:
                             "ALTER TABLE codex_sessions ADD COLUMN family "
                             f"TEXT NOT NULL DEFAULT '{default_family}'"
                         )
+                message_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(messages)"
+                    ).fetchall()
+                }
+                # Nullable and never backfilled: a message written before turns
+                # were recorded genuinely has no turn, and inventing one would
+                # make a guess indistinguishable from a fact.
+                if "turn_id" not in message_columns:
+                    connection.execute("ALTER TABLE messages ADD COLUMN turn_id TEXT")
                 execution_job_columns = {
                     row[1]
                     for row in connection.execute(
@@ -764,7 +785,7 @@ class Store:
             start_index = max(0, end_index - limit)
             message_rows = connection.execute(
                 """
-                SELECT role, content, ts, metadata_json
+                SELECT id, role, content, ts, metadata_json, turn_id
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY id
@@ -1038,8 +1059,15 @@ class Store:
         content: str,
         *,
         ts: float | None = None,
+        turn_id: str | None = None,
         **metadata: Any,
     ) -> None:
+        """Append one message.
+
+        ``turn_id`` is a named parameter rather than another metadata key
+        because it is identity, not display data: it anchors a citation, and
+        metadata is a free-form bag that callers add presentation fields to.
+        """
         message_time = ts if ts is not None else time.time()
         filtered_metadata = {
             key: value for key, value in metadata.items() if value is not None
@@ -1047,8 +1075,10 @@ class Store:
         with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
             connection.execute(
                 """
-                INSERT INTO messages(conversation_id, role, content, ts, metadata_json)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO messages(
+                    conversation_id, role, content, ts, metadata_json, turn_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -1056,6 +1086,7 @@ class Store:
                     content,
                     message_time,
                     json.dumps(filtered_metadata, ensure_ascii=False),
+                    turn_id,
                 ),
             )
             if role == "user":
@@ -1206,16 +1237,64 @@ class Store:
                 return False
             connection.execute(
                 """
-                INSERT INTO messages(conversation_id, role, content, ts, metadata_json)
-                VALUES (?, 'assistant', ?, ?, ?)
+                INSERT INTO messages(
+                    conversation_id, role, content, ts, metadata_json, turn_id
+                )
+                VALUES (?, 'assistant', ?, ?, ?, ?)
                 """,
-                (conversation_id, content, now, metadata),
+                (conversation_id, content, now, metadata, turn_id),
             )
             connection.execute(
                 "UPDATE conversations SET updated_at = ? WHERE id = ?",
                 (now, conversation_id),
             )
             return True
+
+    def list_turns(self, workspace_id: str, conversation_id: str) -> list[dict[str, Any]]:
+        """Every recorded turn of one conversation, oldest first.
+
+        `event_count` is how much of the turn was captured. A turn with zero
+        events is not replayable, and saying so here is cheaper than letting a
+        caller open a stream that immediately ends.
+        """
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            rows = connection.execute(
+                """
+                SELECT turns.id, turns.status, turns.created_at, turns.updated_at,
+                       COUNT(turn_events.id) AS event_count
+                FROM turns
+                LEFT JOIN turn_events ON turn_events.turn_id = turns.id
+                WHERE turns.conversation_id = ?
+                GROUP BY turns.id
+                ORDER BY turns.created_at, turns.id
+                """,
+                (conversation_id,),
+            ).fetchall()
+        return [
+            {
+                "turn_id": row["id"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "event_count": int(row["event_count"]),
+            }
+            for row in rows
+        ]
+
+    def turn_belongs_to(
+        self, workspace_id: str, conversation_id: str, turn_id: str
+    ) -> bool:
+        """Whether this conversation owns the turn.
+
+        Checked before any replay: a turn id alone must not read events out of
+        a conversation the caller did not name.
+        """
+        with self._lock_for(workspace_id), self._connect(workspace_id) as connection:
+            row = connection.execute(
+                "SELECT 1 FROM turns WHERE id = ? AND conversation_id = ?",
+                (turn_id, conversation_id),
+            ).fetchone()
+        return row is not None
 
     def append_turn_event(
         self,
@@ -1645,6 +1724,13 @@ class Store:
 
     @staticmethod
     def _message_payload(row: sqlite3.Row) -> dict[str, Any]:
+        """Shape one message for the browser.
+
+        ``id`` and ``turn_id`` come first and are set after the metadata merge,
+        so a stray metadata key of the same name cannot shadow the message's
+        identity. Position in the array is not identity: it shifts as history
+        grows, which is exactly what makes a frozen citation go stale.
+        """
         payload = {
             "role": row["role"],
             "content": row["content"],
@@ -1654,6 +1740,8 @@ class Store:
             payload.update(json.loads(row["metadata_json"]))
         except (TypeError, json.JSONDecodeError):
             pass
+        payload["id"] = row["id"]
+        payload["turn_id"] = row["turn_id"]
         return payload
 
     def _conversation_payload(
@@ -1667,7 +1755,7 @@ class Store:
         if message_rows is None:
             message_rows = connection.execute(
                 """
-                SELECT role, content, ts, metadata_json
+                SELECT id, role, content, ts, metadata_json, turn_id
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY id

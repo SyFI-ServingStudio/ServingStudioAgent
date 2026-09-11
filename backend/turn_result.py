@@ -54,6 +54,42 @@ def new_turn_result(
     return result
 
 
+#: What a role may report about how it finished. Anything else — including
+#: nothing at all — is an answer: a role that produced a final and did not say
+#: why is answering. Cancellation is not here because no role reports it; it is
+#: decided outside the stream, by whoever stopped the turn.
+ROLE_OUTCOMES = frozenset({"final_answer", "request_user_input"})
+
+#: Stands in for a failure that arrived without naming itself.
+#:
+#: Every caller tests the failure code for truth, so an empty string would make
+#: a code-less failure neither a failure nor an outcome — the turn would end as
+#: an answer with no text, which is wrong in both directions. `app.py` maps any
+#: code it does not know to the generic runtime failure, so this reaches a
+#: client as that.
+UNSPECIFIED_FAILURE = "unspecified_failure"
+
+
+def read_final_event(event: dict[str, Any]) -> tuple[str | None, str]:
+    """How a turn ended, from its `final` event: `(outcome, failure_code)`.
+
+    Exactly one of the two is set, and the failure code is non-empty whenever
+    the turn failed. A turn that failed never reached an orchestrator decision
+    and so has no outcome to report, and a turn that reached one did not fail.
+
+    Shared because both JSON entry points and the browser path read the same
+    event and each used to interpret it separately, agreeing only by having been
+    written the same way. Adding an outcome then meant finding every copy, and
+    the copy that was missed does not fail — it silently calls the new ending an
+    answer.
+    """
+    failure = event.get("failure")
+    if isinstance(failure, dict):
+        return None, str(failure.get("code") or UNSPECIFIED_FAILURE)
+    outcome = event.get("outcome")
+    return (outcome if outcome in ROLE_OUTCOMES else "final_answer"), ""
+
+
 def collect_turn_event(result: dict[str, Any], event: dict[str, str]) -> None:
     """Accumulate one run_turn event into a result dict from `new_turn_result`."""
     kind = event.get("kind")
@@ -97,17 +133,9 @@ def collect_turn_event(result: dict[str, Any], event: dict[str, str]) -> None:
         )
     elif kind == "final":
         result["final"] = str(event.get("text") or "")
-        failure = event.get("failure")
-        if isinstance(failure, dict):
-            # The turn ended without an orchestrator decision, so it has no
-            # outcome. `failure_code` is what the caller maps to the same
-            # {code, message} contract the browser path publishes.
-            result["failure_code"] = str(failure.get("code") or "")
-            result["outcome"] = None
-            return
-        outcome = event.get("outcome")
-        result["outcome"] = (
-            outcome
-            if outcome in {"final_answer", "request_user_input"}
-            else "final_answer"
-        )
+        outcome, failure_code = read_final_event(event)
+        result["outcome"] = outcome
+        if failure_code:
+            # `failure_code` is what the caller maps to the same {code, message}
+            # contract the browser path publishes.
+            result["failure_code"] = failure_code

@@ -26,7 +26,7 @@ class _JsonResponse(BytesIO):
 
 class AnalyzerEvidenceMcpTests(unittest.TestCase):
     def test_managed_kernel_curve_returns_metric_citation_map(self) -> None:
-        resource_path = "/api/v1/kernel-profiles/kp_test/curve"
+        resource_path = "/api/analyzer/v1/kernel-profiles/kp_test/subjects/curve/payload"
         curve_payload = {
             "series": [{"metric": "time_ms"}, {"metric": "tflops"}],
             "rows": [{"metrics": {"time_ms": 0.5, "tflops": 100.0}}],
@@ -87,8 +87,8 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
 
     def test_managed_prediction_returns_one_citation_adjacent_result(self) -> None:
         resource_path = (
-            "/api/v1/predictions/p_test/cases/40/"
-            "optimality-waterfall?mode=batch_locked"
+            "/api/analyzer/v1/predictions/p_test/cases/40/"
+            "subjects/optimality-waterfall/payload?mode=batch_locked"
         )
         prediction_payload = {
             "scope": "iteration",
@@ -113,7 +113,7 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
         }
 
         def open_request(request, timeout):
-            if "/api/v1/predictions/p_test/cases/40/optimality-waterfall" in request.full_url:
+            if "/predictions/p_test/cases/40/subjects/optimality-waterfall" in request.full_url:
                 return _JsonResponse(prediction_payload)
             posted = json.loads(request.data)
             self.assertEqual(
@@ -206,10 +206,10 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
         }
 
         def open_request(request, timeout):
-            if request.full_url.endswith("/api/v1/sweeps/e_test/payload"):
+            if request.full_url.endswith("/api/analyzer/v1/sweeps/e_test/subjects/sweep/payload"):
                 return _JsonResponse(sweep_payload)
             self.assertTrue(
-                request.full_url.endswith("/api/internal/analyzer-citations/register")
+                request.full_url.endswith("/api/agent/v1/internal/analyzer-citations/register")
             )
             self.assertEqual(request.get_header("Authorization"), "Bearer token")
             posted = json.loads(request.data)
@@ -239,7 +239,7 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
                 patch.object(server, "urlopen", open_request),
             ):
                 evidence = server.read_analyzer_resource(
-                    "/api/v1/sweeps/e_test/payload",
+                    "/api/analyzer/v1/sweeps/e_test/subjects/sweep/payload",
                     source="workspace",
                 )
 
@@ -316,10 +316,10 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
         dictionary = {"identity": "aggregate-host", "entries": []}
 
         def open_request(request, timeout):
-            if request.full_url.endswith("/api/v1/sweeps/e_host/payload"):
+            if request.full_url.endswith("/api/analyzer/v1/sweeps/e_host/subjects/sweep/payload"):
                 return _JsonResponse(payload)
             self.assertTrue(
-                request.full_url.endswith("/api/internal/analyzer-citations/register")
+                request.full_url.endswith("/api/agent/v1/internal/analyzer-citations/register")
             )
             return _JsonResponse(dictionary)
 
@@ -345,7 +345,7 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
                 patch.object(server, "urlopen", open_request),
             ):
                 evidence = server.read_analyzer_resource(
-                    "/api/v1/sweeps/e_host/payload",
+                    "/api/analyzer/v1/sweeps/e_host/subjects/sweep/payload",
                     source="host",
                 )
 
@@ -368,7 +368,7 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
         ):
             self.assertEqual(
                 server.read_analyzer_resource(
-                    "/api/v1/runs",
+                    "/api/analyzer/v1/runs",
                     source="host",
                 ),
                 {"metric": 12.5},
@@ -376,11 +376,11 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
 
     def test_read_resource_rejects_paths_outside_protocol(self) -> None:
         for resource_path in (
-            "https://example.com/api/v1/runs",
-            "/api/v1/../secret",
-            "/api/v1/%2e%2e/secret",
+            "https://example.com/api/analyzer/v1/runs",
+            "/api/analyzer/v1/../secret",
+            "/api/analyzer/v1/%2e%2e/secret",
             "/runs",
-            "/api/v1/runs#fragment",
+            "/api/analyzer/v1/runs#fragment",
         ):
             with self.subTest(resource_path=resource_path):
                 with self.assertRaises(server.AnalyzerToolError):
@@ -433,7 +433,7 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
     def test_exact_sweep_read_rejects_path_payload_identity_mismatch(self) -> None:
         with self.assertRaisesRegex(server.AnalyzerToolError, "identity"):
             server._exact_sweep_id(
-                "/api/v1/sweeps/e_path/payload",
+                "/api/analyzer/v1/sweeps/e_path/subjects/sweep/payload",
                 {"sweep_id": "e_payload"},
             )
 
@@ -455,8 +455,8 @@ class AnalyzerEvidenceMcpTests(unittest.TestCase):
 
     def test_mcp_exposes_one_generic_read_tool(self) -> None:
         self.assertEqual(server.TOOL_NAME, "read_analyzer_resource")
-        self.assertIn("/api/v1/sweeps?status=ready&limit=5", server.ENDPOINT_GUIDE)
-        self.assertIn("/api/v1/sweeps/latest", server.ENDPOINT_GUIDE)
+        self.assertIn("/api/analyzer/v1/sweeps?status=ready&limit=5", server.ENDPOINT_GUIDE)
+        self.assertIn("/api/analyzer/v1/sweeps/latest", server.ENDPOINT_GUIDE)
         self.assertIn("adjacent complete citation token", server.ENDPOINT_GUIDE)
 
     def test_source_mode_is_explicit(self) -> None:

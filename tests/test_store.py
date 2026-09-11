@@ -109,6 +109,51 @@ class WorkspaceStoreTest(unittest.TestCase):
                 store.get("w_main", "conversation")["interrupted_role"], ""
             )
 
+    def test_a_message_carries_a_stable_id_and_names_its_turn(self) -> None:
+        """Identity survives what position does not.
+
+        A frozen citation has to point at one message years later. Position in
+        the array is not that: it shifts every time older history is loaded or
+        a page boundary moves. These two fields are.
+        """
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            store = Store(registry)
+            store.create("w_main", "conversation", "read-only")
+            store.add_message("w_main", "conversation", "user", "ask", turn_id="t_1")
+            store.add_message(
+                "w_main", "conversation", "assistant", "answer", turn_id="t_1"
+            )
+            # No turn: the legacy import path predates turns entirely.
+            store.add_message("w_main", "conversation", "user", "orphan")
+
+            messages = store.get("w_main", "conversation")["messages"]
+            ids = [message["id"] for message in messages]
+            self.assertEqual(len(set(ids)), 3)
+            self.assertEqual(ids, sorted(ids))
+            self.assertEqual(
+                [message["turn_id"] for message in messages], ["t_1", "t_1", None]
+            )
+
+            # The same message keeps the same id when read through a page whose
+            # offset gives it a different position.
+            page = store.get_message_page("w_main", "conversation", before=None, limit=2)
+            assert page is not None
+            self.assertEqual([message["id"] for message in page["messages"]], ids[1:])
+
+    def test_message_metadata_cannot_shadow_server_issued_identity(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            registry = self.make_registry(temporary_directory)
+            store = Store(registry)
+            store.create("w_main", "conversation", "read-only")
+            store.add_message(
+                "w_main", "conversation", "user", "ask", turn_id="t_1", id="spoofed"
+            )
+
+            message = store.get("w_main", "conversation")["messages"][0]
+            self.assertIsInstance(message["id"], int)
+            self.assertEqual(message["turn_id"], "t_1")
+
     def test_pages_backwards_without_mutating_history(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             registry = self.make_registry(temporary_directory)

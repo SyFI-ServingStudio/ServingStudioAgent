@@ -43,18 +43,18 @@ removing a conversation container does not remove the workspace repo or logs.
 The normal browser API is workspace-scoped:
 
 ```text
-GET/POST /api/workspaces
-GET/PATCH /api/workspaces/{workspace_id}
-GET/POST /api/workspaces/{workspace_id}/conversations
-GET/DELETE /api/workspaces/{workspace_id}/conversations/{conversation_id}
-POST /api/workspaces/{workspace_id}/conversations/{conversation_id}/messages
-GET  /api/workspaces/{workspace_id}/conversations/{conversation_id}/stream
-POST /api/workspaces/{workspace_id}/conversations/{conversation_id}/cancel
-GET  /api/workspaces/{workspace_id}/conversations/{conversation_id}/experiments
+GET/POST /api/agent/v1/workspaces
+GET/PATCH /api/agent/v1/workspaces/{workspace_id}
+GET/POST /api/agent/v1/workspaces/{workspace_id}/conversations
+GET/DELETE /api/agent/v1/workspaces/{workspace_id}/conversations/{conversation_id}
+POST /api/agent/v1/workspaces/{workspace_id}/conversations/{conversation_id}/messages
+GET  /api/agent/v1/workspaces/{workspace_id}/conversations/{conversation_id}/stream
+POST /api/agent/v1/workspaces/{workspace_id}/conversations/{conversation_id}/cancel
+GET  /api/agent/v1/workspaces/{workspace_id}/conversations/{conversation_id}/experiments
 ```
 
 The backend root still serves a compatibility/debug chat shell; VibeSimUI is the
-primary browser entry. Its read-only `GET /api/conversations` index flattens
+primary browser entry. Its read-only `GET /api/agent/v1/conversations` index flattens
 active workspace summaries and
 includes `workspace_id`; the shell immediately converts each row to the
 workspace-scoped routes above for load, pagination, send, reconnect, cancel,
@@ -104,7 +104,7 @@ uv run python -m backend.migrate_workspaces \
 
 Each active role can select Claude independently: use Claude in `single` mode,
 or combine a Codex orchestrator with a Claude implementer. The existing model
-picker discovers the Claude family through `/api/codex-backends`; no separate
+picker discovers the Claude family through `/api/agent/v1/codex-backends`; no separate
 browser build is required to populate it. The `codex_runtime` API field and
 `codex_sessions` table retain their historical names for compatibility.
 
@@ -176,7 +176,7 @@ the FastAPI backend. If `frontend/node_modules` is missing, it runs `npm ci`
 once before the build. Set `FRONTEND_SKIP_BUILD=1` when you are already running
 the Vite dev server.
 
-The browser-facing `GET /api/jobs` endpoint is a read-only ownership/lifecycle
+The browser-facing `GET /api/agent/v1/jobs` endpoint is a read-only ownership/lifecycle
 overlay for non-simulation managed results across active workspaces. Each row
 carries workspace/conversation/job identity, lifecycle status, a stable backend
 `resource_id`, and the corresponding `analyzer_resource_id`. It intentionally
@@ -415,7 +415,7 @@ log instead of being rendered as an assistant answer.
 
 Long browser conversations load backwards in fixed-size message pages. The
 browser requests the newest page with
-`GET /api/workspaces/{wid}/conversations/{cid}?limit=<n>` and requests an older page with
+`GET /api/agent/v1/workspaces/{wid}/conversations/{cid}?limit=<n>` and requests an older page with
 `?limit=<n>&before=<start_index>`, where `start_index` comes from the current
 response's `message_page`. Reaching the top of the message viewport triggers the
 older request and preserves the visible scroll position while prepending it.
@@ -426,7 +426,7 @@ session continuity.
 ## Agent API
 
 Besides the browser UI, VibeSim exposes a small **HTTP surface for other agents**
-to call. It is self-describing: fetch `GET /api/agent/skill` to get the full skill
+to call. It is self-describing: fetch `GET /api/agent/v1/tools/skill` to get the full skill
 (`SKILL.md` — what VibeSim does, when to call it, what to expect, and the
 contract), then drive everything with plain HTTP — no framework glue.
 
@@ -434,43 +434,43 @@ The **real interactive interface** is the agent conversation API: multi-turn,
 synchronous JSON, with workspace + Codex-session continuity across turns (it
 reuses the same `store` and `run_turn` as the browser SSE path). The calling
 agent reads each turn's `final` and, like a human, answers clarifying questions
-or steers with another turn. `/api/eval` is **evaluation-only** (single-turn,
+or steers with another turn. `/api/agent/v1/tools/eval` is **evaluation-only** (single-turn,
 stateless; for testcases).
 
 | Method   | Path                                                       | Auth   | Purpose                                                         |
 | -------- | ---------------------------------------------------------- | ------ | --------------------------------------------------------------- |
-| GET      | `/api/agent/skill`                                         | public | Agent skill doc (`SKILL.md`, `text/markdown`).                  |
-| GET/POST | `/api/agent/workspaces`                                    | token  | List or create durable workspaces.                              |
-| POST     | `/api/agent/workspaces/{wid}/conversations`                | token  | Create an interactive conversation.                             |
-| POST     | `/api/agent/workspaces/{wid}/conversations/{cid}/messages` | token  | Run one turn; synchronous JSON.                                 |
-| GET      | `/api/agent/workspaces/{wid}/conversations/{cid}`          | token  | Full conversation history.                                      |
-| DELETE   | `/api/agent/workspaces/{wid}/conversations/{cid}`          | token  | Human/operator cleanup only; calling agents must not invoke it. |
-| GET      | `/api/agent/workspaces/{wid}/artifacts`                    | token  | List workspace files.                                           |
-| GET      | `/api/agent/workspaces/{wid}/artifacts/download`           | token  | Download one workspace file.                                    |
-| POST     | `/api/eval`                                                | token  | Single-turn evaluation only (not interactive).                  |
+| GET      | `/api/agent/v1/tools/skill`                                         | public | Agent skill doc (`SKILL.md`, `text/markdown`).                  |
+| GET/POST | `/api/agent/v1/tools/workspaces`                                    | token  | List or create durable workspaces.                              |
+| POST     | `/api/agent/v1/tools/workspaces/{wid}/conversations`                | token  | Create an interactive conversation.                             |
+| POST     | `/api/agent/v1/tools/workspaces/{wid}/conversations/{cid}/messages` | token  | Run one turn; synchronous JSON.                                 |
+| GET      | `/api/agent/v1/tools/workspaces/{wid}/conversations/{cid}`          | token  | Full conversation history.                                      |
+| DELETE   | `/api/agent/v1/tools/workspaces/{wid}/conversations/{cid}`          | token  | Human/operator cleanup only; calling agents must not invoke it. |
+| GET      | `/api/agent/v1/tools/workspaces/{wid}/artifacts`                    | token  | List workspace files.                                           |
+| GET      | `/api/agent/v1/tools/workspaces/{wid}/artifacts/download`           | token  | Download one workspace file.                                    |
+| POST     | `/api/agent/v1/tools/eval`                                                | token  | Single-turn evaluation only (not interactive).                  |
 
 **Auth** is gated by `VIBESIM_API_TOKEN`. When it is set, agent endpoints require
-`Authorization: Bearer <token>` (missing/wrong → `401`); `/api/agent/skill` stays
+`Authorization: Bearer <token>` (missing/wrong → `401`); `/api/agent/v1/tools/skill` stays
 public. When it is unset (local dev / same-host eval harness), no header is
-needed. The browser UI routes (`/api/workspaces*`, image `/api/file`) are
+needed. The browser UI routes (`/api/agent/v1/workspaces*`, image `/api/agent/v1/file`) are
 **not** token-gated in v1 — if you expose this backend cross-machine, bind the UI
 to localhost or add auth there (follow-up).
 
-### Interactive conversation — `/api/agent/workspaces*`
+### Interactive conversation — `/api/agent/v1/tools/workspaces*`
 
 ```bash
 # 1. create a durable workspace, then a conversation inside it
-workspace_id=$(curl -sS http://127.0.0.1:8765/api/agent/workspaces \
+workspace_id=$(curl -sS http://127.0.0.1:8765/api/agent/v1/tools/workspaces \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"displayName":"Llama 3 H200 study"}' \
   | uv run python -c 'import sys,json;print(json.load(sys.stdin)["workspace_id"])')
-cid=$(curl -sS "http://127.0.0.1:8765/api/agent/workspaces/$workspace_id/conversations" \
+cid=$(curl -sS "http://127.0.0.1:8765/api/agent/v1/tools/workspaces/$workspace_id/conversations" \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"sandbox":"workspace-write"}' \
   | uv run python -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 
 # 2. send a turn; read `final`. If it is a question or you want to steer, send another.
-curl -sS "http://127.0.0.1:8765/api/agent/workspaces/$workspace_id/conversations/$cid/messages" \
+curl -sS "http://127.0.0.1:8765/api/agent/v1/tools/workspaces/$workspace_id/conversations/$cid/messages" \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"text":"Simulate Llama-3-8B dense on 1xH200 at Poisson rate 48; report throughput and TPOT."}'
 
@@ -491,26 +491,26 @@ Calling agents must leave conversations intact on success and failure so a
 human can inspect progress and artifacts. The DELETE endpoint is reserved for
 explicit human/operator cleanup.
 
-### Single-turn eval — `POST /api/eval` (evaluation only)
+### Single-turn eval — `POST /api/agent/v1/tools/eval` (evaluation only)
 
 For capability checks / testcases that do not need a conversation. **Not the
-interactive interface** — prefer `/api/agent/workspaces*` for real agent work.
+interactive interface** — prefer `/api/agent/v1/tools/workspaces*` for real agent work.
 
 ```bash
-curl -sS http://127.0.0.1:8765/api/eval \
+curl -sS http://127.0.0.1:8765/api/agent/v1/tools/eval \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   -d '{"prompt":"List the available VibeSim L1 profilers."}'
 ```
 
-`/api/eval` prepares the isolated workspace and Docker Codex container. It does
+`/api/agent/v1/tools/eval` prepares the isolated workspace and Docker Codex container. It does
 not write to the UI conversation list, does not use SSE, and defaults to
 `autonomous: true`. It is **synchronous** — the response returns only after the
 task finishes, so set a generous client timeout for profiling/sim runs. By
 default it keeps the eval workspace so code, logs, plots, and artifacts can be
-fetched afterwards (via `/api/agent/workspaces/{workspace_id}/artifacts*`),
+fetched afterwards (via `/api/agent/v1/tools/workspaces/{workspace_id}/artifacts*`),
 but removes the Docker container after the run. Batch execution is intentionally
-outside the backend: run multiple `/api/eval` calls from the harness with the
+outside the backend: run multiple `/api/agent/v1/tools/eval` calls from the harness with the
 concurrency you want.
 
 Useful request fields:
@@ -528,12 +528,12 @@ The response includes `workspace_id`, `conversation_id`, `final`, `ok`,
 
 ```bash
 # list files the run produced
-curl -sS -G http://127.0.0.1:8765/api/agent/workspaces/w_eval-1a2b3c4d5e6f/artifacts \
+curl -sS -G http://127.0.0.1:8765/api/agent/v1/tools/workspaces/w_eval-1a2b3c4d5e6f/artifacts \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   --data-urlencode "subdir=logs"
 
 # download one of them
-curl -sS -OJ -G http://127.0.0.1:8765/api/agent/workspaces/w_eval-1a2b3c4d5e6f/artifacts/download \
+curl -sS -OJ -G http://127.0.0.1:8765/api/agent/v1/tools/workspaces/w_eval-1a2b3c4d5e6f/artifacts/download \
   -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
   --data-urlencode "path=logs/<run>/summary.json"
 ```
@@ -598,9 +598,9 @@ Docker GPU forwarding.
 | `backend/codex_runtime/turn.py`             | high-level turn loop for both agent modes                                                                |
 | `backend/analyzer_evidence_mcp/server.py`   | bounded read-only MCP bridge to the Analyzer `/api/v1/*` resources                                       |
 | `backend/naming.py`                         | non-blocking OpenRouter structured naming plus pending-state scheduling                                  |
-| `backend/eval.py`                           | JSON `/api/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`)                         |
+| `backend/eval.py`                           | JSON `/api/agent/v1/tools/eval` wrapper around one `run_turn()` (+ shared `collect_turn_event`)                         |
 | `backend/artifacts.py`                      | list/resolve files in a run workspace for the agent artifact endpoints                                   |
-| `SKILL.md`                                  | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/skill` |
+| `SKILL.md`                                  | agent skill (capabilities, when-to-call, what-to-expect, HTTP contract) served at `GET /api/agent/v1/tools/skill` |
 | `backend/prompt_templates/*.j2`             | Jinja2 sources for the generated prompts; edit these, never `backend/prompts/`                           |
 | `backend/agents_prompt.py`                  | prompt renderer; `ensure_rendered()` runs on `codex_runtime/config` import                               |
 | `backend/prompts/AGENTS*.md`                | generated (gitignored) agent_mode × autonomous matrix, one mounted read-only as `/workspace/AGENTS.md`   |
@@ -614,9 +614,9 @@ Docker GPU forwarding.
 
 ## Environment
 
-- `VIBESIM_API_TOKEN` — bearer token gating the agent endpoints (`/api/eval`,
-  `/api/agent/workspaces*`). Unset → those endpoints are open
-  (local dev). Set → they require `Authorization: Bearer <token>`. `/api/agent/skill`
+- `VIBESIM_API_TOKEN` — bearer token gating the agent endpoints (`/api/agent/v1/tools/eval`,
+  `/api/agent/v1/tools/workspaces*`). Unset → those endpoints are open
+  (local dev). Set → they require `Authorization: Bearer <token>`. `/api/agent/v1/tools/skill`
   is public regardless.
 - `CODEX_MODEL` — default model of the `gpt` family, default `gpt-5.6-sol`.
 - `CODEX_REASONING_EFFORT` — default reasoning effort of the `gpt` family, passed

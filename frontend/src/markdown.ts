@@ -66,7 +66,7 @@ function rewriteLocalImages(html: string, conversationId: string | null): string
         : "w_main";
       image.setAttribute(
         "src",
-        `/api/file?path=${encodeURIComponent(src)}&workspace_id=${encodeURIComponent(workspaceId)}`,
+        `/api/agent/v1/file?path=${encodeURIComponent(src)}&workspace_id=${encodeURIComponent(workspaceId)}`,
       );
     }
     image.setAttribute("loading", "lazy");

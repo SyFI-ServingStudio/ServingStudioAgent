@@ -68,7 +68,7 @@ CLAUDE_AUTH_ENVIRONMENT = (
     "CLAUDE_CODE_OAUTH_TOKEN",
 )
 CLAUDE_ENVIRONMENT = (*CLAUDE_AUTH_ENVIRONMENT, "ANTHROPIC_BASE_URL")
-# Bearer token gating the agent-facing HTTP API (/api/agent/*, /api/eval).
+# Bearer token gating the agent-facing HTTP API (/api/agent/*, /api/agent/v1/tools/eval).
 # Unset -> no auth, so local dev and the same-host eval harness keep working.
 # Set it when exposing the backend to cross-machine agents.
 VIBESIM_API_TOKEN = os.environ.get("VIBESIM_API_TOKEN", "").strip()
