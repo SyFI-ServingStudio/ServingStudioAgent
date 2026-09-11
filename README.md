@@ -54,6 +54,11 @@ Retired Agent environment keys are rejected by name, without printing their valu
 Provider defaults use `VIBESIM_PROVIDER_<ID>_*`; role defaults remain GPT, with
 per-conversation model selection available through the API.
 
+For multiple accounts or endpoints using the same CLI, set
+`VIBESIM_AGENT_PROVIDERS_FILE` to an absolute YAML path. Named connections select
+their own profile or credential reference and all three role defaults; see
+[Named Provider Connections](doc/providers.md) and [example YAML](examples/providers.yaml).
+
 For a reviewed legacy deployment, `serve --startup-config /absolute/startup.json`
 detects the stored format, stops the explicitly audited legacy stack when needed,
 migrates into an independent target, and persists its selection for later starts.

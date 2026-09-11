@@ -15,6 +15,8 @@ from .providers.builtin import (
     build_registry,
     guarded_profile_prepare,
     legacy_model_aliases,
+    provider_adapter,
+    provider_environment,
 )
 from .providers.claude.adapter import ClaudeAdapter
 from .providers.claude.command import ClaudeCommand
@@ -38,29 +40,28 @@ def build_builtin_setup(
     role_providers: Mapping[Role, str] | None = None,
 ) -> ProviderSetup:
     adapters, profiles, binaries = {}, {}, {}
-    credential_names = {"VLLM_API_KEY", *CLAUDE_ENVIRONMENT}
+    credential_names = {
+        "VLLM_API_KEY",
+        "OPENAI_API_KEY",
+        "CODEX_API_KEY",
+        *CLAUDE_ENVIRONMENT,
+    }
+    credential_names.update(settings.secrets)
+    for connection in settings.connections.values():
+        credential_names.update(connection.environment)
+        credential_names.update(connection.environment.values())
     for provider_id, selection in settings.providers.items():
-        inherited = (
-            CLAUDE_ENVIRONMENT
-            if provider_id == "claude"
-            else ("VLLM_API_KEY",)
-            if provider_id == "deepseek"
-            else ()
-        )
+        adapter_id = provider_adapter(settings, provider_id)
+        selected_environment = provider_environment(settings, provider_id)
+        inherited = tuple(selected_environment)
         process_environment = {
             key: value
             for key, value in host_environment.items()
             if key not in credential_names
         }
-        process_environment.update(
-            {
-                name: settings.secrets[name].get_secret_value()
-                for name in inherited
-                if name in settings.secrets
-            }
-        )
+        process_environment.update(selected_environment)
         log = logging.getLogger(f"vibesim_agent.providers.{provider_id}")
-        if provider_id == "claude":
+        if adapter_id == "claude":
             schemas = {
                 f"{role.value}.schema.json": json.loads(
                     prompts.schema_path(role).read_text()
@@ -74,9 +75,9 @@ def build_builtin_setup(
                 logger=log,
                 process_environment=process_environment,
             )
-            profiles[provider_id] = ClaudeProfile()
+            profiles[provider_id] = ClaudeProfile(selection.home)
             binaries[provider_id] = ("claude",)
-        elif provider_id in {"gpt", "deepseek"}:
+        elif adapter_id == "codex":
             if selection.home is None:
                 raise ConfigurationError(
                     "Codex providers require an explicit profile home"
@@ -114,7 +115,7 @@ def build_builtin_setup(
     role_providers = (
         dict(role_providers)
         if role_providers is not None
-        else {role: "gpt" for role in Role}
+        else settings.role_providers or {role: "gpt" for role in Role}
     )
     if set(role_providers) != set(Role):
         raise ConfigurationError("all role provider defaults must be configured")

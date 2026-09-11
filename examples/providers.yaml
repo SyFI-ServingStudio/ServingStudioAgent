@@ -1,0 +1,46 @@
+version: 1
+
+providers:
+  gpt:
+    adapter: codex
+    label: Codex
+    home: ~/.codex
+    model: gpt-5.6-sol
+    effort: high
+
+  codexs:
+    adapter: codex
+    label: Codex Secondary
+    home: ~/.codexs
+    model: gpt-6-astra
+    effort: high
+
+  claude:
+    adapter: claude
+    label: Claude Gateway
+    base_url: https://gateway.example.invalid
+    environment:
+      ANTHROPIC_AUTH_TOKEN: WORK_CLAUDE_TOKEN
+    model: claude-sonnet-5
+    effort: high
+
+  claudeme:
+    adapter: claude
+    label: Claude Personal
+    home: ~/.claudeme
+    model: claude-sonnet-5
+    effort: high
+
+  claudek:
+    adapter: claude
+    label: Claude Compatible Gateway
+    base_url: https://other.example.invalid
+    environment:
+      ANTHROPIC_AUTH_TOKEN: OTHER_CLAUDE_TOKEN
+    model: glm-5.3-fp4
+    effort: high
+
+defaults:
+  orchestrator: gpt
+  implementer: gpt
+  assistant: gpt

@@ -561,6 +561,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "jsonschema" },
     { name = "mcp" },
+    { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -571,6 +572,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "mcp", specifier = ">=1.13,<2" },
+    { name = "pyyaml", specifier = ">=6,<7" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 

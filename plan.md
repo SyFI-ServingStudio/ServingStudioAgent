@@ -2,6 +2,11 @@
 
 ## 当前实施状态（2026-09-11）
 
+新增用户确认的多连接需求：显式YAML配置多个命名Codex/Claude账号或端点，连接与CLI
+adapter分离；凭据以环境变量引用或认证目录提供。API/UI按provider+model区分同名模型，
+旧环境配置与等价旧session scope保留。该增量已通过823项后端回归、111项相关UI测试和
+独立复审；本地认证目录路径尚未做真实Claude续聊验收。先前冻结提交不包含此增量。
+
 新包、provider/runtime/turn/storage/API、managed launcher兼容和受管理启动迁移已实现；
 独立新包测试、真实GPT续聊/委派/SSE/取消/重连及私有迁移演练已有通过证据。
 UI主要承接路径和实际发现的设置、引用、分页问题已验证修复，详见

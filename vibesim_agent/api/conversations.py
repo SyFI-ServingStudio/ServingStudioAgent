@@ -37,6 +37,7 @@ class SendMessage(BaseModel):
 
 class RuntimeOverride(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
+    provider: str | None = Field(default=None, min_length=1)
     model: str = ""
     effort: str = ""
     service_tier: str = Field(default="", alias="serviceTier")

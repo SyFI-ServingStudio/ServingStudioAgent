@@ -35,6 +35,39 @@ DEEPSEEK_EFFORTS = ("high", "xhigh", "max")
 CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
+def provider_adapter(settings: Settings, provider_id: str) -> str:
+    connection = settings.connections.get(provider_id)
+    if connection is not None:
+        return connection.adapter
+    if provider_id in {"gpt", "deepseek"}:
+        return "codex"
+    if provider_id == "claude":
+        return "claude"
+    raise ConfigurationError("unknown built-in provider; configure a connection")
+
+
+def provider_environment(settings: Settings, provider_id: str) -> dict[str, str]:
+    """Resolve only this connection's declared credentials into CLI variable names."""
+    connection = settings.connections.get(provider_id)
+    if connection is None:
+        names = (
+            CLAUDE_ENVIRONMENT
+            if provider_id == "claude"
+            else (("VLLM_API_KEY",) if provider_id == "deepseek" else ())
+        )
+        references = {name: name for name in names}
+    else:
+        references = connection.environment
+    result = {
+        target: settings.secrets[source].get_secret_value()
+        for target, source in references.items()
+        if source in settings.secrets
+    }
+    if connection is not None and connection.base_url is not None:
+        result["ANTHROPIC_BASE_URL"] = connection.base_url
+    return result
+
+
 def provider_environments(host_home: Path) -> tuple[ProviderEnvironment, ...]:
     if not host_home.is_absolute():
         raise ConfigurationError("provider host home must be absolute")
@@ -129,10 +162,15 @@ def session_scope(settings: Settings, provider_id: str, adapter_id: str) -> str:
             raise ConfigurationError("Codex providers require an explicit profile home")
         backend = _codex_backend(selection.home)
     elif adapter_id == "claude":
-        endpoint = settings.secrets.get("ANTHROPIC_BASE_URL")
         backend = {
-            "base_url": _endpoint(endpoint.get_secret_value() if endpoint else "")
+            "base_url": _endpoint(
+                provider_environment(settings, provider_id).get(
+                    "ANTHROPIC_BASE_URL", ""
+                )
+            )
         }
+        if selection.home is not None:
+            backend["home"] = str(selection.home.resolve())
     else:
         raise ConfigurationError("unsupported built-in adapter")
     identity = {
@@ -141,6 +179,9 @@ def session_scope(settings: Settings, provider_id: str, adapter_id: str) -> str:
         "adapter": adapter_id,
         "backend": backend,
     }
+    connection = settings.connections.get(provider_id)
+    if connection is not None and connection.session_identity is not None:
+        identity["session_identity"] = connection.session_identity
     digest = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -190,17 +231,14 @@ def build_registry(
 ) -> ProviderRegistry:
     registry = ProviderRegistry(settings.secrets)
     for provider_id, selection in settings.providers.items():
-        if provider_id not in {"gpt", "deepseek", "claude"}:
-            raise ConfigurationError(
-                "unknown built-in provider; register custom providers explicitly"
-            )
+        connection = settings.connections.get(provider_id)
         adapter = adapters.get(provider_id)
-        expected_adapter = "claude" if provider_id == "claude" else "codex"
+        expected_adapter = provider_adapter(settings, provider_id)
         if adapter is None or adapter.adapter_id != expected_adapter:
             raise ConfigurationError(
                 f"provider {provider_id} requires its {expected_adapter} adapter"
             )
-        if provider_id == "claude":
+        if expected_adapter == "claude":
             selection = selection.model_copy(
                 update={
                     "model": CLAUDE_MODEL_ALIASES.get(selection.model, selection.model)
@@ -218,21 +256,47 @@ def build_registry(
                 for model_id in dict.fromkeys((selection.model, *CLAUDE_MODELS))
             )
             catalog = FileCatalog(models, (), default_effort=selection.effort)
-            credentials = Credentials(any_secrets=CLAUDE_AUTH_ENVIRONMENT)
+            credentials = Credentials(
+                any_secrets=(
+                    tuple(connection.environment.values())
+                    if connection is not None
+                    else CLAUDE_AUTH_ENVIRONMENT
+                )
+            )
+            if connection is not None and selection.home is not None:
+                credentials = Credentials(
+                    required_files=(selection.home / ".credentials.json",)
+                )
+            elif connection is not None and not connection.environment:
+                raise ConfigurationError(
+                    "Claude connections require an authentication source"
+                )
             label = "Claude"
         else:
             if selection.home is None:
                 raise ConfigurationError(
                     "Codex providers require an explicit profile home"
                 )
-            if provider_id == "gpt":
+            if provider_id != "deepseek":
                 models = tuple(
-                    _model(model_id, model_id, GPT_EFFORTS, selection.effort)
-                    for model_id in GPT_MODELS
+                    _model(
+                        model_id,
+                        model_id,
+                        GPT_EFFORTS if model_id in GPT_MODELS else (selection.effort,),
+                        selection.effort,
+                    )
+                    for model_id in (
+                        tuple(dict.fromkeys((selection.model, *GPT_MODELS)))
+                        if connection is not None
+                        else GPT_MODELS
+                    )
                 )
                 filenames = ("models_cache.json", "models_catalog.json")
                 credentials = Credentials(
-                    required_files=(selection.home / "config.toml",)
+                    required_files=(selection.home / "config.toml",),
+                    all_secrets=tuple(connection.environment.values())
+                    if connection
+                    else (),
                 )
                 label = "GPT-5.6"
             else:
@@ -248,7 +312,9 @@ def build_registry(
                 filenames = ("models_catalog.json", "models_cache.json")
                 credentials = Credentials(
                     required_files=(selection.home / "config.toml",),
-                    all_secrets=("VLLM_API_KEY",),
+                    all_secrets=tuple(connection.environment.values())
+                    if connection
+                    else ("VLLM_API_KEY",),
                 )
                 label = "DeepSeek"
             catalog = FileCatalog(
@@ -259,7 +325,7 @@ def build_registry(
         registry.register(
             Provider(
                 provider_id,
-                label,
+                connection.label or provider_id if connection is not None else label,
                 adapter,
                 selection,
                 session_scope(settings, provider_id, adapter.adapter_id),

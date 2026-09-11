@@ -175,6 +175,14 @@ class ProviderSettings(ConfigModel):
         return value
 
 
+class ConnectionSettings(ConfigModel):
+    adapter: Literal["codex", "claude"]
+    label: str | None = None
+    environment: dict[str, str] = Field(default_factory=dict)
+    base_url: str | None = None
+    session_identity: str | None = None
+
+
 def validate_provider_id(provider_id: str) -> str:
     if re.fullmatch(r"[a-z][a-z0-9_]*", provider_id) is None:
         raise ConfigurationError(
@@ -202,6 +210,8 @@ class Settings(ConfigModel):
     container: ContainerSettings
     providers: dict[str, ProviderSettings]
     secrets: dict[str, SecretStr] = Field(default_factory=dict, repr=False)
+    connections: dict[str, ConnectionSettings] = Field(default_factory=dict)
+    role_providers: dict[str, str] = Field(default_factory=dict)
 
 
 def _environment_name(prefix: str, name: str, field) -> str | None:
@@ -212,8 +222,12 @@ def _environment_name(prefix: str, name: str, field) -> str | None:
 
 
 def _load(
-    model, prefix: str, environment: Mapping[str, str], defaults: dict,
-    *, host_paths: tuple[str, ...] = (),
+    model,
+    prefix: str,
+    environment: Mapping[str, str],
+    defaults: dict,
+    *,
+    host_paths: tuple[str, ...] = (),
 ):
     values = dict(defaults)
     for name, field in model.model_fields.items():
@@ -233,7 +247,9 @@ def _load(
                 else:
                     path = path.expanduser()
             except (RuntimeError, KeyError):
-                raise ConfigurationError(f"Invalid configuration: {key or name}") from None
+                raise ConfigurationError(
+                    f"Invalid configuration: {key or name}"
+                ) from None
             values[name] = path
     try:
         return model.model_validate(values)
@@ -288,6 +304,29 @@ def load_settings(
         },
         host_paths=("hf_home",),
     )
+    if "VIBESIM_AGENT_PROVIDERS_FILE" in environment:
+        if any(name.startswith("VIBESIM_PROVIDER_") for name in environment):
+            raise ConfigurationError(
+                "Providers file conflicts with VIBESIM_PROVIDER_* overrides"
+            )
+        from .provider_config import load_provider_config
+
+        configured = load_provider_config(
+            Path(environment["VIBESIM_AGENT_PROVIDERS_FILE"]), environment=environment
+        )
+        secrets = dict(configured.secrets)
+        if environment.get("OPENROUTER_API_KEY", "").strip():
+            secrets["OPENROUTER_API_KEY"] = SecretStr(
+                environment["OPENROUTER_API_KEY"].strip()
+            )
+        return Settings(
+            agent=agent,
+            container=container,
+            providers=configured.providers,
+            secrets=secrets,
+            connections=configured.connections,
+            role_providers=configured.role_providers,
+        )
     selections = {}
     secret_names = {"OPENROUTER_API_KEY"}
     for provider in providers:
@@ -299,7 +338,10 @@ def load_settings(
         ):
             raise ConfigurationError(f"{prefix}HOME is not supported by this provider")
         selections[provider.provider_id] = _load(
-            ProviderSettings, prefix, environment, provider.defaults.model_dump(),
+            ProviderSettings,
+            prefix,
+            environment,
+            provider.defaults.model_dump(),
             host_paths=("home",),
         )
         secret_names.update(provider.secret_names)
@@ -316,6 +358,9 @@ def load_settings(
 def environment_reference(providers: Sequence[ProviderEnvironment] = ()) -> str:
     """Generate the variable table from the same field definitions as the loader."""
     rows = ["| Variable | Meaning |", "| --- | --- |"]
+    rows.append(
+        "| `VIBESIM_AGENT_PROVIDERS_FILE` | Explicit named-provider YAML configuration |"
+    )
     groups = [
         (AgentSettings, "VIBESIM_AGENT_", True),
         (ContainerSettings, "VIBESIM_RUNNER_", True),

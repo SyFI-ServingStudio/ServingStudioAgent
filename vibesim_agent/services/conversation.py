@@ -72,7 +72,7 @@ class ConversationService:
         self,
         workspace_id: str,
         conversation_id: str,
-        overrides: Mapping[str, Mapping[str, str]],
+        overrides: Mapping[str, Mapping[str, str | None]],
     ) -> dict:
         runtimes = self.browser_runtimes(overrides)
         assert self.providers is not None
@@ -96,9 +96,9 @@ class ConversationService:
         return self.get(workspace_id, conversation_id)
 
     def browser_runtimes(
-        self, overrides: Mapping[str, Mapping[str, str]]
+        self, overrides: Mapping[str, Mapping[str, str | None]]
     ) -> dict[Role, RoleRuntime]:
-        """Normalize the legacy model-only wire format using explicit defaults.
+        """Resolve optional connection identities while retaining model-only defaults.
 
         A shared model ID retains the role's default provider when possible;
         otherwise the legacy request has insufficient information to choose one.
@@ -114,7 +114,17 @@ class ConversationService:
         for role in Role:
             default = self.default_runtimes[role]
             requested = overrides.get(role.value, {})
-            model_id = requested.get("model") or default.model_id
+            explicit_provider = requested.get("provider")
+            selection_defaults = (
+                self.providers.provider(explicit_provider).settings
+                if explicit_provider is not None
+                else None
+            )
+            model_id = requested.get("model") or (
+                selection_defaults.model
+                if selection_defaults is not None
+                else default.model_id
+            )
             model_id = self.model_aliases.get(model_id, model_id)
             candidates = {
                 provider["id"]: model
@@ -124,15 +134,29 @@ class ConversationService:
             }
             if not candidates:
                 raise UnknownConversationModel(model_id)
-            if default.provider_id in candidates:
+            if explicit_provider is not None:
+                if explicit_provider not in candidates:
+                    raise ValueError("model is not offered by the requested provider")
+                provider_id = explicit_provider
+            elif default.provider_id in candidates:
                 provider_id = default.provider_id
             elif len(candidates) == 1:
                 provider_id = next(iter(candidates))
             else:
                 raise ValueError(f"ambiguous provider for model: {model_id}")
             model = candidates[provider_id]
-            effort = requested.get("effort", default.effort)
-            tier = requested.get("service_tier", default.service_tier)
+            effort = requested.get(
+                "effort",
+                selection_defaults.effort
+                if selection_defaults is not None
+                else default.effort,
+            )
+            tier = requested.get(
+                "service_tier",
+                selection_defaults.service_tier
+                if selection_defaults is not None
+                else default.service_tier,
+            )
             selected = self.providers.select(
                 provider_id,
                 model_id,
@@ -147,6 +171,26 @@ class ConversationService:
                 selected.service_tier,
             )
         return runtimes
+
+    def runtime_projection(self, runtimes: Mapping[Role, RoleRuntime]) -> dict:
+        owners: dict[str, set[str]] = {}
+        if self.providers is not None:
+            for provider in self.providers.catalog():
+                for model in provider["models"]:
+                    owners.setdefault(model["id"], set()).add(provider["id"])
+        return {
+            role.value: {
+                "model": runtime.model_id,
+                "effort": runtime.effort,
+                "serviceTier": runtime.service_tier,
+                **(
+                    {"provider": runtime.provider_id}
+                    if owners.get(runtime.model_id) != {runtime.provider_id}
+                    else {}
+                ),
+            }
+            for role, runtime in runtimes.items()
+        }
 
     def create(
         self,
@@ -238,16 +282,9 @@ class ConversationService:
         result = {
             **conversation,
             "autonomous": bool(conversation["autonomous"]),
-            "codex_runtime": {
-                role.value: {
-                    "model": runtime.model_id,
-                    "effort": runtime.effort,
-                    "serviceTier": runtime.service_tier,
-                }
-                for role, runtime in store.conversations.runtimes(
-                    conversation_id
-                ).items()
-            },
+            "codex_runtime": self.runtime_projection(
+                store.conversations.runtimes(conversation_id)
+            ),
             "codex_sessions": {
                 session.role.value: session.session_id
                 for session in store.sessions.list(conversation_id)

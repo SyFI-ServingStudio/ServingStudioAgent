@@ -81,6 +81,7 @@ class ConversationServiceTests(unittest.TestCase):
             result["codex_runtime"],
             {
                 role.value: {
+                    "provider": "available",
                     "model": "model",
                     "effort": "high",
                     "serviceTier": "default",

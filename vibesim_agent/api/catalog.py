@@ -43,14 +43,7 @@ def catalog_router(conversations: ConversationService) -> APIRouter:
         return {
             "models": models,
             "families": families,
-            "defaults": {
-                role.value: {
-                    "model": runtime.model_id,
-                    "effort": runtime.effort,
-                    "serviceTier": runtime.service_tier,
-                }
-                for role, runtime in defaults.items()
-            },
+            "defaults": conversations.runtime_projection(defaults),
         }
 
     return router

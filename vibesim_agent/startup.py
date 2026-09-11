@@ -26,7 +26,7 @@ from tools.startup_state import inspect_state
 from tools.tmux_deployment import TmuxDeployment
 
 from .bootstrap import _source, configuration
-from .providers.builtin import session_scope
+from .providers.builtin import provider_adapter, session_scope
 
 
 class ManagedStartup:
@@ -156,7 +156,7 @@ class ManagedStartup:
                 raise MigrationError(
                     "migration provider is absent from runtime configuration"
                 )
-            runner = "claude" if identity.provider_id == "claude" else "codex"
+            runner = provider_adapter(settings, identity.provider_id)
             if runners.get(identity.provider_id, runner) != runner:
                 raise MigrationError("migration runner differs from built-in runtime")
             if (

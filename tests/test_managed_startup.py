@@ -4,6 +4,7 @@ import json
 import os
 import unittest
 from contextlib import contextmanager, redirect_stdout
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -15,6 +16,7 @@ from vibesim_agent import __main__ as cli
 from vibesim_agent import startup
 from vibesim_agent.bootstrap import configuration as real_configuration
 from vibesim_agent.providers.builtin import session_scope as real_session_scope
+from vibesim_agent.settings import ConnectionSettings
 from vibesim_agent.storage.database import Database
 
 
@@ -62,6 +64,7 @@ class ManagedStartupTests(unittest.TestCase):
         self.events = []
         self.settings = SimpleNamespace(
             providers={identity.provider_id: object()},
+            connections={identity.provider_id: ConnectionSettings(adapter="codex")},
             agent=SimpleNamespace(main_dir=self.root / "main"),
         )
         self.enterContext(
@@ -243,6 +246,31 @@ class ManagedStartupTests(unittest.TestCase):
             with self.subTest(case=case), self.assertRaises(MigrationError):
                 self.managed()
             self.assert_no_shutdown_or_target()
+
+    def test_named_claude_connection_dispatches_scope_validation_to_claude(self):
+        owner = self.managed()
+        identity = replace(self.families["old-family"], provider_id="claude_work")
+        owner.options["models"] = {"old-model": identity}
+        owner.options["families"] = {"old-family": identity}
+        owner.options["runners"] = {"old-family": "claude"}
+        self.settings.providers = {"claude_work": object()}
+        self.settings.connections = {
+            "claude_work": ConnectionSettings(adapter="claude")
+        }
+        self.scope.reset_mock()
+        owner._validate_runtime()
+        self.assertEqual(self.scope.call_count, 2)
+        self.assertTrue(
+            all(
+                call.args == (self.settings, "claude_work", "claude")
+                for call in self.scope.call_args_list
+            )
+        )
+        self.assert_no_shutdown_or_target()
+        owner.options["runners"] = {"old-family": "codex"}
+        with self.assertRaisesRegex(MigrationError, "runner differs"):
+            owner._validate_runtime()
+        self.assert_no_shutdown_or_target()
 
     def test_invalid_configuration_paths_and_identity_fail_before_shutdown(self):
         original = copy.deepcopy(self.config)
