@@ -14,8 +14,14 @@ from .database import Database
 
 
 def read_message(row: sqlite3.Row) -> Message:
+    # Legacy history tolerated unusable metadata; keep that tolerance on reads
+    # without changing the archived bytes or losing valid key/value sequences.
+    try:
+        metadata = dict(json.loads(row["metadata_json"]))
+    except (TypeError, ValueError):
+        metadata = {}
     return Message(row["id"], row["role"], row["content"], row["ts"], row["turn_id"],
-                   json.loads(row["metadata_json"]))
+                   metadata)
 
 
 def insert_message(connection: sqlite3.Connection, conversation_id: str, role: str,

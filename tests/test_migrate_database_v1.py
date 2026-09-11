@@ -9,7 +9,12 @@ from unittest.mock import patch
 
 from tests.legacy_workspaces import create_legacy_workspace
 from tools import migrate_v1_database as migration
+from vibesim_agent.services.conversation import ConversationService
+from vibesim_agent.services.turn import TurnStorage
+from vibesim_agent.storage.conversations import Conversations
 from vibesim_agent.storage.database import Database
+from vibesim_agent.storage.sessions import Sessions
+from vibesim_agent.storage.turns import Turns
 
 
 class DatabaseMigrationTests(unittest.TestCase):
@@ -94,6 +99,57 @@ class DatabaseMigrationTests(unittest.TestCase):
             tuple(row)
             for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY {order}')
         ]
+
+    def test_migrated_history_tolerates_legacy_metadata_without_rewriting_rows(self):
+        cases = (
+            ("{", {}),
+            ("null", {}),
+            ("42", {}),
+            ('"plain text"', {}),
+            ("[1, 2]", {}),
+            ('[["legacy", "pair"]]', {"legacy": "pair"}),
+            (' {"activity": [], "id": -1, "turn_id": "other"} ', {"activity": []}),
+        )
+        for index, (raw, _) in enumerate(cases, start=1000):
+            self.writer.execute(
+                "INSERT INTO messages VALUES (?, 'c', 'assistant', ?, 6.5, ?, 't')",
+                (index, f"saved {index}", raw),
+            )
+        self.writer.commit()
+        before = self.source_bytes()
+        self.migrate()
+        database = Database(self.target)
+        storage = TurnStorage(
+            Conversations(database), Sessions(database), Turns(database)
+        )
+        service = ConversationService(lambda _: storage)
+        with database.connect() as connection:
+            migrated = self.rows(connection, "messages")
+        for options in ({}, {"limit": len(cases)}):
+            history = service.get("w_main", "c", **options)
+            for index, (raw, expected) in enumerate(cases, start=1000):
+                with self.subTest(metadata=raw, options=options):
+                    message = next(
+                        item for item in history["messages"] if item["id"] == index
+                    )
+                    self.assertEqual(message, {
+                        "role": "assistant",
+                        "content": f"saved {index}",
+                        "ts": 6.5,
+                        **expected,
+                        "id": index,
+                        "turn_id": "t",
+                    })
+        with database.connect() as connection:
+            self.assertEqual(self.rows(connection, "messages"), migrated)
+            for index, (raw, _) in enumerate(cases, start=1000):
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT metadata_json FROM messages WHERE id = ?", (index,)
+                    ).fetchone()[0],
+                    raw,
+                )
+        self.assertEqual(self.source_bytes(), before)
 
     def test_wal_snapshot_preserves_raw_tables_sparse_ids_highwater_and_independent_mappings(
         self,
