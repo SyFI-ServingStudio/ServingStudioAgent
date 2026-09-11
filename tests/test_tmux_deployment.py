@@ -691,6 +691,61 @@ class TmuxDeploymentTests(unittest.TestCase):
             self.assertFalse(self.live)
             self.assertFalse(any(command[0] == "docker" for command in self.commands))
 
+    def test_external_mount_order_is_ignored_but_all_mount_fields_are_preserved(self):
+        with self.external_fixture() as (external, _):
+            external["Mounts"].append(
+                {
+                    "Type": "bind",
+                    "Source": str(self.root / "data"),
+                    "Destination": "/data",
+                    "RW": False,
+                }
+            )
+            original = deployment._external_identity(external)
+            original["mounts"].reverse()
+            evidence = {external["Id"]: original}
+            before = copy.deepcopy(evidence)
+            external["Mounts"].reverse()
+            self.actual_containers(self.source, self.environment, evidence)
+            self.assertEqual(evidence, before)
+            for change in ("source", "destination", "rw", "duplicate"):
+                altered = copy.deepcopy(external)
+                if change == "duplicate":
+                    altered["Mounts"].append(copy.deepcopy(altered["Mounts"][0]))
+                else:
+                    key, value = {
+                        "source": ("Source", str(self.root / "other")),
+                        "destination": ("Destination", "/changed"),
+                        "rw": ("RW", True),
+                    }[change]
+                    altered["Mounts"][0][key] = value
+                with (
+                    self.subTest(change=change),
+                    patch.object(
+                        deployment,
+                        "_run",
+                        side_effect=[altered["Id"], json.dumps([altered])],
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        MigrationError, "external container identity"
+                    ):
+                        self.actual_containers(self.source, self.environment, evidence)
+
+    def test_owned_mount_order_is_ignored_without_mutating_existing_report(self):
+        mounts = [
+            {"Type": "bind", "Source": str(self.source), "RW": True},
+            {"Type": "bind", "Source": str(self.root / "data"), "RW": False},
+        ]
+        self.report["containers"][self.container_id]["mounts"] = copy.deepcopy(mounts)
+        self.containers[self.container_id]["mounts"] = list(reversed(mounts))
+        before = copy.deepcopy(self.report)
+        self.owner()._check_containers()
+        self.assertEqual(self.report, before)
+        self.containers[self.container_id]["mounts"][0]["RW"] = True
+        with self.assertRaisesRegex(MigrationError, "container identity or mounts"):
+            self.owner()._check_containers()
+
     def test_external_exceptions_require_unchanged_broad_only_mounts_and_exact_ids(
         self,
     ):

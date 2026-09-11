@@ -120,8 +120,16 @@ def _panes(socket, environment):
     return sorted(result, key=lambda item: item["name"])
 
 
+def _ordered_mounts(mounts):
+    return sorted(mounts, key=lambda mount: json.dumps(mount, sort_keys=True))
+
+
 def _external_identity(item):
-    return {"name": item["Name"], "image": item["Image"], "mounts": item["Mounts"]}
+    return {
+        "name": item["Name"],
+        "image": item["Image"],
+        "mounts": _ordered_mounts(item["Mounts"]),
+    }
 
 
 def _capture_external(identities, environment):
@@ -190,7 +198,9 @@ def _containers(source, environment, external_containers=None):
                     raise MigrationError(
                         "external container exception requires only broader source access"
                     )
-                if _external_identity(item) != external_containers[item["Id"]]:
+                original = external_containers[item["Id"]]
+                expected = {**original, "mounts": _ordered_mounts(original["mounts"])}
+                if _external_identity(item) != expected:
                     raise MigrationError(
                         "audited external container identity or mounts changed"
                     )
@@ -205,7 +215,7 @@ def _containers(source, environment, external_containers=None):
             result[item["Id"]] = {
                 "name": item["Name"],
                 "image": item["Image"],
-                "mounts": mounts,
+                "mounts": _ordered_mounts(mounts),
                 "restart": item["HostConfig"]["RestartPolicy"],
                 "running": item["State"]["Running"],
                 "paused": item["State"]["Paused"],
@@ -410,7 +420,9 @@ class TmuxDeployment:
             raise MigrationError("source-mounted containers changed; audit again")
         for identity, item in current.items():
             original = self.report["containers"][identity]
-            if any(item[key] != original[key] for key in ("name", "image", "mounts")):
+            if any(item[key] != original[key] for key in ("name", "image")) or (
+                _ordered_mounts(item["mounts"]) != _ordered_mounts(original["mounts"])
+            ):
                 raise MigrationError("audited container identity or mounts changed")
         return current
 
