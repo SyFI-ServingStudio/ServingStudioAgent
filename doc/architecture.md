@@ -88,6 +88,12 @@ Analyzer citations are frozen against their turn's dictionary. Agent must not
 reconstruct numerical results from messages or managed-job rows. Agent and Analyzer
 must use the same active workspace registry.
 
+Citation registration accepts current `/api/analyzer/v1/` subject paths and
+legacy `/api/v1/` paths. Its response retains the cumulative dictionary and adds
+`registeredEntries` for the resource read by this request. MCP uses those entries
+to attach citations to the returned result; persisted turn events keep the
+cumulative dictionary for final-answer freezing and replay.
+
 Legacy conversion is a separate operation into an independent target. It preserves
 historical data and reports validation; provider resume requires an additional
 real CLI check. Migration controls are cutover artifacts, not permanent normal

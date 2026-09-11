@@ -108,6 +108,9 @@ class CitationService:
             resource_id, identity_key = experiment_id, "experimentId"
         else:
             raise ValueError("unsupported citation resource kind")
+        registered_entries = [
+            entry.model_dump(by_alias=True) for entry in dictionary.entries
+        ]
         events = store.turns.events(capability.conversation_id, capability.turn_id)
         dictionary = merge_citation_dictionaries(
             latest_citation_dictionary(events), dictionary
@@ -123,4 +126,4 @@ class CitationService:
             store.turns.append_event(capability.turn_id, "citation.dictionary", payload)
         except ValueError as error:
             raise CitationConflict(str(error)) from error
-        return snapshot
+        return {**snapshot, "registeredEntries": registered_entries}

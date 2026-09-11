@@ -459,6 +459,36 @@ def build_aggregate_citation_dictionary(
     )
 
 
+def _citation_path_segments(resource_path: str) -> list[str]:
+    """Normalize current subject endpoints for the legacy-compatible target builders."""
+    segments = urlsplit(resource_path).path.strip("/").split("/")
+    if segments[:3] != ["api", "analyzer", "v1"]:
+        return segments
+    segments = ["api", "v1", *segments[3:]]
+    if len(segments) < 5:
+        return segments
+    collection, suffix = segments[2], segments[4:]
+    if collection in {"predictions", "kernel-profiles", "kernel-measurements"} or (
+        collection == "runs" and suffix[0] == "workers"
+    ):
+        if (
+            len(suffix) >= 3
+            and suffix[-3] == "subjects"
+            and suffix[-1] in {"payload", "report"}
+        ):
+            subject = suffix[-2]
+            if collection == "predictions" and subject == "kernel-input-distribution":
+                return segments
+            suffix = [*suffix[:-3], subject]
+            if (
+                subject == "kernel-throughput-analysis"
+                and len(suffix) >= 3
+                and suffix[-3] == "leaves"
+            ):
+                suffix[-3] = "cost-tree"
+    return [*segments[:4], *suffix]
+
+
 def build_prediction_citation_dictionary(
     *,
     workspace_id: str,
@@ -467,12 +497,11 @@ def build_prediction_citation_dictionary(
 ) -> CitationDictionarySnapshot:
     """Build one exact, path-bound timing-prediction citation."""
     parsed_resource = urlsplit(resource_path)
-    path = parsed_resource.path.strip("/")
     query = parse_qs(parsed_resource.query)
     optimality_mode = query.get("mode", ["unlocked"])[0]
     if optimality_mode not in {"unlocked", "batch_locked"}:
         raise ValueError("prediction citation path has an invalid optimality mode")
-    segments = path.split("/")
+    segments = _citation_path_segments(resource_path)
     expected_prefix = ["api", "v1", "predictions", prediction_id]
     if segments[:4] != expected_prefix:
         raise ValueError("prediction citation path does not match its resource id")
@@ -575,7 +604,7 @@ def build_run_citation_dictionary(
     *, workspace_id: str, run_id: str, resource_path: str
 ) -> CitationDictionarySnapshot:
     """Bind one exact Analyzer run endpoint to a navigable run selection."""
-    segments = urlsplit(resource_path).path.strip("/").split("/")
+    segments = _citation_path_segments(resource_path)
     if segments[:4] != ["api", "v1", "runs", run_id]:
         raise ValueError("run citation path does not match its resource id")
     suffix = segments[4:]
@@ -660,7 +689,7 @@ def build_kernel_profile_citation_dictionary(
     analysis: dict[str, Any],
 ) -> CitationDictionarySnapshot:
     """Bind a profile descriptor or each curve metric to its first-class page."""
-    segments = urlsplit(resource_path).path.strip("/").split("/")
+    segments = _citation_path_segments(resource_path)
     if segments[:4] != ["api", "v1", "kernel-profiles", profile_id]:
         raise ValueError("kernel profile path does not match its resource id")
     suffix = segments[4:]
@@ -722,7 +751,7 @@ def build_kernel_measurement_citation_dictionary(
     analysis: dict[str, Any],
 ) -> CitationDictionarySnapshot:
     """Bind measurement summary values and declared plots to exact UI cards."""
-    segments = urlsplit(resource_path).path.strip("/").split("/")
+    segments = _citation_path_segments(resource_path)
     if segments[:4] != ["api", "v1", "kernel-measurements", measurement_id]:
         raise ValueError("kernel measurement path does not match its resource id")
     suffix = segments[4:]

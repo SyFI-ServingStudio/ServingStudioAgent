@@ -1,10 +1,15 @@
+import asyncio
 import json
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from tests import test_application as application_fixture
 from tests import test_managed_jobs as job_fixture
 from tests.http_support import sse_events
+from tests.test_analyzer_evidence_mcp import _JsonResponse
+from vibesim_agent.analyzer_evidence_mcp import server
 from vibesim_agent.providers.registry import ProviderRegistry
 
 
@@ -87,6 +92,117 @@ class ManagedCitationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    async def test_modern_mcp_resources_register_through_http_and_preserve_targets(
+        self,
+    ):
+        loop = asyncio.get_running_loop()
+        payload = {"series": [{"metric": "time_ms"}], "runtime_ms": {"median": 1.2}}
+        registrations = []
+
+        def open_request(request, timeout):
+            if request.method == "GET":
+                return _JsonResponse(payload)
+            response = asyncio.run_coroutine_threadsafe(
+                self.client.post(
+                    request.full_url,
+                    content=request.data,
+                    headers=dict(request.header_items()),
+                ),
+                loop,
+            ).result(timeout=3)
+            if response.status_code != 200:
+                raise HTTPError(
+                    request.full_url,
+                    response.status_code,
+                    response.text,
+                    {},
+                    _JsonResponse(response.json()),
+                )
+            dictionary = response.json()
+            registrations.append(dictionary)
+            return _JsonResponse(dictionary)
+
+        paths = [
+            ("predictions/p_test/descriptor", None),
+            ("predictions/p_test/subjects/cases/payload", None),
+            (
+                "predictions/p_test/cases/0/subjects/optimality-waterfall/payload?mode=batch_locked",
+                "optimality-breakdown",
+            ),
+            (
+                "predictions/p_test/cases/0/subjects/optimality-kernel-ladder/payload",
+                "optimality-kernel-ladder",
+            ),
+            (
+                "predictions/p_test/cases/0/operations/2/subjects/cost-tree/payload",
+                "cost-tree",
+            ),
+            (
+                "predictions/p_test/cases/0/operations/2/leaves/3/subjects/kernel-throughput-analysis/payload",
+                "kernel-throughput",
+            ),
+            (
+                "predictions/p_test/subjects/kernel-input-distribution/payload",
+                "kernel-input-distribution",
+            ),
+            ("runs/r_test/subjects/utilization/payload", "utilization"),
+            (
+                "runs/r_test/workers/prefill/0/operations/1/2/3/subjects/cost-tree/payload",
+                "cost-tree",
+            ),
+            (
+                "runs/r_test/workers/prefill/0/operations/1/2/3/leaves/4/subjects/kernel-throughput-analysis/payload",
+                "kernel-throughput",
+            ),
+            ("kernel-profiles/kp_test/subjects/curve/payload", "curve"),
+            ("kernel-measurements/km_test/subjects/summary/report", "summary"),
+        ]
+        with (
+            patch.object(
+                server,
+                "_managed_context",
+                return_value={
+                    "backend_url": "http://test",
+                    "capability_token": self.token,
+                },
+            ),
+            patch.object(server, "_base_url", return_value="http://analyzer.test"),
+            patch.object(server, "urlopen", open_request),
+        ):
+            for path, panel in paths:
+                with self.subTest(path=path):
+                    result = await asyncio.to_thread(
+                        server.read_analyzer_resource, "/api/analyzer/v1/" + path
+                    )
+                    self.assertEqual(result["result"], payload)
+                    if (
+                        path
+                        == "predictions/p_test/cases/0/operations/2/subjects/cost-tree/payload"
+                    ):
+                        self.final_text = f"See `{result['citation']}`."
+                    tokens = (
+                        [result["citation"]]
+                        if "citation" in result
+                        else list(result["citations"].values())
+                    )
+                    entries = {
+                        entry["token"]: entry for entry in registrations[-1]["entries"]
+                    }
+                    for token in tokens:
+                        target = entries[token]["target"]
+                        self.assertEqual(target["workspaceId"], "w_main")
+                        self.assertEqual(target["panelId"], panel)
+                        if "/leaves/4/" in path:
+                            self.assertEqual(target["leafId"], 4)
+                            self.assertEqual(
+                                target["operation"],
+                                {"iterId": "1", "batchId": "2", "operationId": "3"},
+                            )
+        self.assertEqual(len(registrations), len(paths))
+        await self.finish()
+        history = (await self.client.get(self.path)).json()["messages"][-1]
+        self.assertEqual(history["citations"][0]["target"]["operationId"], "2")
+
     async def test_five_resource_kinds_freeze_dynamic_tokens_in_history_done_and_replay(
         self,
     ):
@@ -133,7 +249,14 @@ class ManagedCitationTests(unittest.IsolatedAsyncioTestCase):
             event for event in self.events() if event["kind"] == "citation.dictionary"
         ]
         self.assertEqual(len(snapshots), 5)
-        self.assertEqual(snapshots[-1]["payload"]["dictionary"], dictionary)
+        self.assertEqual(
+            snapshots[-1]["payload"]["dictionary"],
+            {
+                key: value
+                for key, value in dictionary.items()
+                if key != "registeredEntries"
+            },
+        )
         self.final_text = (
             "Evidence " + " ".join(f"`{token}`" for token in entries) + "."
         )

@@ -459,6 +459,9 @@ def _register_managed_dictionary(request_payload: dict[str, Any]) -> dict[str, A
         raise AnalyzerToolError(f"citation registration failed: {error}") from error
     if not isinstance(dictionary, dict):
         raise AnalyzerToolError("citation registration returned an invalid dictionary")
+    # History keeps the cumulative dictionary; this read must cite only its resource.
+    if "registeredEntries" in dictionary:
+        dictionary = {**dictionary, "entries": dictionary["registeredEntries"]}
     return dictionary
 
 
