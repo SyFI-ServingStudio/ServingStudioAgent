@@ -35,11 +35,19 @@ A Codex profile's cached model catalog enriches the declared models' capabilitie
 but cannot add undeclared models. `defaults` must select a defined connection for
 `orchestrator`, `implementer` and `assistant`.
 
+Optional `efforts: [low, medium, high, xhigh]` declares the selectable efforts for
+that connection's models, overriding built-in and cached capabilities. The list
+must be nonempty, unique, and contain the default `effort`. Set it to the levels
+supported by that endpoint; leave it absent to use model capability discovery.
+
 ## Credentials
 
 `environment` maps a CLI credential variable to the name of a host environment
 variable. For example, `ANTHROPIC_AUTH_TOKEN: WORK_CLAUDE_TOKEN` reads the token
-from `WORK_CLAUDE_TOKEN`; the YAML never contains the token itself. Shell functions
+from `WORK_CLAUDE_TOKEN`. Alternatively, an explicit value can be stored in this
+ignored private YAML: `ANTHROPIC_AUTH_TOKEN: {value: "your-token"}`. Literal values
+are loaded as masked secrets and never returned by the model catalog. Keep this
+file private (mode 600); never put real tokens in tracked examples. Shell functions
 are not invoked or parsed by the service. Credentials assigned only inside an
 interactive wrapper must be supplied separately in the service environment.
 Missing values make that connection unavailable and never fall back to another

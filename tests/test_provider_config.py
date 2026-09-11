@@ -75,6 +75,27 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertEqual(set(configured.providers), set(self.document["providers"]))
         self.assertEqual(configured.role_providers, self.document["defaults"])
 
+    def test_literal_credentials_are_masked_and_isolated_per_connection(self):
+        for name in ("work", "personal"):
+            self.document["providers"][name]["environment"] = {
+                "ANTHROPIC_AUTH_TOKEN": {"value": name + "-private-token"}
+            }
+        configured = self.load()
+        for name in ("work", "personal"):
+            reference = configured.connections[name].environment["ANTHROPIC_AUTH_TOKEN"]
+            self.assertEqual(configured.secrets[reference].get_secret_value(), name + "-private-token")
+            self.assertNotIn(name + "-private-token", repr(configured))
+        self.assertNotEqual(configured.connections["work"].environment, configured.connections["personal"].environment)
+
+    def test_explicit_efforts_require_unique_levels_and_default_membership(self):
+        self.document["providers"]["code"]["efforts"] = ["high", "max", "ultra"]
+        self.assertEqual(self.load().connections["code"].efforts, ("high", "max", "ultra"))
+        for levels in ([], ["high", "high"], ["low"], "high", [1]):
+            with self.subTest(levels=levels):
+                self.document["providers"]["code"]["efforts"] = levels
+                with self.assertRaises(ConfigurationError):
+                    self.load()
+
     def test_explicit_file_overrides_even_invalid_repository_file(self):
         explicit = self.root / "explicit.yaml"
         explicit.write_text(json.dumps(self.document))

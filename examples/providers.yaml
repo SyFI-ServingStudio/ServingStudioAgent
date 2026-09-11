@@ -15,6 +15,7 @@ providers:
     home: ~/.codexs
     model: gpt-6-astra
     effort: high
+    efforts: [low, medium, high, xhigh, max, ultra]
 
   claude:
     adapter: claude

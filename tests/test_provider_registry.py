@@ -205,5 +205,8 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(updated[0].efforts, ("max",))
             self.assertEqual(updated[0].default_effort, "max")
             self.assertEqual(updated[0].service_tiers, ("default", "fast"))
+            explicit = FileCatalog((base,), (path,), default_effort="high", efforts=("high", "ultra"))
+            self.assertEqual(explicit()[0].efforts, ("high", "ultra"))
+            self.assertEqual(explicit()[0].default_effort, "high")
             path.write_text("invalid")
             self.assertEqual(catalog(), (base,))

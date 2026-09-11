@@ -35,6 +35,7 @@ _FIELDS = {
     "model",
     "models",
     "effort",
+    "efforts",
     "service_tier",
 }
 
@@ -141,17 +142,24 @@ def load_provider_config(
         )
         if legacy_adapter is not None and adapter != legacy_adapter:
             _invalid()
-        refs = _mapping(value.get("environment", {}))
+        refs = dict(_mapping(value.get("environment", {})))
         if adapter == "claude" and (set(refs) - _CLAUDE_AUTH or len(refs) > 1):
             _invalid()
         if adapter == "claude" and bool(refs) == ("home" in value):
             _invalid()
-        for target, source in refs.items():
+        for target, source in list(refs.items()):
             if adapter == "codex" and _CODEX_CREDENTIAL.fullmatch(target) is None:
                 _invalid()
             _reference(target)
-            _reference(source)
-            credential = environment.get(source, "").strip()
+            if isinstance(source, dict):
+                if set(source) != {"value"}:
+                    _invalid()
+                credential = _text(source["value"]).strip()
+                source = f"inline:{provider_id}:{target}"
+                refs[target] = source
+            else:
+                _reference(source)
+                credential = environment.get(source, "").strip()
             if credential:
                 secrets[source] = SecretStr(credential)
         endpoint = value.get("base_url")
@@ -192,6 +200,14 @@ def load_provider_config(
             if len(set(models)) != len(models) or profile["model"] not in models:
                 _invalid()
             optional["models"] = models
+        if "efforts" in value:
+            efforts = value["efforts"]
+            if not isinstance(efforts, list) or not efforts:
+                _invalid()
+            efforts = tuple(_text(effort) for effort in efforts)
+            if len(set(efforts)) != len(efforts) or profile["effort"] not in efforts:
+                _invalid()
+            optional["efforts"] = efforts
         if "home" in value:
             home = Path(_text(value["home"]))
             if home.parts and home.parts[0] == "~":

@@ -19,10 +19,12 @@ class FileCatalog:
         paths: tuple[Path, ...],
         *,
         default_effort: str | None = None,
+        efforts: tuple[str, ...] | None = None,
     ):
         self.models = models
         self.paths = paths
         self.default_effort = default_effort
+        self.efforts = efforts
 
     def __call__(self) -> tuple[Model, ...]:
         entries = {}
@@ -59,7 +61,7 @@ class FileCatalog:
                 if isinstance(levels, list)
                 else ()
             )
-            efforts = efforts or model.efforts
+            efforts = self.efforts or efforts or model.efforts
             raw_tiers = entry.get("additional_speed_tiers", [])
             tiers = (
                 tuple(tier for tier in raw_tiers if isinstance(tier, str) and tier)

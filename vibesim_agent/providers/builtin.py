@@ -269,7 +269,10 @@ def build_registry(
                     )
                 )
             )
-            catalog = FileCatalog(models, (), default_effort=selection.effort)
+            catalog = FileCatalog(
+                models, (), default_effort=selection.effort,
+                efforts=connection.efforts if connection else None,
+            )
             credentials = Credentials(
                 any_secrets=(
                     tuple(connection.environment.values())
@@ -338,6 +341,7 @@ def build_registry(
                 models,
                 tuple(selection.home / name for name in filenames),
                 default_effort=selection.effort,
+                efforts=connection.efforts if connection else None,
             )
         registry.register(
             Provider(
