@@ -54,6 +54,8 @@ class ContainerManager:
     def _run(self, arguments: list[str], *, timeout: int = 30, check=True):
         result = self.run(
             arguments,
+            # Management exec uses -i but must not read a background job's terminal.
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,

@@ -23,6 +23,7 @@ EXISTING = "c" * 64
 class Docker:
     def __init__(self):
         self.calls = []
+        self.options = []
         self.current = None
         self.image = IMAGE
         self.fail = None
@@ -33,6 +34,7 @@ class Docker:
 
     def __call__(self, command, **kwargs):
         self.calls.append(command)
+        self.options.append(kwargs)
         code, stdout, stderr = 0, "", ""
         if command[1:3] == ["image", "inspect"]:
             stdout = self.image
@@ -120,6 +122,26 @@ class ContainerTests(unittest.TestCase):
         self.assertEqual(
             [c[1] for c in self.docker.calls], ["image", "container", "exec"]
         )
+
+    def test_management_lifecycle_never_inherits_terminal_stdin(self):
+        self.manager.ensure(self.spec)
+        self.existing()
+        self.manager.ensure(self.spec)
+        self.manager.remove(self.spec.name, owner=self.spec.owner)
+        self.docker.current = None
+        self.docker.fail = "exec"
+        with self.assertRaisesRegex(RuntimeError, "Docker exec failed"):
+            self.manager.ensure(self.spec)
+        self.assertEqual(
+            {command[1] for command in self.docker.calls},
+            {"image", "container", "create", "start", "exec", "rm"},
+        )
+        self.assertTrue(
+            all("-i" in command for command in self.docker.calls if command[1] == "exec")
+        )
+        for command, options in zip(self.docker.calls, self.docker.options, strict=True):
+            with self.subTest(command=command[1]):
+                self.assertEqual(options.get("stdin"), subprocess.DEVNULL)
 
     def test_create_and_exec_use_only_new_gpu_environment_including_empty(self):
         for gpus in ("", "device=2"):
