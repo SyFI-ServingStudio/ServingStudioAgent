@@ -3,6 +3,8 @@
 This adapter owns a dedicated tmux socket and its declared service sessions.
 It assumes no external supervisor or operator restarts those services. It does
 not discover authority from a port or container name, or stop arbitrary writers.
+Explicitly accepted external containers retain their broader writable mounts;
+their identity audit does not fence them from writing the source directory.
 """
 
 import hashlib
@@ -118,7 +120,34 @@ def _panes(socket, environment):
     return sorted(result, key=lambda item: item["name"])
 
 
-def _containers(source, environment):
+def _external_identity(item):
+    return {"name": item["Name"], "image": item["Image"], "mounts": item["Mounts"]}
+
+
+def _capture_external(identities, environment):
+    if (
+        not isinstance(identities, (tuple, list))
+        or any(
+            not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity)
+            for identity in identities
+        )
+        or len(set(identities)) != len(identities)
+    ):
+        raise MigrationError("external containers require unique full container IDs")
+    if not identities:
+        return {}
+    items = json.loads(
+        _run(["docker", "container", "inspect", *identities], environment)
+    )
+    captured = {item["Id"]: _external_identity(item) for item in items}
+    if len(items) != len(identities) or set(captured) != set(identities):
+        raise MigrationError("external container identities changed during capture")
+    return captured
+
+
+def _containers(source, environment, external_containers=None):
+    external_containers = external_containers or {}
+    observed_external = set()
     identities = _run(
         ["docker", "container", "ls", "-aq", "--no-trunc"], environment
     ).split()
@@ -144,21 +173,34 @@ def _containers(source, environment):
                 or item["HostConfig"].get("RestartPolicy", {}).get("Name")
                 not in {"no", "unless-stopped"}
             )
-            if may_write and any(
+            broader = any(
                 mount["Type"] == "bind"
                 and mount["RW"]
                 and source != Path(mount["Source"]).resolve()
                 and source.is_relative_to(Path(mount["Source"]).resolve())
                 for mount in mounts
-            ):
-                raise MigrationError(
-                    "container has broader writable access to source; audit its owner separately"
-                )
-            if not any(
+            )
+            direct = any(
                 mount["Type"] == "bind"
                 and Path(mount["Source"]).resolve().is_relative_to(source)
                 for mount in mounts
-            ):
+            )
+            if item["Id"] in external_containers:
+                if direct or not broader:
+                    raise MigrationError(
+                        "external container exception requires only broader source access"
+                    )
+                if _external_identity(item) != external_containers[item["Id"]]:
+                    raise MigrationError(
+                        "audited external container identity or mounts changed"
+                    )
+                observed_external.add(item["Id"])
+                continue
+            if may_write and broader:
+                raise MigrationError(
+                    "container has broader writable access to source; audit its owner separately"
+                )
+            if not direct:
                 continue
             result[item["Id"]] = {
                 "name": item["Name"],
@@ -169,6 +211,8 @@ def _containers(source, environment):
                 "paused": item["State"]["Paused"],
                 "restarting": item["State"]["Restarting"],
             }
+    if observed_external != set(external_containers):
+        raise MigrationError("audited external container disappeared; audit again")
     return result
 
 
@@ -182,8 +226,14 @@ def _environment(environment):
     return result
 
 
-def capture_deployment(socket, source, scripts, *, environment=None):
-    """Read-only evidence for review; does not authorize stopping this deployment."""
+def capture_deployment(
+    socket, source, scripts, *, environment=None, external_containers=()
+):
+    """Capture owned services and explicit broader-mount exceptions without stopping.
+
+    External containers must be listed by full ID. They remain outside shutdown
+    ownership, and cannot have any direct bind into the source tree.
+    """
     environment = _environment(environment)
     source_identity = _root(source)
     source = Path(source_identity["path"])
@@ -216,6 +266,7 @@ def capture_deployment(socket, source, scripts, *, environment=None):
     )
     if server is None or server["uid"] != os.getuid():
         raise MigrationError("tmux server identity unavailable")
+    external = _capture_external(external_containers, environment)
     report = {
         "format": 1,
         "source": source_identity,
@@ -223,8 +274,10 @@ def capture_deployment(socket, source, scripts, *, environment=None):
         "server": _identity(server),
         "panes": panes,
         "scripts": files,
-        "containers": _containers(source, environment),
+        "containers": _containers(source, environment, external),
     }
+    if external:
+        report["external_containers"] = external
     if _socket(socket) != socket_identity or _panes(socket, environment) != panes:
         raise MigrationError("deployment changed while its evidence was captured")
     return report
@@ -247,6 +300,17 @@ class TmuxDeployment:
         self.grace_seconds = grace_seconds
         self.receipt = None
         self.target = None
+        external = self.report.get("external_containers", {})
+        if not isinstance(external, dict) or any(
+            not re.fullmatch(r"[0-9a-f]{64}", identity)
+            or not isinstance(item, dict)
+            or set(item) != {"name", "image", "mounts"}
+            or not isinstance(item["name"], str)
+            or not isinstance(item["image"], str)
+            or not isinstance(item["mounts"], list)
+            for identity, item in external.items()
+        ):
+            raise MigrationError("invalid audited external container evidence")
         if (
             report.get("format") != 1
             or not report.get("panes")
@@ -337,7 +401,11 @@ class TmuxDeployment:
             raise MigrationError("legacy deployment restarted after shutdown")
 
     def _check_containers(self):
-        current = _containers(Path(self.report["source"]["path"]), self.environment)
+        current = _containers(
+            Path(self.report["source"]["path"]),
+            self.environment,
+            self.report.get("external_containers", {}),
+        )
         if set(current) != set(self.report["containers"]):
             raise MigrationError("source-mounted containers changed; audit again")
         for identity, item in current.items():

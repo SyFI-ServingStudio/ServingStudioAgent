@@ -4,7 +4,7 @@ import os
 import signal
 import tempfile
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -594,3 +594,163 @@ class TmuxDeploymentTests(unittest.TestCase):
             self.assertEqual(
                 [call.args[0][2] for call in commands.call_args_list], ["ls", "inspect"]
             )
+
+    @contextmanager
+    def external_fixture(self):
+        external = {
+            "Id": "b" * 64,
+            "Name": "/external-service",
+            "Image": "sha256:" + "e" * 64,
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": str(self.root),
+                    "Destination": "/broad",
+                    "RW": True,
+                }
+            ],
+            "State": {"Running": True, "Paused": False, "Restarting": False},
+            "HostConfig": {"RestartPolicy": {"Name": "always"}},
+        }
+        calls = []
+
+        def run(arguments, environment, *, timeout=30):
+            calls.append(arguments)
+            owned = self.containers[self.container_id]
+            items = [
+                external,
+                {
+                    "Id": self.container_id,
+                    "Name": owned["name"],
+                    "Image": owned["image"],
+                    "Mounts": [
+                        {"Type": "bind", "Source": str(self.source), "RW": True}
+                    ],
+                    "State": {
+                        "Running": owned["running"],
+                        "Paused": owned["paused"],
+                        "Restarting": owned["restarting"],
+                    },
+                    "HostConfig": {"RestartPolicy": owned["restart"]},
+                },
+            ]
+            if arguments[:3] == ["docker", "container", "ls"]:
+                return "\n".join(item["Id"] for item in items)
+            if arguments[:3] == ["docker", "container", "inspect"]:
+                return json.dumps(
+                    [item for item in items if item["Id"] in arguments[3:]]
+                )
+            return self.run_command(arguments, environment, timeout=timeout)
+
+        with (
+            patch.object(deployment, "_containers", self.actual_containers),
+            patch.object(deployment, "_run", run),
+        ):
+            self.report = deployment.capture_deployment(
+                self.socket["path"],
+                self.source,
+                {"backend": self.script},
+                environment=self.environment,
+                external_containers=(external["Id"],),
+            )
+            yield external, calls
+
+    def test_explicit_external_container_is_audited_but_never_stopped(self):
+        with self.external_fixture() as (external, calls):
+            self.assertEqual(
+                self.report["external_containers"],
+                {external["Id"]: deployment._external_identity(external)},
+            )
+            self.assertNotIn(external["Id"], self.report["containers"])
+            with self.receipt_owner().quiesce(self.source):
+                self.assertTrue(external["State"]["Running"])
+            before = list(self.commands)
+            with self.receipt_owner().quiesce(self.source):
+                pass
+            self.assertEqual(self.commands, before)
+            self.assertTrue(external["State"]["Running"])
+            self.assertEqual(external["HostConfig"]["RestartPolicy"]["Name"], "always")
+            self.assertFalse(
+                any(external["Id"] in command for command in self.commands)
+            )
+            self.assertGreaterEqual(
+                sum(c[:3] == ["docker", "container", "ls"] for c in calls), 5
+            )
+            external["Image"] = "sha256:" + "f" * 64
+            with self.assertRaisesRegex(MigrationError, "external container identity"):
+                with self.receipt_owner().quiesce(self.source):
+                    self.fail("changed external image reached yield")
+            self.assertEqual(self.commands, before)
+
+    def test_external_change_during_host_shutdown_blocks_container_mutations(self):
+        with self.external_fixture() as (external, _):
+            self.after_kill = lambda: external.update(Name="/changed-external")
+            with self.assertRaisesRegex(MigrationError, "external container identity"):
+                with self.owner().quiesce(self.source):
+                    self.fail("changed external identity reached yield")
+            self.assertFalse(self.live)
+            self.assertFalse(any(command[0] == "docker" for command in self.commands))
+
+    def test_external_exceptions_require_unchanged_broad_only_mounts_and_exact_ids(
+        self,
+    ):
+        with self.external_fixture() as (external, _):
+            original = copy.deepcopy(external)
+            evidence = self.report["external_containers"]
+        for variation in (
+            "name",
+            "image",
+            "mount",
+            "direct",
+            "nested",
+            "missing",
+            "unknown",
+        ):
+            items = [copy.deepcopy(original)]
+            if variation == "name":
+                items[0]["Name"] = "/renamed"
+            elif variation == "image":
+                items[0]["Image"] = "sha256:" + "f" * 64
+            elif variation == "mount":
+                items[0]["Mounts"][0]["Destination"] = "/different"
+            elif variation in {"direct", "nested"}:
+                items[0]["Mounts"].append(
+                    {
+                        "Type": "bind",
+                        "RW": False,
+                        "Source": str(
+                            self.source
+                            if variation == "direct"
+                            else self.source / "child"
+                        ),
+                    }
+                )
+            elif variation == "missing":
+                items = []
+            else:
+                extra = copy.deepcopy(original)
+                extra["Id"] = "c" * 64
+                items.append(extra)
+            outputs = ["\n".join(item["Id"] for item in items)]
+            if items:
+                outputs.append(json.dumps(items))
+            with (
+                self.subTest(variation=variation),
+                patch.object(deployment, "_run", side_effect=outputs) as commands,
+            ):
+                with self.assertRaises(MigrationError):
+                    self.actual_containers(self.source, self.environment, evidence)
+                self.assertTrue(
+                    all(
+                        call.args[0][2] in {"ls", "inspect"}
+                        for call in commands.call_args_list
+                    )
+                )
+        for identities in ("b" * 64, ["short"], ["b" * 64, "b" * 64], [None]):
+            with (
+                self.subTest(identities=identities),
+                patch.object(deployment, "_run") as commands,
+            ):
+                with self.assertRaisesRegex(MigrationError, "unique full"):
+                    deployment._capture_external(identities, self.environment)
+                commands.assert_not_called()
