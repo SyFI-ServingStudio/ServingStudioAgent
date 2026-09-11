@@ -177,6 +177,7 @@ class ProviderSettings(ConfigModel):
 
 class ConnectionSettings(ConfigModel):
     adapter: Literal["codex", "claude"]
+    models: tuple[str, ...] | None = None
     label: str | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     base_url: str | None = None

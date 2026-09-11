@@ -106,6 +106,40 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertEqual(result.secrets, {})
         self.assertIsNone(result.connections["personal"].label)
 
+    def test_models_default_to_none_and_explicit_lists_preserve_exact_ids(self):
+        result = self.load()
+        self.assertIsNone(result.connections["work"].models)
+        document = json.loads(json.dumps(self.document))
+        document["providers"]["work"]["models"] = ["claude-sonnet-5", "claude-opus-5"]
+        result = self.load(document)
+        self.assertEqual(
+            result.connections["work"].models, ("claude-sonnet-5", "claude-opus-5")
+        )
+        self.assertEqual(result.providers["work"].model, "claude-sonnet-5")
+
+    def test_models_reject_empty_duplicates_missing_default_and_wrong_types(self):
+        values = [
+            [],
+            None,
+            "claude-sonnet-5",
+            {},
+            ["claude-sonnet-5", "claude-sonnet-5"],
+            ["claude-opus-5"],
+            ["claude-sonnet-5", ""],
+            ["claude-sonnet-5", "  "],
+            ["claude-sonnet-5", 7],
+            ["claude-sonnet-5", {}],
+            ["sonnet"],
+        ]
+        for index, models in enumerate(values):
+            with self.subTest(index=index):
+                document = json.loads(json.dumps(self.document))
+                document["providers"]["work"]["models"] = models
+                with self.assertRaisesRegex(
+                    ConfigurationError, "Invalid providers file configuration"
+                ):
+                    self.load(document)
+
     def test_claude_home_is_an_alternative_to_one_auth_reference(self):
         document = json.loads(json.dumps(self.document))
         work = document["providers"]["work"]

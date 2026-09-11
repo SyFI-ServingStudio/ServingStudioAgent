@@ -6,6 +6,7 @@ providers:
     label: Codex
     home: ~/.codex
     model: gpt-5.6-sol
+    models: [gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna]
     effort: high
 
   codexs:
@@ -22,6 +23,7 @@ providers:
     environment:
       ANTHROPIC_AUTH_TOKEN: WORK_CLAUDE_TOKEN
     model: claude-sonnet-5
+    models: [claude-sonnet-5, claude-opus-5]
     effort: high
 
   claudeme:

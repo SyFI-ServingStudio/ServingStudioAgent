@@ -33,6 +33,7 @@ _FIELDS = {
     "session_identity",
     "home",
     "model",
+    "models",
     "effort",
     "service_tier",
 }
@@ -183,6 +184,14 @@ def load_provider_config(
             for key in ("model", "effort", "service_tier")
             if key in value
         }
+        if "models" in value:
+            models = value["models"]
+            if not isinstance(models, list) or not models:
+                _invalid()
+            models = tuple(_text(model) for model in models)
+            if len(set(models)) != len(models) or profile["model"] not in models:
+                _invalid()
+            optional["models"] = models
         if "home" in value:
             home = Path(_text(value["home"]))
             if home.parts and home.parts[0] == "~":

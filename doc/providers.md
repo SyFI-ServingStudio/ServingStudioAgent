@@ -19,8 +19,14 @@ the same model: the UI sends the connection ID with the model when selecting it.
 Legacy model-only requests retain their previous selection behavior.
 
 `model`, `effort` and optional `service_tier` choose defaults. Model capability
-validation still applies. A Codex profile's cached model catalog enriches the
-configured model's capabilities. `defaults` must select a defined connection for
+validation still applies. Named connections expose only `model` unless an explicit
+`models` list is supplied. That list must be nonempty, contain unique model IDs,
+and include the default `model`. For example, `models: [claude-sonnet-5, claude-opus-5]`
+enables both on a connection known to serve them; a GLM gateway does not inherit
+Anthropic's model list. For an unknown model, the configured effort is the fallback
+capability; declaring it does not prove the remote endpoint supports it.
+A Codex profile's cached model catalog enriches the declared models' capabilities
+but cannot add undeclared models. `defaults` must select a defined connection for
 `orchestrator`, `implementer` and `assistant`.
 
 ## Credentials

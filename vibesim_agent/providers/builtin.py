@@ -232,6 +232,9 @@ def build_registry(
     registry = ProviderRegistry(settings.secrets)
     for provider_id, selection in settings.providers.items():
         connection = settings.connections.get(provider_id)
+        declared_models = (
+            connection.models or (selection.model,) if connection is not None else None
+        )
         adapter = adapters.get(provider_id)
         expected_adapter = provider_adapter(settings, provider_id)
         if adapter is None or adapter.adapter_id != expected_adapter:
@@ -250,10 +253,21 @@ def build_registry(
                     CLAUDE_MODELS.get(model_id, model_id),
                     CLAUDE_EFFORTS
                     if model_id in CLAUDE_MODELS
-                    else ("low", "medium", "high"),
+                    else (
+                        (selection.effort,)
+                        if connection is not None
+                        else ("low", "medium", "high")
+                    ),
                     selection.effort,
                 )
-                for model_id in dict.fromkeys((selection.model, *CLAUDE_MODELS))
+                for model_id in dict.fromkeys(
+                    CLAUDE_MODEL_ALIASES.get(model, model)
+                    for model in (
+                        declared_models
+                        if declared_models is not None
+                        else (selection.model, *CLAUDE_MODELS)
+                    )
+                )
             )
             catalog = FileCatalog(models, (), default_effort=selection.effort)
             credentials = Credentials(
@@ -286,9 +300,7 @@ def build_registry(
                         selection.effort,
                     )
                     for model_id in (
-                        tuple(dict.fromkeys((selection.model, *GPT_MODELS)))
-                        if connection is not None
-                        else GPT_MODELS
+                        declared_models if declared_models is not None else GPT_MODELS
                     )
                 )
                 filenames = ("models_cache.json", "models_catalog.json")
@@ -300,14 +312,19 @@ def build_registry(
                 )
                 label = "GPT-5.6"
             else:
-                models = (
+                models = tuple(
                     _model(
-                        selection.model,
-                        selection.model,
+                        model_id,
+                        model_id,
                         DEEPSEEK_EFFORTS,
                         selection.effort,
                         OutputMode.PROMPT,
-                    ),
+                    )
+                    for model_id in (
+                        declared_models
+                        if declared_models is not None
+                        else (selection.model,)
+                    )
                 )
                 filenames = ("models_catalog.json", "models_cache.json")
                 credentials = Credentials(

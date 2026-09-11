@@ -166,6 +166,63 @@ class NamedProviderCompositionTests(unittest.TestCase):
             setup.registry.provider("claudek").adapter.process_environment,
         )
 
+    def test_named_connections_only_offer_declared_models(self):
+        self.document["providers"]["claudek"]["model"] = "glm-5.3-fp4"
+        self.document["providers"]["claudek"]["effort"] = "max"
+        setup = self.build()
+        self.assertEqual(setup.registry.select("claudek").effort, "max")
+        for provider_id, declaration in self.document["providers"].items():
+            self.assertEqual(
+                [
+                    model.model_id
+                    for model in setup.registry.provider(provider_id).catalog()
+                ],
+                [declaration["model"]],
+            )
+        with self.assertRaisesRegex(ValueError, "unknown model"):
+            setup.registry.select("claudek", "claude-opus-5")
+
+    def test_explicit_model_list_allows_selection_without_changing_session_scope(self):
+        original = self.settings()
+        self.document["providers"]["claude"]["models"] = [
+            "claude-sonnet-5",
+            "claude-opus-5",
+        ]
+        self.document["providers"]["codexs"]["models"] = ["gpt-6-astra", "gpt-5.6-sol"]
+        # A cached catalog may enrich declarations but cannot add selectable models.
+        (self.root / ".codexs/models_cache.json").write_text(
+            json.dumps(
+                {
+                    "models": [
+                        {
+                            "slug": "gpt-6-astra",
+                            "supported_reasoning_levels": [
+                                {"effort": "high"},
+                                {"effort": "xhigh"},
+                            ],
+                        },
+                        {"slug": "not-declared"},
+                    ]
+                }
+            )
+        )
+        settings = self.settings()
+        setup = self.build(settings)
+        self.assertEqual(
+            setup.registry.select("claude", "claude-opus-5").model.model_id,
+            "claude-opus-5",
+        )
+        self.assertEqual(
+            setup.registry.select("codexs", effort="xhigh").effort, "xhigh"
+        )
+        with self.assertRaisesRegex(ValueError, "unknown model"):
+            setup.registry.select("codexs", "not-declared")
+        for provider_id, adapter in (("claude", "claude"), ("codexs", "codex")):
+            self.assertEqual(
+                session_scope(settings, provider_id, adapter),
+                session_scope(original, provider_id, adapter),
+            )
+
     def test_legacy_yaml_identity_matches_and_rotation_preserves_scope(self):
         before = self.settings()
         legacy = configuration(
