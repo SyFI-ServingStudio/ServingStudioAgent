@@ -17,14 +17,9 @@ class FileCatalog:
         self,
         models: tuple[Model, ...],
         paths: tuple[Path, ...],
-        *,
-        default_effort: str | None = None,
-        efforts: tuple[str, ...] | None = None,
     ):
         self.models = models
         self.paths = paths
-        self.default_effort = default_effort
-        self.efforts = efforts
 
     def __call__(self) -> tuple[Model, ...]:
         entries = {}
@@ -47,43 +42,16 @@ class FileCatalog:
         result = []
         for model in self.models:
             entry = entries.get(model.model_id, {})
-            levels = entry.get("supported_reasoning_levels", [])
-            efforts = (
-                tuple(
-                    dict.fromkeys(
-                        level["effort"]
-                        for level in levels
-                        if isinstance(level, dict)
-                        and isinstance(level.get("effort"), str)
-                        and level["effort"]
-                    )
-                )
-                if isinstance(levels, list)
-                else ()
-            )
-            efforts = self.efforts or efforts or model.efforts
             raw_tiers = entry.get("additional_speed_tiers", [])
             tiers = (
                 tuple(tier for tier in raw_tiers if isinstance(tier, str) and tier)
                 if isinstance(raw_tiers, list)
                 else ()
             )
-            preferred = (
-                self.default_effort
-                if self.default_effort is not None
-                else model.default_effort
-            )
-            default = (
-                preferred
-                if preferred in efforts
-                else entry.get("default_reasoning_level")
-            )
             label = entry.get("display_name")
             result.append(
                 replace(
                     model,
-                    efforts=efforts,
-                    default_effort=default if default in efforts else efforts[-1],
                     service_tiers=tuple(dict.fromkeys((*model.service_tiers, *tiers))),
                     label=label if isinstance(label, str) and label else model.label,
                 )

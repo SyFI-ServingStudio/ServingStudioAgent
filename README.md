@@ -51,15 +51,15 @@ accepting requests; shutdown drains activity before releasing ownership.
 Existing databases with an older format require managed startup or offline
 migration, never `init`.
 Retired Agent environment keys are rejected by name, without printing their values.
-Provider defaults use `VIBESIM_PROVIDER_<ID>_*`; role defaults remain GPT, with
-per-conversation model selection available through the API.
+Provider connections, models, per-model efforts, and defaults are declared in the
+required `providers.yaml`; per-conversation selection remains available through the API.
 
 For multiple accounts or endpoints using the same CLI, copy
 `examples/providers.yaml` to `providers.yaml` in this Agent checkout and edit it.
 The private file is ignored by Git and loaded automatically, regardless of the
 working directory. `VIBESIM_AGENT_PROVIDERS_FILE` can select a different absolute
-path explicitly. If neither is present, built-in environment configuration is
-used; an invalid selected file fails startup. Named connections select
+path explicitly. The file is required; a missing or invalid file fails startup.
+Named connections select
 their own profile or credential reference and all three role defaults; see
 [Named Provider Connections](doc/providers.md) and [example YAML](examples/providers.yaml).
 
@@ -191,7 +191,7 @@ retired Agent keys fail startup instead of silently falling back.
 | --- | --- |
 | Source, state, bind, callbacks, tools token | `VIBESIM_AGENT_*` |
 | Image, container identity, GPU selection | `VIBESIM_RUNNER_*` |
-| Registered model/provider defaults | `VIBESIM_PROVIDER_<ID>_*` |
+| Provider connections, models, efforts, defaults | `providers.yaml` |
 
 Use `VIBESIM_AGENT_API_TOKEN` for the tools API. It is not general authentication
 for every browser route. Provider credentials are runtime inputs, never image

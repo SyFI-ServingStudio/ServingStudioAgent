@@ -5,17 +5,25 @@ providers:
     adapter: codex
     label: Codex
     home: ~/.codex
-    model: gpt-5.6-sol
-    models: [gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna]
-    effort: high
+    default_model: gpt-5.6-sol
+    default_effort: high
+    models:
+      gpt-5.6-sol:
+        efforts: [low, medium, high, xhigh, max, ultra]
+      gpt-5.6-terra:
+        efforts: [low, medium, high, xhigh, max, ultra]
+      gpt-5.6-luna:
+        efforts: [low, medium, high, xhigh, max]
 
   codexs:
     adapter: codex
     label: Codex Secondary
     home: ~/.codexs
-    model: gpt-6-astra
-    effort: high
-    efforts: [low, medium, high, xhigh, max, ultra]
+    default_model: gpt-6-astra
+    default_effort: high
+    models:
+      gpt-6-astra:
+        efforts: [low, medium, high, xhigh, max, ultra]
 
   claude:
     adapter: claude
@@ -23,16 +31,25 @@ providers:
     base_url: https://gateway.example.invalid
     environment:
       ANTHROPIC_AUTH_TOKEN: WORK_CLAUDE_TOKEN
-    model: claude-sonnet-5
-    models: [claude-sonnet-5, claude-opus-5]
-    effort: high
+    default_model: claude-sonnet-5
+    default_effort: high
+    models:
+      claude-sonnet-5:
+        efforts: [low, medium, high, xhigh, max]
+      claude-opus-5:
+        efforts: [low, medium, high, xhigh, max]
 
   claudeme:
     adapter: claude
     label: Claude Personal
     home: ~/.claudeme
-    model: claude-sonnet-5
-    effort: high
+    default_model: claude-sonnet-5
+    default_effort: high
+    models:
+      claude-sonnet-5:
+        efforts: [low, medium, high, xhigh, max]
+      claude-opus-5:
+        efforts: [low, medium, high, xhigh, max]
 
   claudek:
     adapter: claude
@@ -40,8 +57,11 @@ providers:
     base_url: https://other.example.invalid
     environment:
       ANTHROPIC_AUTH_TOKEN: OTHER_CLAUDE_TOKEN
-    model: glm-5.3-fp4
-    effort: high
+    default_model: glm-5.3-fp4
+    default_effort: high
+    models:
+      glm-5.3-fp4:
+        efforts: [low, medium, high, xhigh, max]
 
 defaults:
   orchestrator: gpt

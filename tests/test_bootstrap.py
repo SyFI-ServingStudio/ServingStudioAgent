@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from tests.provider_fixture import write_minimal_providers
 from vibesim_agent import bootstrap
 from vibesim_agent.storage.database import Database
 
@@ -26,6 +27,7 @@ class BootstrapTests(unittest.TestCase):
         self.state = self.root / "state"
         self.home = self.root / "home"
         self.home.mkdir()
+        write_minimal_providers(self.repo)
         self.environment = {
             "PATH": os.environ["PATH"],
             "HOME": str(self.home),

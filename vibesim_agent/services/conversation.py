@@ -144,7 +144,6 @@ class ConversationService:
                 provider_id = next(iter(candidates))
             else:
                 raise ValueError(f"ambiguous provider for model: {model_id}")
-            model = candidates[provider_id]
             effort = requested.get(
                 "effort",
                 selection_defaults.effort
@@ -160,8 +159,8 @@ class ConversationService:
             selected = self.providers.select(
                 provider_id,
                 model_id,
-                effort=effort if effort in model["efforts"] else model["defaultEffort"],
-                service_tier=tier if tier in model["serviceTiers"] else "default",
+                effort=effort,
+                service_tier=tier,
             )
             runtimes[role] = RoleRuntime(
                 provider_id,

@@ -53,15 +53,7 @@ class ProviderRegistry:
             model = self._models(provider)[model_id or provider.settings.model]
         except KeyError:
             raise ValueError(f"unknown model for provider: {provider_id}") from None
-        selected_effort = (
-            effort
-            if effort is not None
-            else (
-                provider.settings.effort
-                if provider.settings.effort in model.efforts
-                else model.default_effort
-            )
-        )
+        selected_effort = effort if effort is not None else provider.settings.effort
         selected_tier = (
             service_tier if service_tier is not None else provider.settings.service_tier
         )

@@ -4,16 +4,14 @@ Copy [providers.yaml](../examples/providers.yaml) to `providers.yaml` in the Age
 checkout and edit your connections. This private file is ignored by Git and
 loaded automatically from the Agent checkout, independently of the current
 working directory. An explicit `VIBESIM_AGENT_PROVIDERS_FILE` absolute path takes
-precedence. If neither file is configured or present, built-in environment
-configuration remains available. An invalid selected file fails startup.
+precedence. The file is required; missing or invalid configuration fails startup.
 
 The example illustrates separate Codex, Claude gateway and Claude personal-login
-connections. Without a selected file, the environment-only `gpt`, `deepseek` and
-`claude` setup is unchanged.
+connections.
 
-The file replaces the provider list and all three role defaults. Provider-specific
-`VIBESIM_PROVIDER_*` overrides are rejected when YAML is selected, so a shell's old
-defaults cannot silently change a named connection. Agent/container environment
+The file defines the provider list and all three role defaults. Provider-specific
+`VIBESIM_PROVIDER_*` variables are rejected, so a shell's old settings cannot
+silently change a named connection. Agent/container environment
 settings and the naming credential remain separate. Configuration is read at
 startup; changes require a restart. Init, serve and managed migration validation
 use the same loader.
@@ -24,21 +22,24 @@ or `claude`); the label is shown in the model picker. Two connections can offer
 the same model: the UI sends the connection ID with the model when selecting it.
 Legacy model-only requests retain their previous selection behavior.
 
-`model`, `effort` and optional `service_tier` choose defaults. Model capability
-validation still applies. Named connections expose only `model` unless an explicit
-`models` list is supplied. That list must be nonempty, contain unique model IDs,
-and include the default `model`. For example, `models: [claude-sonnet-5, claude-opus-5]`
-enables both on a connection known to serve them; a GLM gateway does not inherit
-Anthropic's model list. For an unknown model, the configured effort is the fallback
-capability; declaring it does not prove the remote endpoint supports it.
-A Codex profile's cached model catalog enriches the declared models' capabilities
-but cannot add undeclared models. `defaults` must select a defined connection for
-`orchestrator`, `implementer` and `assistant`.
+The current schema uses `default_model`, `default_effort`, and a `models` mapping.
+Every model declares its own selectable efforts:
 
-Optional `efforts: [low, medium, high, xhigh]` declares the selectable efforts for
-that connection's models, overriding built-in and cached capabilities. The list
-must be nonempty, unique, and contain the default `effort`. Set it to the levels
-supported by that endpoint; leave it absent to use model capability discovery.
+```yaml
+default_model: gpt-6-astra
+default_effort: high
+models:
+  gpt-6-astra:
+    efforts: [low, medium, high, xhigh, max, ultra]
+```
+
+The defaults must name one declared model and an effort supported by every model
+in that provider. The old `model`, `effort`, and `models: [name, ...]` form is
+rejected. A GLM gateway does not inherit another model's choices; declaring choices
+does not prove the endpoint supports them.
+A Codex profile's cached model catalog may enrich labels and service tiers but
+cannot add undeclared models or change configured efforts. `defaults` must select
+a defined connection for `orchestrator`, `implementer` and `assistant`.
 
 ## Credentials
 

@@ -115,7 +115,7 @@ def build_builtin_setup(
     role_providers = (
         dict(role_providers)
         if role_providers is not None
-        else settings.role_providers or {role: "gpt" for role in Role}
+        else settings.role_providers
     )
     if set(role_providers) != set(Role):
         raise ConfigurationError("all role provider defaults must be configured")

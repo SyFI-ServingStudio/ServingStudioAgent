@@ -46,7 +46,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
                 ))
         self.assertEqual(registry.catalog(), [])
 
-    def test_configured_effort_falls_back_but_explicit_unsupported_effort_rejects(self):
+    def test_unsupported_configured_and_explicit_efforts_reject(self):
         model = Model("model", "Model", ("low", "high"), "high")
         registry = ProviderRegistry()
         registry.register(Provider(
@@ -54,10 +54,12 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             ProviderSettings(model="model", effort="max"),
             "example:v1", lambda: (model,),
         ))
-        self.assertEqual(registry.select("example").effort, "high")
         self.assertEqual(registry.select("example", effort="low").effort, "low")
-        with self.assertRaisesRegex(ValueError, "unsupported effort"):
-            registry.select("example", effort="max")
+        for effort in (None, "max"):
+            with self.subTest(effort=effort), self.assertRaisesRegex(
+                ValueError, "unsupported effort"
+            ):
+                registry.select("example", effort=effort)
 
     async def test_two_profiles_share_adapter_but_preserve_capability_and_scope(self):
         adapter = RecordingAdapter()
@@ -178,7 +180,7 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
         _ = [event async for event in registry.run(refreshed)]
         self.assertEqual(adapter.calls, [refreshed])
 
-    def test_catalog_refresh_preserves_fallbacks_and_does_not_expose_unlisted_models(
+    def test_catalog_refresh_preserves_yaml_efforts_and_does_not_expose_unlisted_models(
         self,
     ):
         with TemporaryDirectory() as directory:
@@ -202,11 +204,8 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             )
             updated = catalog()
             self.assertEqual(len(updated), 1)
-            self.assertEqual(updated[0].efforts, ("max",))
-            self.assertEqual(updated[0].default_effort, "max")
+            self.assertEqual(updated[0].efforts, ("low", "high"))
+            self.assertEqual(updated[0].default_effort, "high")
             self.assertEqual(updated[0].service_tiers, ("default", "fast"))
-            explicit = FileCatalog((base,), (path,), default_effort="high", efforts=("high", "ultra"))
-            self.assertEqual(explicit()[0].efforts, ("high", "ultra"))
-            self.assertEqual(explicit()[0].default_effort, "high")
             path.write_text("invalid")
             self.assertEqual(catalog(), (base,))

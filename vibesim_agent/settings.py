@@ -9,8 +9,7 @@ from __future__ import annotations
 import os
 import pwd
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -175,10 +174,14 @@ class ProviderSettings(ConfigModel):
         return value
 
 
+class ConnectionModelSettings(ConfigModel):
+    model_id: str = Field(min_length=1)
+    efforts: tuple[str, ...]
+
+
 class ConnectionSettings(ConfigModel):
     adapter: Literal["codex", "claude"]
-    models: tuple[str, ...] | None = None
-    efforts: tuple[str, ...] | None = None
+    models: tuple[ConnectionModelSettings, ...]
     label: str | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     base_url: str | None = None
@@ -191,20 +194,6 @@ def validate_provider_id(provider_id: str) -> str:
             "provider_id must contain lowercase letters, digits or underscores"
         )
     return provider_id
-
-
-@dataclass(frozen=True)
-class ProviderEnvironment:
-    """A registered provider declares its configuration needs to the loader."""
-
-    provider_id: str
-    defaults: ProviderSettings
-    accepts_home: bool = False
-    secret_names: tuple[str, ...] = ()
-
-    @property
-    def prefix(self) -> str:
-        return f"VIBESIM_PROVIDER_{validate_provider_id(self.provider_id).upper()}_"
 
 
 class Settings(ConfigModel):
@@ -272,7 +261,6 @@ def load_settings(
     *,
     environment: Mapping[str, str] | None = None,
     repo_root: Path | None = None,
-    providers: Sequence[ProviderEnvironment] = (),
 ) -> Settings:
     environment = dict(os.environ if environment is None else environment)
     root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
@@ -310,64 +298,35 @@ def load_settings(
         provider_file = Path(environment["VIBESIM_AGENT_PROVIDERS_FILE"])
     else:
         provider_file = root / "providers.yaml"
-        try:
-            provider_file.lstat()
-        except FileNotFoundError:
-            provider_file = None
-        except OSError:
-            raise ConfigurationError("Cannot inspect repository providers.yaml") from None
-    if provider_file is not None:
-        if any(name.startswith("VIBESIM_PROVIDER_") for name in environment):
-            raise ConfigurationError(
-                "Providers file conflicts with VIBESIM_PROVIDER_* overrides"
-            )
-        from .provider_config import load_provider_config
+    try:
+        provider_file.lstat()
+    except FileNotFoundError:
+        raise ConfigurationError("Provider configuration file is required") from None
+    except OSError:
+        raise ConfigurationError("Cannot inspect provider configuration file") from None
+    if any(name.startswith("VIBESIM_PROVIDER_") for name in environment):
+        raise ConfigurationError(
+            "Providers file conflicts with VIBESIM_PROVIDER_* overrides"
+        )
+    from .provider_config import load_provider_config
 
-        configured = load_provider_config(
-            provider_file, environment=environment
+    configured = load_provider_config(provider_file, environment=environment)
+    secrets = dict(configured.secrets)
+    if environment.get("OPENROUTER_API_KEY", "").strip():
+        secrets["OPENROUTER_API_KEY"] = SecretStr(
+            environment["OPENROUTER_API_KEY"].strip()
         )
-        secrets = dict(configured.secrets)
-        if environment.get("OPENROUTER_API_KEY", "").strip():
-            secrets["OPENROUTER_API_KEY"] = SecretStr(
-                environment["OPENROUTER_API_KEY"].strip()
-            )
-        return Settings(
-            agent=agent,
-            container=container,
-            providers=configured.providers,
-            secrets=secrets,
-            connections=configured.connections,
-            role_providers=configured.role_providers,
-        )
-    selections = {}
-    secret_names = {"OPENROUTER_API_KEY"}
-    for provider in providers:
-        prefix = provider.prefix
-        if provider.provider_id in selections:
-            raise ConfigurationError(f"Duplicate provider: {provider.provider_id}")
-        if not provider.accepts_home and (
-            prefix + "HOME" in environment or provider.defaults.home is not None
-        ):
-            raise ConfigurationError(f"{prefix}HOME is not supported by this provider")
-        selections[provider.provider_id] = _load(
-            ProviderSettings,
-            prefix,
-            environment,
-            provider.defaults.model_dump(),
-            host_paths=("home",),
-        )
-        secret_names.update(provider.secret_names)
-    secrets = {
-        name: SecretStr(environment[name].strip())
-        for name in secret_names
-        if environment.get(name, "").strip()
-    }
     return Settings(
-        agent=agent, container=container, providers=selections, secrets=secrets
+        agent=agent,
+        container=container,
+        providers=configured.providers,
+        secrets=secrets,
+        connections=configured.connections,
+        role_providers=configured.role_providers,
     )
 
 
-def environment_reference(providers: Sequence[ProviderEnvironment] = ()) -> str:
+def environment_reference() -> str:
     """Generate the variable table from the same field definitions as the loader."""
     rows = ["| Variable | Meaning |", "| --- | --- |"]
     rows.append(
@@ -377,19 +336,13 @@ def environment_reference(providers: Sequence[ProviderEnvironment] = ()) -> str:
         (AgentSettings, "VIBESIM_AGENT_", True),
         (ContainerSettings, "VIBESIM_RUNNER_", True),
     ]
-    groups.extend(
-        (ProviderSettings, profile.prefix, profile.accepts_home)
-        for profile in providers
-    )
     for model, prefix, accepts_home in groups:
         for name, field in model.model_fields.items():
             key = _environment_name(prefix, name, field)
             if key is None or (name == "home" and not accepts_home):
                 continue
             rows.append(f"| `{key}` | {field.description} |")
-    for name in sorted(
-        {"OPENROUTER_API_KEY"} | {name for p in providers for name in p.secret_names}
-    ):
+    for name in ("OPENROUTER_API_KEY",):
         rows.append(
             f"| `{name}` | External credential; omitted from diagnostic output |"
         )

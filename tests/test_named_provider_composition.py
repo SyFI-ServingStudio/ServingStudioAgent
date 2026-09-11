@@ -34,34 +34,39 @@ class NamedProviderCompositionTests(unittest.TestCase):
                 "gpt": {
                     "adapter": "codex",
                     "home": str(self.root / ".codex"),
-                    "model": "gpt-5.6-sol",
-                    "effort": "high",
+                    "default_model": "gpt-5.6-sol",
+                    "default_effort": "high",
+                    "models": {"gpt-5.6-sol": {"efforts": ["high"]}},
                 },
                 "codexs": {
                     "adapter": "codex",
                     "home": str(self.root / ".codexs"),
-                    "model": "gpt-6-astra",
-                    "effort": "high",
+                    "default_model": "gpt-6-astra",
+                    "default_effort": "high",
+                    "models": {"gpt-6-astra": {"efforts": ["high", "xhigh"]}},
                     "environment": {"OPENAI_API_KEY": "WORK_CODEX_KEY"},
                 },
                 "claude": {
                     "adapter": "claude",
-                    "model": "claude-sonnet-5",
-                    "effort": "high",
+                    "default_model": "claude-sonnet-5",
+                    "default_effort": "high",
+                    "models": {"claude-sonnet-5": {"efforts": ["high"]}},
                     "base_url": "http://fixture-gateway",
                     "environment": {"ANTHROPIC_AUTH_TOKEN": "WORK_CLAUDE_TOKEN"},
                 },
                 "claudek": {
                     "adapter": "claude",
-                    "model": "claude-sonnet-5",
-                    "effort": "high",
+                    "default_model": "claude-sonnet-5",
+                    "default_effort": "high",
+                    "models": {"claude-sonnet-5": {"efforts": ["high"]}},
                     "base_url": "http://fixture-other",
                     "environment": {"ANTHROPIC_AUTH_TOKEN": "OTHER_CLAUDE_TOKEN"},
                 },
                 "claudeme": {
                     "adapter": "claude",
-                    "model": "claude-sonnet-5",
-                    "effort": "high",
+                    "default_model": "claude-sonnet-5",
+                    "default_effort": "high",
+                    "models": {"claude-sonnet-5": {"efforts": ["high"]}},
                     "home": str(self.oauth),
                 },
             },
@@ -167,8 +172,11 @@ class NamedProviderCompositionTests(unittest.TestCase):
         )
 
     def test_named_connections_only_offer_declared_models(self):
-        self.document["providers"]["claudek"]["model"] = "glm-5.3-fp4"
-        self.document["providers"]["claudek"]["effort"] = "max"
+        self.document["providers"]["claudek"]["default_model"] = "glm-5.3-fp4"
+        self.document["providers"]["claudek"]["default_effort"] = "max"
+        self.document["providers"]["claudek"]["models"] = {
+            "glm-5.3-fp4": {"efforts": ["high", "max"]}
+        }
         setup = self.build()
         self.assertEqual(setup.registry.select("claudek").effort, "max")
         for provider_id, declaration in self.document["providers"].items():
@@ -177,18 +185,21 @@ class NamedProviderCompositionTests(unittest.TestCase):
                     model.model_id
                     for model in setup.registry.provider(provider_id).catalog()
                 ],
-                [declaration["model"]],
+                list(declaration["models"]),
             )
         with self.assertRaisesRegex(ValueError, "unknown model"):
             setup.registry.select("claudek", "claude-opus-5")
 
     def test_explicit_model_list_allows_selection_without_changing_session_scope(self):
         original = self.settings()
-        self.document["providers"]["claude"]["models"] = [
-            "claude-sonnet-5",
-            "claude-opus-5",
-        ]
-        self.document["providers"]["codexs"]["models"] = ["gpt-6-astra", "gpt-5.6-sol"]
+        self.document["providers"]["claude"]["models"] = {
+            "claude-sonnet-5": {"efforts": ["high"]},
+            "claude-opus-5": {"efforts": ["high"]},
+        }
+        self.document["providers"]["codexs"]["models"] = {
+            "gpt-6-astra": {"efforts": ["high", "xhigh"]},
+            "gpt-5.6-sol": {"efforts": ["high"]},
+        }
         # A cached catalog may enrich declarations but cannot add selectable models.
         (self.root / ".codexs/models_cache.json").write_text(
             json.dumps(
@@ -223,26 +234,10 @@ class NamedProviderCompositionTests(unittest.TestCase):
                 session_scope(original, provider_id, adapter),
             )
 
-    def test_legacy_yaml_identity_matches_and_rotation_preserves_scope(self):
-        before = self.settings()
-        legacy_repo = self.root / "legacy-repo"
-        legacy_repo.mkdir()
-        legacy = configuration(
-            environment={
-                "HOME": str(self.root),
-                "ANTHROPIC_BASE_URL": "http://fixture-gateway",
-            },
-            repo_root=legacy_repo,
-        )
-        for provider_id, adapter in (("gpt", "codex"), ("claude", "claude")):
-            self.assertEqual(
-                session_scope(before, provider_id, adapter),
-                session_scope(legacy, provider_id, adapter),
-            )
-        scope = session_scope(before, "claudek", "claude")
+    def test_credentials_and_labels_do_not_change_session_scope(self):
+        scope = session_scope(self.settings(), "claudek", "claude")
         self.env["OTHER_CLAUDE_TOKEN"] = "rotated-secret"
         self.document["providers"]["claudek"]["label"] = "New label"
-        self.document["providers"]["claudek"]["model"] = "other-model"
         self.assertEqual(session_scope(self.settings(), "claudek", "claude"), scope)
         self.document["providers"]["claudek"]["session_identity"] = "different-account"
         self.assertNotEqual(session_scope(self.settings(), "claudek", "claude"), scope)

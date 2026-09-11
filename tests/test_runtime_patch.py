@@ -133,7 +133,7 @@ class RuntimePatchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 404, response.text)
         self.assertEqual(self.snapshot(), before)
 
-    async def test_patch_replaces_all_roles_and_normalizes_omitted_and_invalid_options(
+    async def test_patch_replaces_all_roles_and_rejects_invalid_options(
         self,
     ):
         first = await self.update(
@@ -155,7 +155,7 @@ class RuntimePatchTests(unittest.IsolatedAsyncioTestCase):
                 }
             }
         )
-        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(second.status_code, 400, second.text)
         runtimes = self.store.conversations.runtimes(self.cid)
         self.assertEqual(
             (
@@ -163,17 +163,24 @@ class RuntimePatchTests(unittest.IsolatedAsyncioTestCase):
                 runtimes[Role.ASSISTANT].effort,
                 runtimes[Role.ASSISTANT].service_tier,
             ),
-            ("sibling-model", "low", "default"),
+            ("test-model", "high", "default"),
         )
-        for role in (Role.ORCHESTRATOR, Role.IMPLEMENTER):
-            self.assertEqual(
-                (
-                    runtimes[role].model_id,
-                    runtimes[role].effort,
-                    runtimes[role].service_tier,
-                ),
-                ("test-model", "high", "default"),
-            )
+        self.assertEqual(
+            (
+                runtimes[Role.ORCHESTRATOR].model_id,
+                runtimes[Role.ORCHESTRATOR].effort,
+                runtimes[Role.ORCHESTRATOR].service_tier,
+            ),
+            ("sibling-model", "low", "fast"),
+        )
+        self.assertEqual(
+            (
+                runtimes[Role.IMPLEMENTER].model_id,
+                runtimes[Role.IMPLEMENTER].effort,
+                runtimes[Role.IMPLEMENTER].service_tier,
+            ),
+            ("test-model", "high", "default"),
+        )
 
     async def test_same_scope_runtime_change_preserves_sessions_and_touches_timestamp(
         self,

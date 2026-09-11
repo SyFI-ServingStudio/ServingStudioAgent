@@ -8,6 +8,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from tests.provider_fixture import write_minimal_providers
 from tests import test_migrate_workspaces_v1 as fixtures
 from tools.migrate_v1_database import MigrationError
 from tools.migration_files import inventory_tree
@@ -16,7 +17,7 @@ from vibesim_agent import __main__ as cli
 from vibesim_agent import startup
 from vibesim_agent.bootstrap import configuration as real_configuration
 from vibesim_agent.providers.builtin import session_scope as real_session_scope
-from vibesim_agent.settings import ConnectionSettings
+from vibesim_agent.settings import ConnectionModelSettings, ConnectionSettings
 from vibesim_agent.storage.database import Database
 
 
@@ -64,7 +65,16 @@ class ManagedStartupTests(unittest.TestCase):
         self.events = []
         self.settings = SimpleNamespace(
             providers={identity.provider_id: object()},
-            connections={identity.provider_id: ConnectionSettings(adapter="codex")},
+            connections={
+                identity.provider_id: ConnectionSettings(
+                    adapter="codex",
+                    models=(
+                        ConnectionModelSettings(
+                            model_id="old-model", efforts=("high",)
+                        ),
+                    ),
+                )
+            },
             agent=SimpleNamespace(main_dir=self.root / "main"),
         )
         self.enterContext(
@@ -255,7 +265,12 @@ class ManagedStartupTests(unittest.TestCase):
         owner.options["runners"] = {"old-family": "claude"}
         self.settings.providers = {"claude_work": object()}
         self.settings.connections = {
-            "claude_work": ConnectionSettings(adapter="claude")
+            "claude_work": ConnectionSettings(
+                adapter="claude",
+                models=(
+                    ConnectionModelSettings(model_id="old-model", efforts=("high",)),
+                ),
+            )
         }
         self.scope.reset_mock()
         owner._validate_runtime()
@@ -343,11 +358,11 @@ class ManagedStartupTests(unittest.TestCase):
         profile.write_text(
             'model_provider="fixture"\n[model_providers.fixture]\nbase_url="http://first.invalid/v1"\nwire_api="responses"\n'
         )
+        write_minimal_providers(self.root, home=str(home))
         self.environment.update(
             {
                 "HOME": str(self.root),
                 "VIBESIM_AGENT_MAIN_DIR": str(self.root / "main"),
-                "VIBESIM_PROVIDER_GPT_HOME": str(home),
             }
         )
         settings = real_configuration(

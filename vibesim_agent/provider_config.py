@@ -14,6 +14,7 @@ from pydantic import SecretStr, ValidationError
 
 from .settings import (
     ConfigurationError,
+    ConnectionModelSettings,
     ConnectionSettings,
     ProviderSettings,
     validate_provider_id,
@@ -32,10 +33,9 @@ _FIELDS = {
     "base_url",
     "session_identity",
     "home",
-    "model",
+    "default_model",
     "models",
-    "effort",
-    "efforts",
+    "default_effort",
     "service_tier",
 }
 
@@ -132,15 +132,15 @@ def load_provider_config(
         except ConfigurationError:
             _invalid()
         value = _mapping(raw)
-        if set(value) - _FIELDS or not {"adapter", "model", "effort"} <= set(value):
+        if set(value) - _FIELDS or not {
+            "adapter",
+            "default_model",
+            "default_effort",
+            "models",
+        } <= set(value):
             _invalid()
         adapter = value["adapter"]
         if not isinstance(adapter, str) or adapter not in {"codex", "claude"}:
-            _invalid()
-        legacy_adapter = {"gpt": "codex", "deepseek": "codex", "claude": "claude"}.get(
-            provider_id
-        )
-        if legacy_adapter is not None and adapter != legacy_adapter:
             _invalid()
         refs = dict(_mapping(value.get("environment", {})))
         if adapter == "claude" and (set(refs) - _CLAUDE_AUTH or len(refs) > 1):
@@ -187,27 +187,39 @@ def load_provider_config(
         for key in ("label", "session_identity"):
             if key in value:
                 optional[key] = _text(value[key])
-        profile = {
-            key: _text(value[key])
-            for key in ("model", "effort", "service_tier")
-            if key in value
-        }
-        if "models" in value:
-            models = value["models"]
-            if not isinstance(models, list) or not models:
+        models = _mapping(value["models"])
+        if not models:
+            _invalid()
+        declarations = []
+        for model_id, raw_model in models.items():
+            model_id = _text(model_id)
+            raw_model = _mapping(raw_model)
+            if set(raw_model) != {"efforts"}:
                 _invalid()
-            models = tuple(_text(model) for model in models)
-            if len(set(models)) != len(models) or profile["model"] not in models:
-                _invalid()
-            optional["models"] = models
-        if "efforts" in value:
-            efforts = value["efforts"]
+            efforts = raw_model["efforts"]
             if not isinstance(efforts, list) or not efforts:
                 _invalid()
-            efforts = tuple(_text(effort) for effort in efforts)
-            if len(set(efforts)) != len(efforts) or profile["effort"] not in efforts:
+            efforts = tuple(_text(item) for item in efforts)
+            if len(set(efforts)) != len(efforts):
                 _invalid()
-            optional["efforts"] = efforts
+            declarations.append(
+                ConnectionModelSettings(model_id=model_id, efforts=efforts)
+            )
+        profile = {
+            "model": _text(value["default_model"]),
+            "effort": _text(value["default_effort"]),
+            **(
+                {"service_tier": _text(value["service_tier"])}
+                if "service_tier" in value
+                else {}
+            ),
+        }
+        model_ids = [model.model_id for model in declarations]
+        if profile["model"] not in model_ids:
+            _invalid()
+        if any(profile["effort"] not in model.efforts for model in declarations):
+            _invalid()
+        optional["models"] = tuple(declarations)
         if "home" in value:
             home = Path(_text(value["home"]))
             if home.parts and home.parts[0] == "~":

@@ -169,7 +169,7 @@ class ConversationHttpTests(unittest.IsolatedAsyncioTestCase):
         response = await client.get("/api/agent/v1/codex-backends")
         self.assertEqual(response.status_code, 503)
 
-    async def test_aliases_partial_overrides_and_legacy_normalization(self):
+    async def test_aliases_and_valid_partial_overrides(self):
         for alias in ("agentMode", "agent_mode"):
             response = await self.client.post(
                 self.path,
@@ -180,8 +180,8 @@ class ConversationHttpTests(unittest.IsolatedAsyncioTestCase):
                     "codex_runtime": {
                         "assistant": {
                             "model": "other",
-                            "effort": "max",
-                            "serviceTier": "unsupported",
+                            "effort": "high",
+                            "serviceTier": "default",
                         },
                         "implementer": {"service_tier": "fast"},
                     },
@@ -203,6 +203,18 @@ class ConversationHttpTests(unittest.IsolatedAsyncioTestCase):
                 ].provider_id,
                 "second",
             )
+
+    async def test_invalid_effort_and_service_tier_do_not_persist(self):
+        before = self.store.conversations.list()
+        for field, value in (("effort", "max"), ("serviceTier", "unsupported")):
+            with self.subTest(field=field):
+                response = await self.client.post(
+                    self.path,
+                    json={"codex_runtime": {"assistant": {field: value}}},
+                )
+                self.assertEqual(response.status_code, 400, response.text)
+                self.assertIn("unsupported", response.json()["detail"])
+                self.assertEqual(self.store.conversations.list(), before)
 
     async def test_unknown_model_mode_and_credentials_have_legacy_errors(self):
         cases = [
@@ -302,9 +314,7 @@ class ConversationHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ambiguous provider", response.json()["detail"])
         self.assertEqual(len(self.service.list("w")), 1)
 
-    async def test_target_model_normalization_does_not_validate_provider_default_tier(
-        self,
-    ):
+    async def test_target_model_requires_supported_effort_and_tier(self):
         self.providers.register(
             Provider(
                 "mixed",
@@ -323,7 +333,6 @@ class ConversationHttpTests(unittest.IsolatedAsyncioTestCase):
         for override in (
             {"model": "plain-model"},
             {"model": "plain-model", "serviceTier": "default"},
-            {"model": "plain-model", "effort": "high", "serviceTier": "fast"},
         ):
             response = await self.client.post(
                 self.path,
@@ -341,3 +350,17 @@ class ConversationHttpTests(unittest.IsolatedAsyncioTestCase):
                     "serviceTier": "default",
                 },
             )
+        response = await self.client.post(
+            self.path,
+            json={
+                "codex_runtime": {
+                    "assistant": {
+                        "model": "plain-model",
+                        "effort": "high",
+                        "serviceTier": "fast",
+                    }
+                },
+                "agentMode": "single",
+            },
+        )
+        self.assertEqual(response.status_code, 400, response.text)

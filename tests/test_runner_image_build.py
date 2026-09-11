@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.provider_fixture import write_minimal_providers
 from tools import runner_image
 from vibesim_agent.bootstrap import configuration
 
@@ -26,6 +27,7 @@ class RunnerImageBuildTests(unittest.TestCase):
             target = self.agent / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source / name, target)
+        write_minimal_providers(self.agent)
         self.main = self.root / "custom main source"
         self.main.mkdir()
         self.environment = {

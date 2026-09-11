@@ -11,7 +11,6 @@ import uvicorn
 from tools.migrate_v1_database import MigrationError
 
 from .bootstrap import create_application, host_home, initialize_state
-from .providers.builtin import provider_environments
 from .settings import ConfigurationError, environment_reference
 from .startup import ManagedStartup
 from .storage.database import SchemaMismatch
@@ -34,7 +33,7 @@ def main(argv: list[str] | None = None) -> None:
     environment = dict(os.environ)
     try:
         if arguments.command == "env-reference":
-            print(environment_reference(provider_environments(host_home(environment))))
+            print(environment_reference())
         elif arguments.command == "init":
             try:
                 descriptor = initialize_state(environment=environment)

@@ -19,15 +19,34 @@ from vibesim_agent.runtime.invocation import InvocationHome
 
 class CompositionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        fixture = fixtures.BuiltinProviderTests()
+        fixture = fixtures.ConfiguredProviderTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         self.root = fixture.root
-        self.settings = fixture.settings_for(
-            {
-                "VLLM_API_KEY": "selected-deepseek",
-                "ANTHROPIC_API_KEY": "selected-claude",
-            }
+        deepseek_home = self.root / ".deepseek"
+        deepseek_home.mkdir()
+        (deepseek_home / "config.toml").write_text('model_provider="openai"\n')
+        (deepseek_home / "auth.json").write_text('{"token":"fixture"}')
+        fixture.document["providers"]["deepseek"] = {
+            "adapter": "codex",
+            "home": str(deepseek_home),
+            "environment": {"VLLM_API_KEY": "VLLM_API_KEY"},
+            "default_model": "deepseek-v3",
+            "default_effort": "high",
+            "models": {"deepseek-v3": {"efforts": ["high"]}},
+        }
+        fixture.document["providers"]["claude"]["environment"] = {
+            "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY"
+        }
+        fixture.document["defaults"] = {
+            "orchestrator": "gpt",
+            "implementer": "gpt",
+            "assistant": "gpt",
+        }
+        (self.root / "providers.yaml").write_text(json.dumps(fixture.document))
+        self.settings = fixture.settings(
+            VLLM_API_KEY="selected-deepseek",
+            ANTHROPIC_API_KEY="selected-claude",
         )
         self.environment = ExecutionEnvironment(
             self.settings.container, self.settings.agent, "lock", "/context.json"
@@ -86,7 +105,7 @@ class CompositionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             claude.process_environment["ANTHROPIC_API_KEY"], "selected-claude"
         )
-        self.assertEqual(self.setup.model_aliases["sonnet"], "claude-sonnet-5")
+        self.assertNotIn("sonnet", self.setup.model_aliases)
         self.assertEqual(self.setup.docker_environment, {
             "PATH": "/usr/bin", "DOCKER_HOST": "unix:///test.sock",
         })
@@ -179,7 +198,7 @@ class CompositionTests(unittest.IsolatedAsyncioTestCase):
             if provider_id == "deepseek":
                 self.assertIn("VLLM_API_KEY", args)
                 self.assertEqual(environment["VLLM_API_KEY"], "selected-deepseek")
-                self.assertNotIn("--output-schema", args)
+                self.assertIn("--output-schema", args)
             if provider_id == "claude":
                 self.assertIn("ANTHROPIC_API_KEY", args)
                 self.assertIn("--resume", args)

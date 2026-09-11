@@ -11,8 +11,6 @@ from vibesim_agent.bootstrap import configuration
 from vibesim_agent.provider_config import load_provider_config
 from vibesim_agent.settings import (
     ConfigurationError,
-    ProviderEnvironment,
-    ProviderSettings,
     load_settings,
 )
 
@@ -29,21 +27,30 @@ class ProviderConfigTests(unittest.TestCase):
                 "work": {
                     "adapter": "claude",
                     "label": "Work connection",
-                    "model": "claude-sonnet-5",
-                    "effort": "high",
+                    "default_model": "claude-sonnet-5",
+                    "default_effort": "high",
+                    "models": {
+                        "claude-sonnet-5": {"efforts": ["medium", "high"]}
+                    },
                     "base_url": "https://work.example.test/v1/",
                     "environment": {"ANTHROPIC_API_KEY": "WORK_KEY"},
                 },
                 "personal": {
                     "adapter": "claude",
-                    "model": "claude-sonnet-5",
-                    "effort": "medium",
+                    "default_model": "claude-sonnet-5",
+                    "default_effort": "medium",
+                    "models": {
+                        "claude-sonnet-5": {"efforts": ["medium", "high"]}
+                    },
                     "environment": {"ANTHROPIC_AUTH_TOKEN": "PERSONAL_TOKEN"},
                 },
                 "code": {
                     "adapter": "codex",
-                    "model": "gpt-5.6-sol",
-                    "effort": "high",
+                    "default_model": "gpt-5.6-sol",
+                    "default_effort": "high",
+                    "models": {
+                        "gpt-5.6-sol": {"efforts": ["low", "high", "max"]}
+                    },
                     "home": "~/.codex-work",
                     "environment": {"CUSTOM_API_KEY": "CODE_KEY"},
                 },
@@ -88,13 +95,39 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertNotEqual(configured.connections["work"].environment, configured.connections["personal"].environment)
 
     def test_explicit_efforts_require_unique_levels_and_default_membership(self):
-        self.document["providers"]["code"]["efforts"] = ["high", "max", "ultra"]
-        self.assertEqual(self.load().connections["code"].efforts, ("high", "max", "ultra"))
+        provider = self.document["providers"]["code"]
+        provider["models"] = {
+            "gpt-5.6-sol": {"efforts": ["high", "max", "ultra"]}
+        }
+        [model] = self.load().connections["code"].models
+        self.assertEqual(model.model_id, "gpt-5.6-sol")
+        self.assertEqual(model.efforts, ("high", "max", "ultra"))
         for levels in ([], ["high", "high"], ["low"], "high", [1]):
             with self.subTest(levels=levels):
-                self.document["providers"]["code"]["efforts"] = levels
+                provider["models"] = {"gpt-5.6-sol": {"efforts": levels}}
                 with self.assertRaises(ConfigurationError):
                     self.load()
+
+    def test_model_mapping_requires_declared_matching_defaults(self):
+        provider = self.document["providers"]["code"]
+        provider.update(
+            default_model="gpt-5.6-sol",
+            default_effort="high",
+            models={"gpt-5.6-sol": {"efforts": ["low", "high"]}},
+        )
+        loaded = self.load()
+        self.assertEqual(loaded.providers["code"].model, "gpt-5.6-sol")
+        self.assertEqual(loaded.providers["code"].effort, "high")
+        for update in (
+            {"default_model": "missing"},
+            {"default_effort": "ultra"},
+            {"model": "gpt-5.6-sol"},
+        ):
+            with self.subTest(update=update):
+                candidate = json.loads(json.dumps(self.document))
+                candidate["providers"]["code"].update(update)
+                with self.assertRaises(ConfigurationError):
+                    self.load(candidate)
 
     def test_explicit_file_overrides_even_invalid_repository_file(self):
         explicit = self.root / "explicit.yaml"
@@ -185,15 +218,13 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertEqual(result.secrets, {})
         self.assertIsNone(result.connections["personal"].label)
 
-    def test_models_default_to_none_and_explicit_lists_preserve_exact_ids(self):
+    def test_models_preserve_exact_ids_and_efforts(self):
         result = self.load()
-        self.assertIsNone(result.connections["work"].models)
-        document = json.loads(json.dumps(self.document))
-        document["providers"]["work"]["models"] = ["claude-sonnet-5", "claude-opus-5"]
-        result = self.load(document)
         self.assertEqual(
-            result.connections["work"].models, ("claude-sonnet-5", "claude-opus-5")
+            tuple(model.model_id for model in result.connections["work"].models),
+            ("claude-sonnet-5",),
         )
+        self.assertEqual(result.connections["work"].models[0].efforts, ("medium", "high"))
         self.assertEqual(result.providers["work"].model, "claude-sonnet-5")
 
     def test_models_reject_empty_duplicates_missing_default_and_wrong_types(self):
@@ -202,13 +233,11 @@ class ProviderConfigTests(unittest.TestCase):
             None,
             "claude-sonnet-5",
             {},
-            ["claude-sonnet-5", "claude-sonnet-5"],
-            ["claude-opus-5"],
-            ["claude-sonnet-5", ""],
-            ["claude-sonnet-5", "  "],
-            ["claude-sonnet-5", 7],
-            ["claude-sonnet-5", {}],
-            ["sonnet"],
+            {"claude-sonnet-5": {}},
+            {"claude-sonnet-5": {"efforts": []}},
+            {"claude-sonnet-5": {"efforts": ["high", "high"]}},
+            {"claude-opus-5": {"efforts": ["high"]}},
+            {"claude-sonnet-5": {"efforts": [7]}},
         ]
         for index, models in enumerate(values):
             with self.subTest(index=index):
@@ -237,13 +266,9 @@ class ProviderConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigurationError):
             self.load(document)
 
-    def test_yaml_replaces_legacy_profiles_but_keeps_naming_secret(self):
-        old = ProviderEnvironment(
-            "legacy", ProviderSettings(model="old", effort="high")
-        )
+    def test_yaml_keeps_naming_secret(self):
         configured = load_settings(
             repo_root=self.root,
-            providers=(old,),
             environment={
                 "VIBESIM_AGENT_PROVIDERS_FILE": str(self.write()),
                 "HOME": str(self.root),
@@ -252,7 +277,6 @@ class ProviderConfigTests(unittest.TestCase):
             },
         )
         self.assertEqual(configured.providers["work"].model, "claude-sonnet-5")
-        self.assertNotIn("legacy", configured.providers)
         self.assertEqual(set(configured.secrets), {"WORK_KEY", "OPENROUTER_API_KEY"})
         self.assertEqual(configured.role_providers, self.document["defaults"])
 
@@ -274,24 +298,9 @@ class ProviderConfigTests(unittest.TestCase):
                 )
             self.assertNotIn("SECRET_DO_NOT_PRINT", str(caught.exception))
 
-    def test_absent_yaml_keeps_legacy_loading(self):
-        profile = ProviderEnvironment(
-            "legacy",
-            ProviderSettings(model="old", effort="high"),
-            secret_names=("LEGACY_KEY",),
-        )
-        result = load_settings(
-            repo_root=self.root,
-            providers=(profile,),
-            environment={
-                "VIBESIM_PROVIDER_LEGACY_MODEL": "changed",
-                "LEGACY_KEY": "old-secret",
-            },
-        )
-        self.assertEqual(result.providers["legacy"].model, "changed")
-        self.assertEqual(result.connections, {})
-        self.assertEqual(result.role_providers, {})
-        self.assertEqual(result.secrets["LEGACY_KEY"].get_secret_value(), "old-secret")
+    def test_absent_yaml_fails(self):
+        with self.assertRaisesRegex(ConfigurationError, "required"):
+            load_settings(repo_root=self.root, environment={})
 
     def test_duplicate_keys_unsafe_tags_aliases_and_invalid_yaml_are_redacted(self):
         bodies = [

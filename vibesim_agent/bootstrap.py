@@ -10,7 +10,6 @@ from fastapi import FastAPI
 
 from .application import build_application
 from .composition import build_builtin_setup
-from .providers.builtin import provider_environments
 from .runtime.workspace import WorkspaceSnapshot
 from .settings import ConfigurationError, Settings, load_settings
 from .storage.database import Database
@@ -71,11 +70,7 @@ def configuration(
         raise ConfigurationError(
             "Retired Agent configuration keys: " + ", ".join(retired)
         )
-    return load_settings(
-        environment=environment,
-        repo_root=repo_root,
-        providers=provider_environments(host_home(environment)),
-    )
+    return load_settings(environment=environment, repo_root=repo_root)
 
 
 def _source(settings: Settings, environment: Mapping[str, str]) -> tuple[Path, ...]:
