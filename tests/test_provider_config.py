@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from vibesim_agent.bootstrap import configuration
 from vibesim_agent.provider_config import load_provider_config
 from vibesim_agent.settings import (
     ConfigurationError,
@@ -64,6 +65,63 @@ class ProviderConfigTests(unittest.TestCase):
         return load_provider_config(
             self.write(document), environment={"HOME": str(self.root), **environment}
         )
+
+    def test_repository_file_is_discovered_without_consulting_cwd(self):
+        self.write()
+        with patch.object(Path, "cwd", side_effect=AssertionError("cwd lookup")):
+            configured = load_settings(
+                repo_root=self.root, environment={"HOME": str(self.root)}
+            )
+        self.assertEqual(set(configured.providers), set(self.document["providers"]))
+        self.assertEqual(configured.role_providers, self.document["defaults"])
+
+    def test_explicit_file_overrides_even_invalid_repository_file(self):
+        explicit = self.root / "explicit.yaml"
+        explicit.write_text(json.dumps(self.document))
+        self.path.mkdir()
+        configured = load_settings(
+            repo_root=self.root,
+            environment={
+                "VIBESIM_AGENT_PROVIDERS_FILE": str(explicit),
+                "HOME": str(self.root),
+            },
+        )
+        self.assertEqual(set(configured.providers), set(self.document["providers"]))
+
+    def test_startup_configuration_discovers_repository_role_defaults(self):
+        self.write()
+        configured = configuration(
+            repo_root=self.root, environment={"HOME": str(self.root)}
+        )
+        self.assertEqual(configured.agent.repo_root, self.root)
+        self.assertEqual(configured.role_providers, self.document["defaults"])
+        self.assertEqual(set(configured.connections), set(self.document["providers"]))
+
+    def test_invalid_repository_file_never_falls_back(self):
+        for kind in ("malformed", "directory", "dangling_symlink"):
+            with self.subTest(kind=kind):
+                if kind == "malformed":
+                    self.path.write_text("[invalid")
+                elif kind == "directory":
+                    self.path.mkdir()
+                else:
+                    self.path.symlink_to(self.root / "missing.yaml")
+                try:
+                    with self.assertRaises(ConfigurationError):
+                        load_settings(repo_root=self.root, environment={})
+                finally:
+                    if kind == "directory":
+                        self.path.rmdir()
+                    else:
+                        self.path.unlink()
+
+    def test_discovered_file_rejects_conflicting_provider_environment(self):
+        self.write()
+        with self.assertRaisesRegex(ConfigurationError, "conflicts"):
+            load_settings(
+                repo_root=self.root,
+                environment={"VIBESIM_PROVIDER_WORK_MODEL": "override"},
+            )
 
     def test_named_connections_resolve_only_their_references_without_source_writes(
         self,

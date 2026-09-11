@@ -16,6 +16,9 @@ from vibesim_agent.settings import (
 
 
 class SettingsTests(unittest.TestCase):
+    def setUp(self):
+        self.repo = Path(self.enterContext(TemporaryDirectory()))
+
     def test_registered_provider_uses_derived_environment_without_core_branch(self):
         profile = ProviderEnvironment(
             "example",
@@ -23,6 +26,7 @@ class SettingsTests(unittest.TestCase):
             secret_names=("EXAMPLE_API_KEY",),
         )
         settings = load_settings(
+            repo_root=self.repo,
             environment={
                 "VIBESIM_PROVIDER_EXAMPLE_MODEL": "other",
                 "EXAMPLE_API_KEY": "private-value",
@@ -49,7 +53,7 @@ class SettingsTests(unittest.TestCase):
             ("VIBESIM_AGENT_MAIN_DIR", "relative"),
         ):
             with self.subTest(key=key), self.assertRaises(ConfigurationError) as caught:
-                load_settings(environment={key: value})
+                load_settings(environment={key: value}, repo_root=self.repo)
             self.assertIn(key, str(caught.exception))
             self.assertNotIn(value, str(caught.exception))
 
@@ -110,7 +114,7 @@ with patch.dict(os.environ, {}, clear=True):
             ("host", "external"), ("local", "workspace"),
             (" HOST ", "external"), ("Workspace", "workspace"),
         ):
-            settings = load_settings(environment={
+            settings = load_settings(repo_root=self.repo, environment={
                 "VIBESIM_AGENT_ANALYZER_SOURCE": source,
                 "VIBESIM_AGENT_ANALYZER_BASE_URL": "https://analyzer:8787/",
                 "VIBESIM_AGENT_NAMING_BASE_URL": "https://naming/api/v1/",
@@ -123,7 +127,7 @@ with patch.dict(os.environ, {}, clear=True):
         profile = ProviderEnvironment(
             "example", ProviderSettings(model="base", effort="low"), accepts_home=True
         )
-        settings = load_settings(environment={
+        settings = load_settings(repo_root=self.repo, environment={
             "HOME": "/host-home",
             "VIBESIM_AGENT_MAIN_DIR": "~/source",
             "VIBESIM_AGENT_WORKSPACES_ROOT": "~/workspaces",
@@ -140,7 +144,10 @@ with patch.dict(os.environ, {}, clear=True):
         self.assertEqual(settings.container.image, "vibesim-agent-runner:alice")
         for key in ("HOME", "UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR"):
             with self.subTest(key=key), self.assertRaises(ConfigurationError):
-                load_settings(environment={f"VIBESIM_RUNNER_{key}": "~/container"})
+                load_settings(
+                    environment={f"VIBESIM_RUNNER_{key}": "~/container"},
+                    repo_root=self.repo,
+                )
 
     def test_no_home_option_for_environment_authenticated_provider(self):
         profile = ProviderEnvironment(
@@ -148,6 +155,7 @@ with patch.dict(os.environ, {}, clear=True):
         )
         with self.assertRaisesRegex(ConfigurationError, "HOME is not supported"):
             load_settings(
+                repo_root=self.repo,
                 environment={"VIBESIM_PROVIDER_EXAMPLE_HOME": "/private"},
                 providers=[profile],
             )
@@ -157,7 +165,7 @@ with patch.dict(os.environ, {}, clear=True):
             "example", ProviderSettings(model="base", effort="low")
         )
         with self.assertRaisesRegex(ConfigurationError, "Duplicate provider"):
-            load_settings(environment={}, providers=[profile, profile])
+            load_settings(environment={}, repo_root=self.repo, providers=[profile, profile])
         bad = ProviderEnvironment("EXAMPLE", profile.defaults)
         with self.assertRaises(ConfigurationError):
-            load_settings(environment={}, providers=[bad])
+            load_settings(environment={}, repo_root=self.repo, providers=[bad])

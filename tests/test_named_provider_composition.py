@@ -225,12 +225,14 @@ class NamedProviderCompositionTests(unittest.TestCase):
 
     def test_legacy_yaml_identity_matches_and_rotation_preserves_scope(self):
         before = self.settings()
+        legacy_repo = self.root / "legacy-repo"
+        legacy_repo.mkdir()
         legacy = configuration(
             environment={
                 "HOME": str(self.root),
                 "ANTHROPIC_BASE_URL": "http://fixture-gateway",
             },
-            repo_root=self.root,
+            repo_root=legacy_repo,
         )
         for provider_id, adapter in (("gpt", "codex"), ("claude", "claude")):
             self.assertEqual(

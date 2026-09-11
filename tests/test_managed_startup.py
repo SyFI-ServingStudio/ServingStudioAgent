@@ -351,6 +351,7 @@ class ManagedStartupTests(unittest.TestCase):
             }
         )
         settings = real_configuration(
+            repo_root=self.root,
             environment=self.environment
             | {"VIBESIM_AGENT_WORKSPACES_ROOT": str(self.target)}
         )
@@ -360,7 +361,13 @@ class ManagedStartupTests(unittest.TestCase):
         self.mapping["families"] = {"old-family": identity}
         self.write_inputs()
         with (
-            patch.object(startup, "configuration", side_effect=real_configuration),
+            patch.object(
+                startup,
+                "configuration",
+                side_effect=lambda **kwargs: real_configuration(
+                    repo_root=self.root, **kwargs
+                ),
+            ),
             patch.object(startup, "session_scope", side_effect=real_session_scope),
         ):
             self.managed()

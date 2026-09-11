@@ -306,6 +306,16 @@ def load_settings(
         host_paths=("hf_home",),
     )
     if "VIBESIM_AGENT_PROVIDERS_FILE" in environment:
+        provider_file = Path(environment["VIBESIM_AGENT_PROVIDERS_FILE"])
+    else:
+        provider_file = root / "providers.yaml"
+        try:
+            provider_file.lstat()
+        except FileNotFoundError:
+            provider_file = None
+        except OSError:
+            raise ConfigurationError("Cannot inspect repository providers.yaml") from None
+    if provider_file is not None:
         if any(name.startswith("VIBESIM_PROVIDER_") for name in environment):
             raise ConfigurationError(
                 "Providers file conflicts with VIBESIM_PROVIDER_* overrides"
@@ -313,7 +323,7 @@ def load_settings(
         from .provider_config import load_provider_config
 
         configured = load_provider_config(
-            Path(environment["VIBESIM_AGENT_PROVIDERS_FILE"]), environment=environment
+            provider_file, environment=environment
         )
         secrets = dict(configured.secrets)
         if environment.get("OPENROUTER_API_KEY", "").strip():
@@ -360,7 +370,7 @@ def environment_reference(providers: Sequence[ProviderEnvironment] = ()) -> str:
     """Generate the variable table from the same field definitions as the loader."""
     rows = ["| Variable | Meaning |", "| --- | --- |"]
     rows.append(
-        "| `VIBESIM_AGENT_PROVIDERS_FILE` | Explicit named-provider YAML configuration |"
+        "| `VIBESIM_AGENT_PROVIDERS_FILE` | Override the default Agent repository `providers.yaml` |"
     )
     groups = [
         (AgentSettings, "VIBESIM_AGENT_", True),
