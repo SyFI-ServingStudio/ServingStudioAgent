@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from tests import test_managed_jobs_v2 as fixtures
+from tests import test_managed_jobs as fixtures
 
 
 class ManagedAliasTests(unittest.IsolatedAsyncioTestCase):

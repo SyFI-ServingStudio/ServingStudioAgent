@@ -3,7 +3,7 @@ import unittest
 from dataclasses import replace
 
 from tests import test_application as application_fixture
-from tests import test_managed_jobs_v2 as job_fixture
+from tests import test_managed_jobs as job_fixture
 from tests.http_support import sse_events
 from vibesim_agent.providers.registry import ProviderRegistry
 

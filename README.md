@@ -6,10 +6,9 @@ application; Rust Analyzer owns numerical results and their catalogs.
 
 This branch implements the new `vibesim_agent` service. Private Codex/Claude
 migration and resume acceptance has passed; production cutover remains outstanding.
-`run.sh` continues to launch the
-legacy backend. Its deployment, old environment keys, embedded chat UI and older
-JSON migration commands are documented in [Legacy Backend](LEGACY_BACKEND.md).
-Those commands do not initialize or migrate the new service.
+`run.sh` starts this service. The browser application lives in VibeSimUI.
+The separately retained old deployment is documented in
+[Legacy Backend](LEGACY_BACKEND.md); its commands require the frozen old checkout.
 
 For workspace setup, use the parent workspace's `README.md` and `reproduce.md`.
 Run commands below from this checkout with Python 3.12 and `uv`, after sourcing
@@ -17,9 +16,8 @@ the workspace-root `.env`.
 
 ## Start The Service
 
-The new `vibesim_agent` package has explicit commands for isolated validation.
-The existing `run.sh` still starts the baseline backend until migration and
-deployment cutover are validated.
+The `vibesim_agent` package has explicit initialization, migration and serving
+commands. Starting the service does not build the UI or a runner image.
 
 ```bash
 uv run --frozen python -m vibesim_agent env-reference
@@ -44,6 +42,9 @@ must be reachable from the runner. Runner images must already be built.
 ```bash
 uv run --frozen python -m vibesim_agent serve
 ```
+
+`./run.sh` is a shorthand for this command and forwards its arguments, including
+`--startup-config` for a reviewed migration. It requires the same environment.
 
 The service uses one process. Its factory, `vibesim_agent.bootstrap:create_application`,
 checks all workspace databases and acquires the state directory lock before
@@ -102,7 +103,8 @@ with the default image `vibesim-agent-runner:<runner-user>` and runner version
 `prebuilt-agent-runner-v12`. Image labels use `org.vibesim.agent.*`.
 Node.js is pinned to `v22.23.2` to satisfy the pinned Claude CLI's Node >=22
 requirement; npm rejects an incompatible engine during Claude installation.
-The legacy Dockerfile and scripts remain available until deployment cutover.
+The previous Dockerfile and build commands are retained in the old deployment
+snapshot, not in this checkout.
 The smoke script reads the same new configuration; `timing` mode requires a
 nonempty `VIBESIM_RUNNER_GPUS`. It reads the GPU model inside the container and
 runs a private copy of the timing preset with that model and fresh output paths.
@@ -206,8 +208,7 @@ Optional automatic naming uses `OPENROUTER_API_KEY`.
 | `vibesim_agent/prompts/` | Role contracts, rendering and compatibility fingerprints |
 | `tools/` | Offline migration, startup selection and deployment auditing |
 
-The current checkout still includes legacy comparison tests and source pending
-cutover. Run the local suite with:
+Run the local suite with:
 
 ```bash
 uv run --frozen python -m unittest discover -s tests -v
@@ -219,7 +220,5 @@ production cutover. Frozen legacy fixtures allow the new suite to run without
 importing `backend`; [baseline documentation](doc/refactor-baseline.md) describes
 the separately retained legacy snapshot tooling.
 
-[Browser acceptance](doc/browser-acceptance.md) maps retained frontend features
-to VibeSimUI implementations and the live integration checks required before
-retiring the old frontend. Existing mocked browser tests do not complete those
-checks.
+[Browser acceptance](doc/browser-acceptance.md) records the retired frontend's
+capabilities, their VibeSimUI owners and completed live integration checks.

@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from tests import test_managed_jobs_v2 as fixtures
+from tests import test_managed_jobs as fixtures
 
 
 def load_clients(root: Path, package_name: str):

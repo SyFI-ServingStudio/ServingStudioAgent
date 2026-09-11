@@ -205,5 +205,24 @@ services and restore the old deployment against its untouched original state.
 The simple rollback window ends when user writes resume. After that point,
 preserve the new state and reconcile those writes through a verified reverse
 conversion or forward repair; never restore an old snapshot over new data.
-Delete legacy code only after the plan's acceptance and observation requirements
-are satisfied. Keep deployment and state backups through the agreed rollback window.
+The candidate checkout contains only the new implementation. The independently
+running old checkout and its source archive remain available; retire those deployment
+assets only after acceptance and observation. Keep state backups through the rollback window.
+
+## Current Stop Audit
+
+The final read-only inventory found seven workspaces with no running turns. All
+historical provider sessions use GPT; their configured models are `gpt-5.6-sol`
+and `gpt-5.6-luna`. Existing callback aliases remain necessary for copied launchers.
+
+The shutdown audit currently rejects two non-Agent containers, `areal_banking_prod`
+and `areal_keepalive`, with writable mounts of all `/raid`. Their ownership is not
+established by the Agent deployment. No service or container was stopped, and no
+production migration target was created. Checking current open files would not
+prove that these containers cannot write later; their owners must resolve this
+mount scope before recapturing the audit. Do not bypass this rejection.
+
+The retained legacy source is commit `e26ad6d`. Its private archive is
+`tmp/agent-cutover-final/legacy-agent.tar`, SHA256
+`b7036bc7ff3982681c5382c877365bd6906cf2e6f01f516e9ce80193282e9952`.
+This is a source archive, not the still-pending stopped-state data backup.

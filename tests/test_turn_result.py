@@ -1,81 +1,154 @@
-"""How a turn's `final` event is read — the one place, for every entry point.
-
-The JSON endpoints and the browser stream both act on this event, and they used
-to interpret it separately. The failure mode of two copies is not a crash: it is
-one caller quietly calling an ending an answer while the other does not, so the
-same turn reads differently depending on which door it came through.
-"""
-
-from __future__ import annotations
-
+import copy
+import json
 import unittest
+from dataclasses import replace
+from pathlib import Path
 
-from backend.turn_result import collect_turn_event, new_turn_result, read_final_event
-
-
-def _result() -> dict:
-    return new_turn_result(
-        conversation_id="c1", turn_id="t", sandbox="workspace-write", autonomous=False
-    )
+from vibesim_agent.domain.results import project_turn_result
+from vibesim_agent.domain.roles import AgentMode, Role, Sandbox
+from vibesim_agent.domain.turns import Outcome, TurnInput, TurnResult
 
 
-class ReadFinalEventTests(unittest.TestCase):
-    def test_reports_the_outcome_a_role_named(self) -> None:
+def rows(*events):
+    return [
+        {"kind": event["kind"], "payload": event, "sequence": index}
+        for index, event in enumerate(events)
+    ]
+
+
+class TurnResultProjectionTests(unittest.TestCase):
+    def setUp(self):
+        self.request = TurnInput(
+            "workspace",
+            "conversation",
+            "turn",
+            "question",
+            AgentMode.SINGLE,
+            {},
+            {Role.ASSISTANT: "previous-session"},
+            "",
+            sandbox=Sandbox.READ_ONLY,
+            autonomous=True,
+        )
+
+    def test_collect_fields_match_legacy_and_terminal_result_is_authoritative(self):
+        fixture = json.loads(
+            (Path(__file__).parent / "fixtures/legacy_turn_result.json").read_text()
+        )
+        events = rows(*fixture["events"])
+        expected = fixture["collected"]
+        expected.update(final="Normalized answer", outcome="final_answer", ok=True)
+        before = copy.deepcopy(events)
+        actual = project_turn_result(
+            self.request, TurnResult(Outcome.ANSWER, "Normalized answer"), events
+        )
+        self.assertEqual(actual, expected)
+        self.assertEqual(events, before)
+        self.assertEqual(actual["sessions"], {"assistant": "latest"})
+
+    def test_no_events_never_echoes_prior_sessions_and_keeps_empty_legacy_fields(self):
+        output = project_turn_result(
+            self.request, TurnResult(Outcome.INPUT, "Which model?"), []
+        )
+        self.assertEqual(output["sessions"], {})
+        self.assertEqual(output["outcome"], "request_user_input")
+        self.assertTrue(output["ok"])
+        for key in (
+            "tool_calls",
+            "intermediate_outputs",
+            "implementer_summaries",
+            "delegated_tasks",
+            "usages",
+        ):
+            self.assertEqual(output[key], [])
+        self.assertNotIn("citations", output)
+        self.assertNotIn("failure", output)
+        self.assertNotIn("naming", output)
+
+    def test_failure_error_field_uses_safe_message_and_never_reports_success(self):
+        events = rows({"kind": "error", "text": "private host exception"})
+        for metadata, code, message in (
+            ({}, "", "The agent could not complete this turn."),
+            ({"failure": {}}, "", "The agent could not complete this turn."),
+            (
+                {
+                    "failure": {
+                        "code": "runtime_timeout",
+                        "message": "The turn timed out.",
+                    }
+                },
+                "runtime_timeout",
+                "The turn timed out.",
+            ),
+        ):
+            with self.subTest(metadata=metadata):
+                output = project_turn_result(
+                    self.request,
+                    TurnResult(Outcome.FAILED, "Failure explanation", metadata),
+                    events,
+                )
+                self.assertFalse(output["ok"])
+                self.assertIsNone(output["outcome"])
+                self.assertEqual(output["final"], "Failure explanation")
+                self.assertEqual(output["error"], message)
+                self.assertEqual(output["failure_code"], code)
+
+    def test_success_preserves_last_event_error_and_legacy_tool_collection(self):
+        events = rows(
+            {"kind": "error", "text": "first error"},
+            {"kind": "tool_call", "text": "retry"},
+            {"kind": "error", "text": "last error"},
+        )
+        output = project_turn_result(
+            self.request, TurnResult(Outcome.ANSWER, "Answer"), events
+        )
+        self.assertFalse(output["ok"])
+        self.assertEqual(output["error"], "last error")
+        self.assertEqual(output["tool_calls"], ["first error", "retry", "last error"])
+        self.assertEqual(output["outcome"], "final_answer")
+        empty = project_turn_result(
+            self.request, TurnResult(Outcome.ANSWER, "Answer"), rows({"kind": "error"})
+        )
+        self.assertFalse(empty["ok"])
+
+    def test_outcome_and_nonempty_answer_are_both_required_for_ok(self):
+        for outcome, text, metadata in (
+            (Outcome.CANCELLED, "Stopped.", {}),
+            (Outcome.FAILED, "Details", {}),
+            (Outcome.ANSWER, "", {}),
+            (Outcome.INPUT, " \n", {}),
+            (Outcome.ANSWER, "Answer", {"failure": {}}),
+        ):
+            with self.subTest(outcome=outcome, text=text):
+                output = project_turn_result(
+                    self.request, TurnResult(outcome, text, metadata), []
+                )
+                self.assertFalse(output["ok"])
+                self.assertEqual(
+                    output["outcome"],
+                    None if outcome is Outcome.FAILED else outcome.value,
+                )
+
+    def test_orchestrated_request_settings_do_not_depend_on_metadata(self):
+        request = replace(
+            self.request,
+            mode=AgentMode.ORCHESTRATED,
+            autonomous=False,
+            sandbox=Sandbox.WORKSPACE_WRITE,
+        )
+        result = TurnResult(
+            Outcome.ANSWER,
+            "Answer",
+            {
+                "sessions": {"assistant": "spoof"},
+                "delegated_tasks": ["spoof"],
+                "citations": ["extra"],
+            },
+        )
+        output = project_turn_result(request, result, [])
         self.assertEqual(
-            read_final_event({"outcome": "request_user_input"}),
-            ("request_user_input", ""),
+            (output["sandbox"], output["autonomous"], output["agent_mode"]),
+            ("workspace-write", False, "orchestrated"),
         )
-
-    def test_a_final_that_says_nothing_is_an_answer(self) -> None:
-        # A role that produced a final and did not say why is answering; that is
-        # the whole of what a role's own `final` means.
-        self.assertEqual(read_final_event({"text": "done"}), ("final_answer", ""))
-
-    def test_an_unknown_outcome_is_not_carried_through(self) -> None:
-        # Whatever a newer runtime may put here, this build can only act on the
-        # outcomes it knows. Passing an unrecognised one along would put a word
-        # in the store that every reader downstream then has to guess at.
-        self.assertEqual(read_final_event({"outcome": "gave_up"}), ("final_answer", ""))
-
-    def test_a_failure_leaves_no_outcome_to_report(self) -> None:
-        # The two are exclusive: a turn that failed never reached a decision.
-        self.assertEqual(
-            read_final_event({"failure": {"code": "agent_call_timeout"}}),
-            (None, "agent_call_timeout"),
-        )
-
-    def test_a_failure_with_no_code_is_still_a_failure(self) -> None:
-        # Asserted through a consumer, because the tuple alone cannot show the
-        # bug this guards: every caller tests the code for truth, so an empty
-        # one would leave the turn neither failed nor answered — and it would
-        # then reach the reader as a blank answer.
-        result = _result()
-        collect_turn_event(result, {"kind": "final", "text": "", "failure": {}})
-        self.assertIsNone(result["outcome"])
-        self.assertTrue(result["failure_code"])
-
-
-class CollectTurnEventTests(unittest.TestCase):
-    """That the JSON path reads the event through the same rule."""
-
-    def test_carries_the_outcome_into_the_result(self) -> None:
-        result = _result()
-        collect_turn_event(
-            result, {"kind": "final", "text": "here", "outcome": "request_user_input"}
-        )
-        self.assertEqual(result["outcome"], "request_user_input")
-        self.assertEqual(result["final"], "here")
-        self.assertEqual(result["failure_code"], "")
-
-    def test_a_failed_turn_reports_its_code_and_no_outcome(self) -> None:
-        result = _result()
-        collect_turn_event(
-            result,
-            {"kind": "final", "text": "gave up", "failure": {"code": "agent_call_timeout"}},
-        )
-        self.assertIsNone(result["outcome"])
-        self.assertEqual(result["failure_code"], "agent_call_timeout")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertEqual(output["sessions"], {})
+        self.assertEqual(output["delegated_tasks"], [])

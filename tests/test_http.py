@@ -9,7 +9,7 @@ from unittest.mock import patch
 import httpx
 
 from tests.http_support import LiveRequest, sse_events
-from tests.test_analyzer_context_v2 import dictionary
+from tests.test_analyzer_context import dictionary
 from vibesim_agent.domain.conversations import RoleRuntime
 from vibesim_agent.domain.roles import AgentMode, Role
 from vibesim_agent.main import create_app

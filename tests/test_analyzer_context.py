@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 import unittest
+from pathlib import Path
+
 from pydantic import ValidationError
 
-from backend.analyzer_context import (
+from vibesim_agent.domain.evidence import (
     AnalyzerTurnContext,
     CitationDictionarySnapshot,
     build_aggregate_citation_dictionary,
@@ -12,6 +17,8 @@ from backend.analyzer_context import (
     build_prediction_citation_dictionary,
     build_run_citation_dictionary,
     freeze_citations,
+    merge_citation_dictionaries,
+    persisted_context,
     prompt_with_analyzer_context,
 )
 
@@ -43,6 +50,63 @@ def dictionary() -> CitationDictionarySnapshot:
 
 
 class AnalyzerContextTests(unittest.TestCase):
+    def test_domain_import_does_not_load_backend(self):
+        script = """
+import importlib.abc
+import sys
+class RejectBackend(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "backend" or fullname.startswith("backend."):
+            raise AssertionError("legacy backend import: " + fullname)
+sys.meta_path.insert(0, RejectBackend())
+import vibesim_agent.domain.evidence
+assert not any(name == "backend" or name.startswith("backend.") for name in sys.modules)
+"""
+        result = subprocess.run([sys.executable, "-B", "-c", script],
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_persisted_context_schema_prompt_and_freezing_match_legacy_bytes(self):
+        golden = json.loads((Path(__file__).parent / "fixtures/legacy_analyzer_context.json").read_text())
+
+        payload = {
+            "protocol": "vibesim.conversation-context/v2",
+            "selection": None,
+            "citationDictionary": dictionary().model_dump(by_alias=True),
+        }
+        context = AnalyzerTurnContext.model_validate(payload)
+        self.assertEqual(payload, golden["payload"])
+        self.assertEqual(AnalyzerTurnContext.model_json_schema(), golden["schema"])
+        self.assertEqual(json.dumps(persisted_context(context), ensure_ascii=False),
+                         golden["persisted_json"])
+        markdown = "Use `exp.tp2.rate20.throughput` twice: `exp.tp2.rate20.throughput`."
+        self.assertEqual(prompt_with_analyzer_context(markdown, context).encode(),
+                         golden["prompt"].encode())
+        self.assertEqual(json.dumps(freeze_citations(markdown, context.citation_dictionary), ensure_ascii=False),
+                         golden["frozen_json"])
+        self.assertIsNone(persisted_context(None))
+        self.assertEqual(freeze_citations(markdown, None), [])
+        self.assertEqual(prompt_with_analyzer_context(markdown, None), markdown)
+
+    def test_dictionary_merge_preserves_nullable_selectors_and_latest_target(self):
+        golden = json.loads((Path(__file__).parent / "fixtures/legacy_analyzer_context.json").read_text())
+
+        previous = build_run_citation_dictionary(
+            workspace_id="w_test", run_id="old",
+            resource_path="/api/v1/runs/old/subjects/utilization/payload",
+        )
+        current = build_run_citation_dictionary(
+            workspace_id="w_test", run_id="new",
+            resource_path="/api/v1/runs/new/subjects/utilization/payload",
+        )
+        merged = merge_citation_dictionaries(previous, current)
+        self.assertEqual(previous.model_dump_json(by_alias=True), golden["previous_json"])
+        self.assertEqual(current.model_dump_json(by_alias=True), golden["current_json"])
+        self.assertEqual(merged.model_dump_json(by_alias=True), golden["merged_json"])
+        self.assertEqual(len(merged.entries), 1)
+        self.assertEqual(merged.entries[0].target.run_id, "new")
+        self.assertIn('"poolRole":null', merged.model_dump_json(by_alias=True))
+
     def test_builds_managed_aggregate_dictionary_with_authoritative_identity(
         self,
     ) -> None:

@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# Shared "copy VibeSim/ the way the runner sees it" helper.
-#
-# `build-codex-runner-image.sh` (build context) and `test-codex-runner-image.sh`
-# (smoke workspace) must assemble byte-identical trees: the test exists to prove
-# the image can build the same source the image was built from, and any
-# divergence makes it prove nothing. That invariant used to live in a comment
-# and a duplicated loop, and the duplication silently broke when
-# `alignment/load_generator/req-frontend` became a Cargo path dependency.
-#
-# Note this deliberately differs from the *runtime* workspace copy
-# (`backend/codex_runtime/workspace.py`), which skips submodules because
-# `docker.py` bind-mounts them read-only into each conversation container
-# instead. Neither of these scripts has a container to mount into — the image
-# build runs `cargo build` at layer-build time — so they must copy instead.
+# Build and smoke contexts must use identical source and required submodules.
+# Used by tools/runner_image.py and scripts/test-runner-image.sh. Runtime
+# workspace snapshots instead use separate read-only submodule mounts.
 
 # Submodules the runner image does not need. The alignment profilers are
 # host-only nsys tooling with multi-GB working trees, and nothing in the

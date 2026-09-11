@@ -1,8 +1,69 @@
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from backend.codex_runtime.codex_events import _translate, transport_failure
+from vibesim_agent.providers.codex.events import (
+    _find_rollout_file,
+    _scan_rollout_agent_messages,
+    _translate,
+    transport_failure,
+)
+
+
+class RolloutTests(unittest.TestCase):
+    def test_complete_terminal_record_without_newline(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "rollout.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "last_agent_message": "final answer",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            _, terminal, offset = _scan_rollout_agent_messages(path, 0)
+            self.assertEqual(terminal, "final answer")
+            self.assertEqual(offset, path.stat().st_size)
+
+    def test_incremental_partial_record_preserves_terminal_result(self):
+        with TemporaryDirectory() as directory:
+            home = Path(directory)
+            sessions = home / "sessions"
+            sessions.mkdir()
+            path = sessions / "rollout-session.jsonl"
+            record = (
+                json.dumps(
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "last_agent_message": "answer",
+                        },
+                    }
+                ).encode()
+                + b"\n"
+            )
+            path.write_bytes(record[:30])
+            self.assertEqual(_find_rollout_file(home, "session"), path)
+            messages, terminal, offset = _scan_rollout_agent_messages(path, 0)
+            self.assertEqual((messages, terminal, offset), ([], None, 0))
+            with path.open("ab") as file:
+                file.write(record[30:])
+            _, terminal, offset = _scan_rollout_agent_messages(path, offset)
+            self.assertEqual(terminal, "answer")
+            self.assertEqual(offset, len(record))
+            self.assertEqual(
+                _scan_rollout_agent_messages(path, offset), ([], None, offset)
+            )
+
 
 # Verbatim from a real outage: the gateway at cayenne:3456 returned 503 for
 # 12+ hours, and the runtime reported it as a decision-parsing failure.

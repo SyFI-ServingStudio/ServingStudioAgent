@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tests import test_codex_command_v2 as codex_fixture
+from tests import test_codex_command as codex_fixture
 from vibesim_agent.domain.roles import Role
 from vibesim_agent.providers.base import OutputMode
 from vibesim_agent.providers.claude.command import ClaudeCommand

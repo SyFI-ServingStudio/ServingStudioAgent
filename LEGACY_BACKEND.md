@@ -1,7 +1,8 @@
 # Legacy Backend Deployment Reference
 
-This preserves the pre-cutover README. Commands and environment keys below
-belong to the legacy backend unless explicitly labeled as refactor entries.
+This preserves the pre-cutover README for the retained `e26ad6d` deployment.
+Its source was removed from the new service checkout. Commands and environment
+keys below require that separate old checkout unless labeled as refactor entries.
 For the new service, start with [README.md](README.md).
 
 # VibeSim Agent Backend

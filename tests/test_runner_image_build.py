@@ -21,7 +21,6 @@ class RunnerImageBuildTests(unittest.TestCase):
         for name in (
             "docker/runner.Dockerfile",
             "scripts/lib/main-tree-copy.sh",
-            "scripts/test-codex-runner-image.sh",
             "scripts/test-runner-image.sh",
         ):
             target = self.agent / name
@@ -334,50 +333,3 @@ class RunnerImageBuildTests(unittest.TestCase):
         )
         self.assertEqual(len(copied), 1)
         self.assertEqual(self.source_bytes(), before)
-
-    def test_real_smoke_script_uses_explicit_source_and_cleans_its_copy(self):
-        fake_bin = self.root / "docker-bin"
-        fake_bin.mkdir()
-        evidence = self.root / "smoke-evidence"
-        fake_docker = fake_bin / "docker"
-        fake_docker.write_text(
-            "#!/bin/bash\nset -eu\n"
-            'if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then exit 0; fi\n'
-            '[ "$1" = "run" ] || exit 19\n'
-            'while [ "$#" -gt 0 ]; do\n'
-            '  if [ "$1" = "--volume" ]; then\n'
-            '    workspace="${2%:/workspace}"\n'
-            '    test -d "$workspace/.git"\n'
-            '    cp "$workspace/tracked" "$SMOKE_EVIDENCE"\n'
-            '    test ! -e "$workspace/untracked"\n'
-            '    printf "%s" "$workspace" > "$SMOKE_EVIDENCE.path"\n'
-            "    exit 0\n  fi\n  shift\ndone\nexit 20\n"
-        )
-        fake_docker.chmod(0o755)
-        environment = {
-            **self.environment,
-            "PATH": str(fake_bin) + os.pathsep + self.environment["PATH"],
-            "SMOKE_EVIDENCE": str(evidence),
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-        }
-        before = self.source_bytes()
-        script = self.agent / "scripts/test-codex-runner-image.sh"
-        for arguments in (
-            ("build", "--main-dir", str(self.main)),
-            ("--main-dir", str(self.main)),
-        ):
-            with self.subTest(arguments=arguments):
-                subprocess.run(
-                    ["bash", str(script), *arguments],
-                    env=environment,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                self.assertEqual(evidence.read_text(), "dirty current bytes\n")
-                self.assertFalse(
-                    Path(Path(str(evidence) + ".path").read_text()).exists()
-                )
-                self.assertEqual(self.source_bytes(), before)

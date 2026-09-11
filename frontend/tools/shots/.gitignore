@@ -1,6 +1,0 @@
-node_modules/
-
-# screenshot output — scratch, never committed
-out/
-out-*/
-*.png

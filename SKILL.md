@@ -163,8 +163,10 @@ workspace, conversation, role and provider compatibility scope. Roles can use
 different configured providers; a provider selects its CLI adapter and models.
 
 The compatibility field `codex_runtime` keeps its existing API name and selects
-model, reasoning effort and optional `service_tier` per role, e.g.
-`{"codex_runtime": {"orchestrator": {"model": "gpt-5.6-terra", "effort": "high"}}}`.
+model, reasoning effort and optional `service_tier` per role. Include `provider`
+when selecting a named connection, especially if multiple connections offer the
+same model, e.g.
+`{"codex_runtime": {"orchestrator": {"provider": "gpt", "model": "gpt-5.6-terra", "effort": "high"}}}`.
 `GET /api/agent/v1/codex-backends` also retains its compatibility name and lists
 the selectable models and supported choices. The new service resolves each
 selection to a provider and `session_scope`, which identifies compatible adapter
@@ -173,8 +175,7 @@ and backend configuration. Compatible model/effort/tier changes retain sessions.
 replaces the role selections in `codex_runtime` (omitted roles use defaults).
 Once a conversation has messages or turns, changing an active role's scope is
 rejected with `409 conversation_runtime_locked`; changing an inactive role's
-scope clears only that role's session. The legacy service describes this
-compatibility restriction in terms of model families.
+scope clears only that role's session.
 
 ```bash
 curl -sS http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/conversations \

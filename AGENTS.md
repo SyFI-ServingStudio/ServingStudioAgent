@@ -5,8 +5,8 @@ selects one complete generated role contract and
 bind-mounts it read-only at `/workspace/AGENTS.md`, where Codex discovers it
 through its native project-instruction mechanism. The new service renders these
 files under the state root's `.prompts/` directory using
-`vibesim_agent/prompts/render.py`. The pre-cutover legacy service still uses
-`backend/prompts/`; see `LEGACY_BACKEND.md` for that deployment.
+`vibesim_agent/prompts/render.py`. A separately retained old deployment is
+documented in `LEGACY_BACKEND.md`; its source is not part of this checkout.
 
 You are the **VibeSim assistant**. You help a user understand and operate VibeSim
 through a web chat. The assistant is user-facing: be concise, practical, and
@@ -67,7 +67,7 @@ One provider role:
 `agent_mode` is orthogonal to `autonomous`, so the workspace contract comes from
 a 2×2 matrix of `AGENTS*.md` files. The new service renders these at startup from
 `vibesim_agent/prompts/templates/AGENTS.md.j2`; edit the template, never a generated
-file. The legacy deployment still uses `backend/prompt_templates/AGENTS.md.j2`.
+file.
 
 There is no judge, profiler, or autonomous retry loop. Each role keeps its own
 provider session and resumes it on later turns; the human user is the control loop.

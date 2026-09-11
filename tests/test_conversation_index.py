@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from tests import test_workspace_http_v2 as fixtures
+from tests import test_workspace_http as fixtures
 from vibesim_agent.domain.conversations import RoleRuntime
 from vibesim_agent.domain.roles import Role, Sandbox
 

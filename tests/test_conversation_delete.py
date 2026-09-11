@@ -4,7 +4,7 @@ import sqlite3
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from tests import test_tools_v2 as fixtures
+from tests import test_tools as fixtures
 from vibesim_agent.domain.turns import Outcome
 from vibesim_agent.runtime.container import OWNER_LABEL
 from vibesim_agent.storage.jobs import Jobs

@@ -1,166 +1,108 @@
+import json
+import tomllib
 import unittest
-from unittest.mock import patch
+from dataclasses import replace
+from pathlib import Path
 
-from backend.codex_runtime import config
-from backend.codex_runtime.codex_command import build_codex_exec_command
-from backend.codex_runtime.config import (
-    ASSISTANT_SCHEMA_IN_CONTAINER,
-    CODEXDS_MODEL,
-    ORCHESTRATOR_SCHEMA_IN_CONTAINER,
-    role_codex_home_in_container,
-)
-from backend.codex_runtime.exec_types import CodexExecRequest
-from backend.managed_context import MANAGED_CONTEXT_CONTAINER_PATH
-from model_catalog_fixture import install_model_catalog
+from tests.runtime_fixtures import agent_request, execution_environment
+from vibesim_agent.domain.roles import Role
+from vibesim_agent.providers.base import OutputMode
+from vibesim_agent.providers.codex.command import CodexCommand
 
 
-def _request(
-    *,
-    session_id: str | None = None,
-    model_id: str = "gpt-5.6-sol",
-    effort: str = "xhigh",
-    service_tier: str = "default",
-    output_schema: str | None = None,
-    label: str = "orchestrator",
-) -> CodexExecRequest:
-    return CodexExecRequest(
-        container="test-container",
-        prompt="question",
-        label=label,
-        workspace_id="w_main",
-        conversation_id="conversation",
-        turn_id="turn",
-        session_id=session_id,
-        model_id=model_id,
-        effort=effort,
-        service_tier=service_tier,
-        output_schema=output_schema,
+def command_golden():
+    return json.loads(
+        (Path(__file__).parent / "fixtures/legacy_commands/golden.json").read_text()
     )
 
 
+def normalize_legacy_gpu_environment(command):
+    return [
+        "VIBESIM_RUNNER_GPUS=" + arg.removeprefix("CODEX_DOCKER_GPUS=")
+        if index > 0
+        and command[index - 1] == "-e"
+        and arg.startswith("CODEX_DOCKER_GPUS=")
+        else arg
+        for index, arg in enumerate(command)
+    ]
+
+
 class CodexCommandTests(unittest.TestCase):
-    def setUp(self) -> None:
-        install_model_catalog(self)
-
-    def test_deepseek_gets_an_explicit_model_and_effort(self) -> None:
-        """Neither may fall back to the profile's config.toml default.
-
-        The DeepSeek profile pins both in its own `config.toml`, so before the
-        registry it worked by accident — and its effort could not be changed.
-        """
-        command = build_codex_exec_command(
-            _request(model_id=CODEXDS_MODEL, effort="high")
+    def test_inherited_credentials_do_not_override_runtime_values(self):
+        runtime = self.builder().environment
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            runtime.prefix("container", environment={}, inherited=("USER",))
+        command = runtime.prefix(
+            "container", environment={}, inherited=("PROVIDER_API_KEY",)
+        )
+        self.assertIn("PROVIDER_API_KEY", command)
+        self.assertFalse(
+            any(value.startswith("PROVIDER_API_KEY=") for value in command)
         )
 
-        self.assertIn(
-            f"CODEX_HOME={role_codex_home_in_container('orchestrator')}", command
-        )
-        self.assertIn("-m", command)
-        self.assertIn(CODEXDS_MODEL, command)
-        self.assertIn('model_reasoning_effort="high"', command)
-
-    def test_gpt_family_carries_the_selected_model_and_effort(self) -> None:
-        command = build_codex_exec_command(
-            _request(
-                model_id="gpt-5.6-luna", effort="medium", service_tier="fast"
+    def builder(self):
+        return CodexCommand(
+            replace(
+                execution_environment(),
+                managed_context="/home/runner/.vibesim-codex/managed-run.json",
             )
         )
 
-        self.assertIn("-m", command)
-        self.assertIn("gpt-5.6-luna", command)
-        self.assertIn('model_reasoning_effort="medium"', command)
-        self.assertIn('service_tier="fast"', command)
+    def request(self):
+        return replace(agent_request(), execution_id="fixed-execution")
 
-    def test_missing_catalog_does_not_enable_fast_service(self) -> None:
-        with (
-            patch.object(config, "_catalog_models", return_value={}),
-            patch.object(config, "_MODEL_REGISTRY_CACHE", {}),
-        ):
-            command = build_codex_exec_command(
-                _request(model_id="gpt-5.6-luna", service_tier="fast")
-            )
-        self.assertFalse(any("service_tier=" in option for option in command))
-
-    def test_deepseek_does_not_receive_an_unsupported_service_tier(self) -> None:
-        command = build_codex_exec_command(
-            _request(model_id=CODEXDS_MODEL, effort="max", service_tier="default")
+    def test_fresh_and_resume_match_old_command(self):
+        cases = command_golden()["cases"]
+        self.assertEqual(
+            {(case["role"], case["session_id"]) for case in cases},
+            {
+                (role.value, session)
+                for role in Role
+                for session in (None, "saved-session")
+            },
         )
-
-        self.assertFalse(any("service_tier=" in option for option in command))
-
-    def test_resume_keeps_model_and_effort_options(self) -> None:
-        """A within-family model switch happens on a resumed session."""
-        command = build_codex_exec_command(
-            _request(
-                session_id="session-1",
-                model_id="gpt-5.6-terra",
-                effort="high",
-                service_tier="fast",
-            )
-        )
-
-        self.assertIn("resume", command)
-        self.assertIn("gpt-5.6-terra", command)
-        self.assertIn('model_reasoning_effort="high"', command)
-        self.assertIn('service_tier="fast"', command)
-
-    def test_fresh_and_resumed_drivers_share_the_output_schema(self) -> None:
-        """Both agent modes, both call shapes: the schema is never dropped."""
-        for label, schema in (
-            ("orchestrator", ORCHESTRATOR_SCHEMA_IN_CONTAINER),
-            ("assistant", ASSISTANT_SCHEMA_IN_CONTAINER),
-        ):
-            fresh = build_codex_exec_command(
-                _request(label=label, output_schema=schema)
-            )
-            resumed = build_codex_exec_command(
-                _request(label=label, session_id="session-1", output_schema=schema)
-            )
-
-            for command in (fresh, resumed):
-                with self.subTest(label=label, resumed="resume" in command):
-                    self.assertIn("--output-schema", command)
-                    self.assertIn(schema, command)
-                    self.assertIn(
-                        f"CODEX_HOME={role_codex_home_in_container(label)}", command
-                    )
-
-    def test_new_codex_call_injects_analyzer_mcp(self) -> None:
-        command = build_codex_exec_command(_request())
-        self.assertIn(
-            'mcp_servers.analyzer.command="/opt/vibesim-analyzer-mcp-venv/bin/python"',
-            command,
-        )
-        self.assertTrue(
-            any(
-                option.startswith(
-                    'mcp_servers.analyzer.args=["/opt/vibesim/analyzer-evidence-mcp/'
+        for case in cases:
+            with self.subTest(role=case["role"], session=case["session_id"]):
+                request = replace(
+                    self.request(),
+                    role=Role(case["role"]),
+                    session_id=case["session_id"],
                 )
-                for option in command
-            )
-        )
-        self.assertIn(
-            'mcp_servers.analyzer.env.ANALYZER_MCP_SOURCE="external"',
-            command,
-        )
-        self.assertIn(
-            "mcp_servers.analyzer.env.ANALYZER_MCP_BASE_URL="
-            '"http://host.docker.internal:8787"',
-            command,
-        )
-        self.assertIn(
-            "mcp_servers.analyzer.env.VIBESIM_MANAGED_RUN_CONTEXT="
-            f'"{MANAGED_CONTEXT_CONTAINER_PATH}"',
-            command,
-        )
-        self.assertIn(
-            f"VIBESIM_MANAGED_JOB_CONTEXT={MANAGED_CONTEXT_CONTAINER_PATH}",
-            command,
-        )
+                self.assertEqual(
+                    self.builder().build(request, home=case["home"]),
+                    normalize_legacy_gpu_environment(case["codex"]),
+                )
 
-    def test_resumed_codex_call_also_injects_analyzer_mcp(self) -> None:
-        command = build_codex_exec_command(_request(session_id="session"))
-        self.assertIn(
-            'mcp_servers.analyzer.command="/opt/vibesim-analyzer-mcp-venv/bin/python"',
-            command,
+    def test_prompt_model_omits_schema_and_unsupported_tier(self):
+        request = self.request()
+        request = replace(
+            request,
+            selection=replace(
+                request.selection,
+                model=replace(
+                    request.selection.model,
+                    output_mode=OutputMode.PROMPT,
+                    service_tiers=("default",),
+                ),
+                service_tier="default",
+            ),
         )
+        command = self.builder().build(request, home="/role-home")
+        self.assertNotIn("--output-schema", command)
+        self.assertFalse(any(arg.startswith("service_tier=") for arg in command))
+
+    def test_config_paths_are_toml_quoted_and_prompt_stays_out_of_argv(self):
+        builder = replace(
+            self.builder(),
+            mcp_python='/quoted/"python',
+            mcp_server="/space path/server.py",
+        )
+        command = builder.build(self.request(), home="/role-home")
+        values = [
+            command[index + 1] for index, part in enumerate(command) if part == "-c"
+        ]
+        parsed = tomllib.loads("\n".join(values))
+        self.assertEqual(
+            parsed["mcp_servers"]["analyzer"]["command"], builder.mcp_python
+        )
+        self.assertNotIn(self.request().prompt, command)

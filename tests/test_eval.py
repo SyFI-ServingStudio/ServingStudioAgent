@@ -7,7 +7,7 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from tests import test_application as application_fixture
-from tests import test_workspace_http_v2 as workspace_fixture
+from tests import test_workspace_http as workspace_fixture
 from vibesim_agent.domain.turns import Outcome
 from vibesim_agent.providers.registry import ProviderRegistry
 from vibesim_agent.runtime.container import OWNER_LABEL
