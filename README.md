@@ -4,8 +4,9 @@ VibeSim Agent runs Codex and Claude Code in Docker and owns durable workspaces,
 conversations, turns, provider sessions and managed jobs. VibeSimUI is the browser
 application; Rust Analyzer owns numerical results and their catalogs.
 
-This branch implements the new `vibesim_agent` service. Production cutover and
-Claude resume acceptance are still outstanding. `run.sh` continues to launch the
+This branch implements the new `vibesim_agent` service. Private Codex/Claude
+migration and resume acceptance has passed; production cutover remains outstanding.
+`run.sh` continues to launch the
 legacy backend. Its deployment, old environment keys, embedded chat UI and older
 JSON migration commands are documented in [Legacy Backend](LEGACY_BACKEND.md).
 Those commands do not initialize or migrate the new service.

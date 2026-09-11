@@ -57,7 +57,17 @@ passed with the accepted runner: two assistant calls retained the same session a
 recalled an exact synthetic marker after container recreation. The original session
 JSONL advanced, host credentials stayed unchanged, and test containers and credential
 copies were removed (`tmp/agent-claudeme-lqxfakyw/report.json` at the workspace root).
-This proves login and single-role resume, not token refresh or legacy-state migration.
+This first run proves login and single-role resume, not token refresh.
+
+Subsequent private acceptance also passed for legacy Claude state: the frozen old
+backend created both role sessions, migration preserved them, and both roles
+recalled their original tracking identifiers across two application lifespans and
+container recreations. Session IDs stayed fixed and original transcripts advanced;
+source data and host credentials stayed unchanged. Evidence is
+`tmp/agent-claudeme-tracking-final/migration-resume.json` at the workspace root.
+Mixed Claude orchestrator / Codex implementer delegation and Codex continuation
+after targeted cancellation also passed; see [cutover evidence](cutover.md#private-acceptance).
+These runs do not demonstrate an actual OAuth token refresh or production cutover.
 
 ## Sessions And Compatibility
 

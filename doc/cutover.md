@@ -6,8 +6,8 @@ must pass before the Phase 6 cutover in `plan.md`. The old deployment remains ac
 
 ## Frozen Candidate
 
-The implemented component candidates are Agent `72ea745`, launcher `2be79b8`
-and UI `31a04bb`. These are local commits, not deployed revisions. The local
+The implemented component candidates are Agent `e90d58b`, integrated launcher `38d46f7`
+and UI `ece7120`. These are local commits, not deployed revisions. The local
 `tmp/agent-refactor-deployment/release.sh` records full commits and artifact hashes;
 later documentation-only commits may advance its Agent pin without changing code.
 Its UI script now selects `wt-agent-ui-compat`, containing the accepted settings,
@@ -15,8 +15,8 @@ citations and pagination fixes. Historical main workspace paths remain unchanged
 
 Before managed startup can stop the old deployment, the candidate backend checks
 the Agent/UI revisions, tracked changes and unexpected untracked files, the
-accepted launcher product files in the main checkout, Analyzer checksum and
-local immutable runner image. Each bridge also checks Agent source. The current
+complete integrated main commit and both dependency lock hashes, Analyzer checksum
+and local immutable runner image with its uv-lock label. Each bridge also checks Agent source. The current
 main checkout still requires launcher integration; this check rejects it before
 migration. Existing copied workspaces retain the tested legacy callback aliases.
 
@@ -31,9 +31,34 @@ The candidate scripts pin these artifacts. The older image observations below
 describe earlier evidence and the original deployment, not this candidate.
 
 Version checks do not establish provider acceptance or current deployment
-ownership. Claude historical resume, a fresh stop audit, final backup/migration,
+ownership. A fresh stop audit, final backup/migration,
 production cutover and observation are still required. No candidate script has
 been installed or started; only read-only release checks have run.
+
+## Private Acceptance
+
+The final Agent regression passed 828 tests in 40.058 seconds after fixing Docker
+management commands to use closed standard input. Provider prompt pipes are unchanged.
+The following real checks used the accepted image, private synthetic repositories
+and official provider connections; they did not send production history.
+
+- Claude legacy migration: `tmp/agent-claudeme-tracking-final/baseline.json` and
+  `migration-resume.json`. The frozen old backend created both role sessions;
+  both retained their original IDs, recalled exact identifiers and advanced their
+  original transcripts across two new application lifespans and container recreations.
+- Mixed delegation: `tmp/agent-mixed-orchestration-kynwx7p7/report.json`.
+  Real HTTP ASGI orchestration ran Claude, Codex, then the original Claude session;
+  the implementer wrote the specified file and history, SSE and replay agreed.
+- Cancel then continue: `tmp/agent-cancel-resume-final/report.json`.
+  Real TCP cancellation stopped an observed live tool process before container
+  removal; the next turn used the same Codex session and recalled the exact marker.
+
+All three reports passed source/profile preservation and private credential/container
+cleanup checks. The TCP test also released its service port. Earlier failed fixtures
+remain recorded separately; in particular, the original Claude marker fixture omitted
+the implementer role prefix and received a refusal. It is not a passing baseline.
+These results complete private provider acceptance, not production migration,
+observation, legacy retirement or an actual OAuth refresh.
 
 ## Observed Deployment
 
@@ -130,14 +155,16 @@ conversion. A later GPT turn also passed through the HTTP ASGI application and
 real provider/container delegation: implementer created a scoped file, orchestrator
 resumed its session to finish, and history/SSE/replay agreed. Only the test file
 and two required conversation records changed. These are GPT-only checks;
-Claude acceptance remains outstanding. A separate real TCP/Uvicorn GPT test has
+Claude acceptance was outstanding at that point; the later results above close it.
+A separate real TCP/Uvicorn GPT test has
 verified incremental SSE and targeted cancellation of an observed live tool process,
 including process exit before container removal, session retention, history/replay
 and repeated cancellation. A follow-up real-network disconnect/reconnect test also
 passed: the same turn/process survived closing the message stream, GET stream
 replayed the original event prefix, and cancellation completed without a new
-message submission. Claude remains unverified: all three recorded baseline attempts
-returned `503 No available accounts` from the configured gateway.
+message submission. Those earlier Claude baseline attempts returned
+`503 No available accounts` from the configured gateway; the later acceptance
+above uses the user's official `claudeme` connection.
 
 ## Image Evidence
 

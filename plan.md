@@ -4,15 +4,16 @@
 
 新增用户确认的多连接需求：显式YAML配置多个命名Codex/Claude账号或端点，连接与CLI
 adapter分离；凭据以环境变量引用或认证目录提供。API/UI按provider+model区分同名模型，
-旧环境配置与等价旧session scope保留。该增量已通过823项后端回归、111项相关UI测试和
-独立复审；本地认证目录路径尚未做真实Claude续聊验收。先前冻结提交不包含此增量。
+旧环境配置与等价旧session scope保留。当前版本已通过828项后端回归、111项相关UI测试和
+独立复审；真实claudeme认证、旧双角色会话迁移与两轮重启续聊、Claude/Codex混合编排、
+Codex定向取消后同session续聊均已通过。详见doc/cutover.md的Private Acceptance。
 
 新包、provider/runtime/turn/storage/API、managed launcher兼容和受管理启动迁移已实现；
 独立新包测试、真实GPT续聊/委派/SSE/取消/重连及私有迁移演练已有通过证据。
 UI主要承接路径和实际发现的设置、引用、分页问题已验证修复，详见
 `doc/browser-acceptance.md` 的完成记录；该文档首部矩阵保留的是初始盘点。
 
-当前冻结的是待部署的组件候选版本。尚未完成原计划的Claude历史双角色续聊与生产停写迁移切换、
+当前冻结的是待部署的组件候选版本。尚未完成生产停写迁移切换、
 观察和旧入口/源码退役。生产仍运行旧服务，不能将局部验收或私有迁移演练称为完整完成。
 后续按这些有限条件推进，不把UI种类、状态与视口的全部排列另增为完成门槛。
 
