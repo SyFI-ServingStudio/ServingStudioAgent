@@ -1,0 +1,135 @@
+{
+  "commit": "e26ad6dc11b08c225e5744a02fcc8a956f7adcd6",
+  "source": "backend/turn_result.py",
+  "source_sha256": "4a47274f45476f3de048abd0fc4e947180881d4c3c9e49ea2fb8f11c7bedb7db",
+  "generation": "Unmodified legacy module from git archive; synthetic request/events from the original projection test; no new-package imports. Terminal overrides remain explicit in the test.",
+  "request": {
+    "conversation_id": "conversation",
+    "turn_id": "turn",
+    "sandbox": "read-only",
+    "autonomous": true,
+    "agent_mode": "single"
+  },
+  "events": [
+    {
+      "kind": "session",
+      "role": "assistant",
+      "session_id": "first"
+    },
+    {
+      "kind": "session",
+      "role": "assistant",
+      "session_id": "latest"
+    },
+    {
+      "kind": "session",
+      "role": "",
+      "session_id": "ignored"
+    },
+    {
+      "kind": "tool_call",
+      "text": "Inspect files"
+    },
+    {
+      "kind": "intermediate_output",
+      "role": "assistant",
+      "model": "model",
+      "effort": "high",
+      "level": "milestone",
+      "text": "Checked"
+    },
+    {
+      "kind": "intermediate_output",
+      "level": "unknown"
+    },
+    {
+      "kind": "implementer",
+      "text": "Implemented"
+    },
+    {
+      "kind": "decision",
+      "task": "Review"
+    },
+    {
+      "kind": "decision",
+      "task": ""
+    },
+    {
+      "kind": "usage",
+      "role": "assistant",
+      "duration_ms": "12",
+      "tokens": {
+        "total": 20
+      }
+    },
+    {
+      "kind": "usage"
+    },
+    {
+      "kind": "role_ready",
+      "role": "assistant"
+    },
+    {
+      "kind": "final",
+      "text": "raw provider JSON"
+    },
+    {
+      "kind": "done",
+      "text": "untrusted older terminal"
+    }
+  ],
+  "collected": {
+    "conversation_id": "conversation",
+    "turn_id": "turn",
+    "sandbox": "read-only",
+    "autonomous": true,
+    "agent_mode": "single",
+    "sessions": {
+      "assistant": "latest"
+    },
+    "tool_calls": [
+      "Inspect files"
+    ],
+    "intermediate_outputs": [
+      {
+        "role": "assistant",
+        "model": "model",
+        "effort": "high",
+        "level": "milestone",
+        "text": "Checked"
+      },
+      {
+        "role": "",
+        "model": "",
+        "effort": "",
+        "level": "progress",
+        "text": ""
+      }
+    ],
+    "implementer_summaries": [
+      "Implemented"
+    ],
+    "delegated_tasks": [
+      "Review"
+    ],
+    "usages": [
+      {
+        "role": "assistant",
+        "duration_ms": 12,
+        "tokens": {
+          "total": 20
+        }
+      },
+      {
+        "role": "",
+        "duration_ms": 0,
+        "tokens": {}
+      }
+    ],
+    "final": "raw provider JSON",
+    "outcome": "final_answer",
+    "ok": false,
+    "error": "",
+    "failure_code": ""
+  }
+}

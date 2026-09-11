@@ -74,7 +74,7 @@ VibeSim is an **interactive assistant**, not a fire-and-forget function. Plan fo
   same request to return. Do not replace it with manual GET polling, start a
   duplicate turn, or infer completion from elapsed time.
 - **A workspace is durable shared working state.** Its repo, logs and experiments
-  persist across conversations. A conversation owns message history and Codex
+  persist across conversations. A conversation owns message history and provider
   role sessions; create another conversation in the same workspace when you want
   a new narrative over the same artifacts. Different workspaces do not share
   mutable state.
@@ -108,9 +108,16 @@ VibeSim is an **interactive assistant**, not a fire-and-forget function. Plan fo
 ## 4. Authentication
 
 - **Base URL**: wherever this backend is hosted, e.g. `http://localhost:8765`.
-- If the server sets `VIBESIM_API_TOKEN`, every agent endpoint requires
-  `Authorization: Bearer <token>` (missing/wrong → `401`). If unset (local dev),
-  no header is needed. `GET /api/agent/v1/tools/skill` is always public.
+- The new `vibesim_agent` service reads `VIBESIM_AGENT_API_TOKEN`; the legacy
+  `backend` service reads `VIBESIM_API_TOKEN`. The new service rejects the legacy
+  configuration key rather than falling back to it. Use the token configured
+  for the service you are calling.
+- When that token is nonempty, protected tools endpoints require
+  `Authorization: Bearer <token>` (missing/wrong → `401`). An empty token opens
+  those endpoints. `GET /api/agent/v1/tools/skill` is always public.
+- The examples below use `$VIBESIM_AGENT_API_TOKEN` as the client's token value.
+  For a legacy deployment, substitute its configured token; the HTTP header is
+  the same for both services.
 
 ---
 
@@ -131,7 +138,7 @@ wants the shared development checkout.
 ```bash
 workspace_id=$(curl -sS http://<host>:8765/api/agent/v1/tools/workspaces \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  -H "Authorization: Bearer $VIBESIM_AGENT_API_TOKEN" \
   -d '{"displayName":"Llama 3 H200 rate study"}' \
   | uv run python -c 'import json, sys; print(json.load(sys.stdin)["workspace_id"])')
 ```
@@ -142,30 +149,37 @@ Body: `{"sandbox": "workspace-write", "autonomous": false, "agent_mode": "orches
 (all optional; `autonomous` defaults **false** so the assistant will ask you
 questions). Returns the conversation object, including its `id`.
 
-`agent_mode` picks how many Codex backends drive a turn and is independent of
+`agent_mode` selects the roles that drive a turn and is independent of
 `autonomous`:
 
 - `orchestrated` (default) — an orchestrator delegates bounded tasks to an
-  implementer. Better for large multi-step work; costs roughly `1 + 2D` Codex
-  calls per message, where `D` is the number of delegation rounds.
-- `single` — one `assistant` plans and implements in the same session. One Codex
-  call per message, no handoff text, and `implementer_summaries` is always `[]`.
+  implementer. A turn normally uses `1 + 2D` role invocations, where `D` is the
+  number of delegation rounds; repair or continuation can add invocations.
+- `single` — one `assistant` plans and implements in the same role session,
+  with no delegation; `implementer_summaries` is always `[]`.
 
-The mode is fixed once the conversation has a message: Codex sessions are per
-role, so switching would strand the sessions earlier turns built.
+The mode is fixed once the conversation starts: sessions are isolated by
+workspace, conversation, role and provider compatibility scope. Roles can use
+different configured providers; a provider selects its CLI adapter and models.
 
-Optional `codex_runtime` picks the model and reasoning effort per role, e.g.
+The compatibility field `codex_runtime` keeps its existing API name and selects
+model, reasoning effort and optional `service_tier` per role, e.g.
 `{"codex_runtime": {"orchestrator": {"model": "gpt-5.6-terra", "effort": "high"}}}`.
-`GET /api/agent/v1/codex-backends` lists the selectable models with the efforts each one
-supports. `PATCH .../conversations/{cid}/runtime` changes the choice later:
-effort and sibling models are always allowed, but once the conversation has
-history it cannot cross model families (`409 conversation_runtime_locked`) —
-only the family that recorded a Codex session can resume it.
+`GET /api/agent/v1/codex-backends` also retains its compatibility name and lists
+the selectable models and supported choices. The new service resolves each
+selection to a provider and `session_scope`, which identifies compatible adapter
+and backend configuration. Compatible model/effort/tier changes retain sessions.
+`PATCH /api/agent/v1/workspaces/{workspace_id}/conversations/{cid}/runtime`
+replaces the role selections in `codex_runtime` (omitted roles use defaults).
+Once a conversation has messages or turns, changing an active role's scope is
+rejected with `409 conversation_runtime_locked`; changing an inactive role's
+scope clears only that role's session. The legacy service describes this
+compatibility restriction in terms of model families.
 
 ```bash
 curl -sS http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/conversations \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  -H "Authorization: Bearer $VIBESIM_AGENT_API_TOKEN" \
   -d '{"sandbox":"workspace-write","autonomous":false}'
 # -> {"id":"3f9a1c...","sandbox":"workspace-write","autonomous":false, ...}
 ```
@@ -183,7 +197,7 @@ itself; do not convert the call into manual GET polling.
 ```bash
 curl -sS http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/conversations/3f9a1c.../messages \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  -H "Authorization: Bearer $VIBESIM_AGENT_API_TOKEN" \
   -d '{"text":"Simulate Llama-3-8B dense on 1xH200 at Poisson rate 48; report throughput and TPOT."}'
 ```
 
@@ -198,7 +212,7 @@ Response fields:
 | `implementer_summaries` | Summaries of any delegated implementer work this turn. Always `[]` under `agent_mode: "single"`, which never delegates. |
 | `intermediate_outputs` | Assistant commentary emitted mid-turn. Each item has `level: progress | milestone`. |
 | `tool_calls` | Transient command/tool activity (workspace/container setup, shell commands, etc.). |
-| `sessions` | Role → Codex session ids resumed across turns (informational). |
+| `sessions` | Role → provider session ids resumed across compatible turns (informational). |
 | `error` | Error text if the turn failed. |
 
 **Steering / answering.** Because *you* are an agent, treat `final` the way a
@@ -208,7 +222,7 @@ message to the same `cid`. The workspace and sessions carry over.
 ### Inspect and preserve
 
 ```bash
-curl -sS -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+curl -sS -H "Authorization: Bearer $VIBESIM_AGENT_API_TOKEN" \
   http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/conversations/3f9a1c...
 ```
 
@@ -226,12 +240,12 @@ workspace. Fetch them with its `workspace_id`.
 ```bash
 # list
 curl -sS -G http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/artifacts \
-  -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  -H "Authorization: Bearer $VIBESIM_AGENT_API_TOKEN" \
   --data-urlencode "subdir=logs"
 
 # download one file from the listing
 curl -sS -OJ -G http://<host>:8765/api/agent/v1/tools/workspaces/$workspace_id/artifacts/download \
-  -H "Authorization: Bearer $VIBESIM_API_TOKEN" \
+  -H "Authorization: Bearer $VIBESIM_AGENT_API_TOKEN" \
   --data-urlencode "path=logs/<run>/summary.json"
 ```
 

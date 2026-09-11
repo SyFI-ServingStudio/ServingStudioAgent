@@ -1,14 +1,12 @@
 [project]
-name = "vibesim-user-facing-ui"
+name = "vibesim-agent"
 version = "0.1.0"
-description = "Web chat UI that drives codex exec as the LLM backend for VibeSim"
+description = "VibeSim Agent service for durable workspaces, conversations, and provider execution"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",
     "httpx>=0.28,<1",
-    # Runtime: backend/codex_runtime/config.py imports backend/agents_prompt.py,
-    # which renders the gitignored files in backend/prompts/ from
-    # backend/prompt_templates/.
+    # Explicit startup renders role contracts through vibesim_agent.prompts.
     "jinja2>=3.1",
     "jsonschema>=4.23,<5",
     "mcp>=1.13,<2",

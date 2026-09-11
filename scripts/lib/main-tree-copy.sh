@@ -35,16 +35,25 @@ _main_tree_is_skipped_submodule() {
 # working-tree edits while ignoring untracked build artifacts.
 _main_tree_copy_tracked_files() {
   local source_root="$1" destination_root="$2" prefix="$3"
-  local rel_path source_path
+  local rel_path source_path listing
+  listing="$(mktemp "${TMPDIR:-/tmp}/vibesim-main-files.XXXXXX")" || return 1
+  if ! git -c core.fsmonitor=false -C "$source_root" ls-files -z > "$listing"; then
+    rm -f "$listing"
+    return 1
+  fi
   while IFS= read -r -d '' rel_path; do
     source_path="$source_root/$rel_path"
     # `git ls-files` also reports gitlinks and index-only (deleted) paths, which
     # are neither regular files nor symlinks on disk.
     if [ -f "$source_path" ] || [ -L "$source_path" ]; then
-      mkdir -p "$destination_root/$prefix$(dirname "$rel_path")"
-      cp -a "$source_path" "$destination_root/$prefix$rel_path"
+      if ! mkdir -p "$destination_root/$prefix$(dirname "$rel_path")" \
+        || ! cp -a "$source_path" "$destination_root/$prefix$rel_path"; then
+        rm -f "$listing"
+        return 1
+      fi
     fi
-  done < <(git -C "$source_root" ls-files -z)
+  done < "$listing"
+  rm -f "$listing"
 }
 
 # copy_main_tree <main_dir> <destination_root>
@@ -53,12 +62,26 @@ _main_tree_copy_tracked_files() {
 # not in MAIN_TREE_SKIPPED_SUBMODULES. Fails loudly on an uninitialized
 # submodule rather than producing a tree that cannot build.
 copy_main_tree() {
-  local main_dir="$1" destination_root="$2" submodule_path
+  local main_dir="$1" destination_root="$2" submodule_path entry listing status
 
-  mkdir -p "$destination_root"
-  _main_tree_copy_tracked_files "$main_dir" "$destination_root" ""
+  mkdir -p "$destination_root" || return 1
+  _main_tree_copy_tracked_files "$main_dir" "$destination_root" "" || return 1
 
-  while IFS= read -r submodule_path; do
+  listing="$(mktemp "${TMPDIR:-/tmp}/vibesim-main-submodules.XXXXXX")" || return 1
+  # config --null separates key and value by newline and records by NUL.
+  # Missing files/no matching keys return 1; parse/read failures must propagate.
+  if git -C "$main_dir" config --null -f .gitmodules \
+    --get-regexp '^submodule\..*\.path$' > "$listing"; then
+    status=0
+  else
+    status=$?
+  fi
+  if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+    rm -f "$listing"
+    return "$status"
+  fi
+  while IFS= read -r -d '' entry; do
+    submodule_path="${entry#*$'\n'}"
     [ -n "$submodule_path" ] || continue
     if _main_tree_is_skipped_submodule "$submodule_path"; then
       echo "skipping submodule (not needed in the runner image): $submodule_path" >&2
@@ -67,16 +90,14 @@ copy_main_tree() {
     if [ ! -e "$main_dir/$submodule_path/.git" ]; then
       echo "submodule is not initialized: $submodule_path" >&2
       echo "run: git -C $main_dir submodule update --init $submodule_path" >&2
+      rm -f "$listing"
       return 1
     fi
-    _main_tree_copy_tracked_files \
-      "$main_dir/$submodule_path" "$destination_root" "$submodule_path/"
-  done < <(
-    # Read `.gitmodules` directly: `git submodule--helper list` was made
-    # internal and no longer accepts `list` (removed by git 2.36), and `git
-    # submodule foreach` skips uninitialized entries — exactly the ones to
-    # report rather than silently omit.
-    git -C "$main_dir" config -f .gitmodules --get-regexp '^submodule\..*\.path$' \
-      | awk '{print $2}'
-  )
+    if ! _main_tree_copy_tracked_files \
+      "$main_dir/$submodule_path" "$destination_root" "$submodule_path/"; then
+      rm -f "$listing"
+      return 1
+    fi
+  done < "$listing"
+  rm -f "$listing"
 }

@@ -1,0 +1,18 @@
+{
+  "commit": "e26ad6dc11b08c225e5744a02fcc8a956f7adcd6",
+  "sources_sha256": {
+    "backend/prompt_templates/AGENTS.md.j2": "42b61768585f4273ecb7ae88cfa5c218d53817c109817e04810fe99f6c0f3b73",
+    "backend/prompt_templates/role.txt.j2": "f916dee499dd8b05ec9dd8dc87704b8990ce6e09038a72f22403ad449e34c65b",
+    "backend/prompts/assistant.schema.json": "f2b0e02ce194ab0ba35ab44caf58b621aa06031303c6c8100be1292519584f97",
+    "backend/prompts/implementer.schema.json": "0913ddefab218a2a666bd4f52b63bd3e4afdfa7c20c48d7ef2c3219d2d30a4c8",
+    "backend/prompts/implementer.txt": "0fbf1032125dd9e702f82a893648d2d894fc6defd8c5db97ad097c57561227ca",
+    "backend/prompts/naming-system.txt": "bdb35e8cd804a450dbf45776dd6a0fcf8b38fe1a14002454ebba5b48c0368588",
+    "backend/prompts/naming-user.txt": "18b524fe3b4f3c14ee4406898360b459a6ab5bfa1e8136e09d5449966d0d9107",
+    "backend/prompts/orchestrator.schema.json": "ab1b77fb6fb7d19eef248a92d9bdf52f3770e387a929ac0d7fca4a36e3802714",
+    "backend/agents_prompt.py": "0900d4e092ed61d7f7c2d98b9f10bf44746f65d5565d8eaa20a4ff4c2f08efe0",
+    "backend/codex_runtime/config.py": "32233ba2cb2e101994c00c894857e17a2e2cae758a2062b75ba299adedef5bb7",
+    "backend/codex_runtime/prompts.py": "b9e803fc3aa57274ee831fc4dddb68141625f3f1f7b5459ea67bc31d6a8876bc"
+  },
+  "golden_sha256": "c178b90f434defe591daa9039ae017b437643d198c19b08df6a87254d415faa2",
+  "generation": "Unmodified e26ad6d archived backend rendered_artifacts, prompts and prompt_fingerprint executed with cleared environment, private empty HOME, synthetic CODEX_MAIN_LOCK_SHA. Registry uses all legacy default models without host catalogs. Rendered and complete tracked contract bytes captured as SHA256; behavioral prompt strings and all-model mixed-role fingerprints captured verbatim. No new-package code or network."
+}

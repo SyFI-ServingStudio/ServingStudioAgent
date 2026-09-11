@@ -1,0 +1,15 @@
+{
+  "commit": "e26ad6dc11b08c225e5744a02fcc8a956f7adcd6",
+  "sources_sha256": {
+    "backend/codex_runtime/config.py": "32233ba2cb2e101994c00c894857e17a2e2cae758a2062b75ba299adedef5bb7",
+    "backend/codex_runtime/codex_command.py": "1c41b55e305aa07f3838448a361d8b18ced3e0b456e0fc2b96cb5b3fc055ba6a",
+    "backend/codex_runtime/claude_command.py": "4490e42c20d36b7a980e01c116696f11d45b5ec018f6ed3d264b35ae99398bb0",
+    "backend/codex_runtime/exec_types.py": "9b0d5d90d350386891716fec3b37c9f4f9bedcd15f0118ded599ae6213a10210",
+    "backend/managed_context.py": "33a868e923cc94c420c836b2a84786e0d6321d29d99c0390009b471b37edc6de",
+    "backend/prompts/assistant.schema.json": "f2b0e02ce194ab0ba35ab44caf58b621aa06031303c6c8100be1292519584f97",
+    "backend/prompts/implementer.schema.json": "0913ddefab218a2a666bd4f52b63bd3e4afdfa7c20c48d7ef2c3219d2d30a4c8",
+    "backend/prompts/orchestrator.schema.json": "ab1b77fb6fb7d19eef248a92d9bdf52f3770e387a929ac0d7fca4a36e3802714"
+  },
+  "golden_sha256": "d5e4fb0f81fc61dda4d6f07ed348d79af618dd74fbd9f2eda7bb006d2be25463",
+  "generation": "Execute unmodified archived legacy build_codex_exec_command and build_claude_exec_command for all three roles, fresh and saved-session. Clear inherited environment before imports and set only golden.environment; fixed execution ID, paths and synthetic request. No CLI, Docker or provider execution; no new builder used."
+}

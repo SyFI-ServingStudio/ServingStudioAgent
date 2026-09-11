@@ -1,0 +1,15 @@
+{
+  "commit": "e26ad6dc11b08c225e5744a02fcc8a956f7adcd6",
+  "source": "backend/app.py",
+  "source_sha256": "2288cc51d54d535363c122079dc932a8cd0c025ad4a34608468e8a5c4721328c",
+  "generation": "AST literal extraction of _TURN_FAILURES from the frozen source; no application import or new-package code.",
+  "failures": {
+    "agent_call_timeout": "The Agent stalled without producing output. Continue the conversation to retry.",
+    "agent_invalid_output": "The Agent did not return a valid decision. Continue the conversation to retry.",
+    "runtime_storage_full": "The Agent runtime could not start because the host disk is full. Free space, then retry this question.",
+    "upstream_unavailable": "The upstream model service is unavailable, so the Agent could not produce an answer. This is a service outage, not a problem with your question. The conversation is intact \u2014 continue it to retry.",
+    "upstream_rate_limited": "The upstream model service is rate limiting this account, so the Agent could not produce an answer. The conversation is intact \u2014 wait a moment, then continue it to retry.",
+    "codex_call_timeout": "The Agent stalled without producing output and the call was stopped. The conversation is intact \u2014 continue it to retry.",
+    "agent_runtime_failure": "The Agent runtime failed before producing an answer. Retry the question; the full diagnostic is available in the backend log."
+  }
+}

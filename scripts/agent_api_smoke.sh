@@ -2,19 +2,21 @@
 # End-to-end smoke for the VibeSim agent HTTP API.
 #
 # Exercises: GET /api/agent/v1/tools/skill, POST /api/agent/v1/tools/eval (read-only prompt), and workspace-scoped
-# artifact list/download. When VIBESIM_API_TOKEN is set it also asserts that a
+# artifact list/download. When an API token is set it also asserts that a
 # tokenless /api/agent/v1/tools/eval is rejected with 401.
 #
-# Requires the backend to be running (./run.sh) and, for the eval step, Docker +
-# Codex auth (the eval spins up the isolated container). Needs curl + uv.
+# Requires the configured backend to be running (see README.md) and, for the
+# eval step, Docker + provider auth. Needs curl + uv.
+# VIBESIM_AGENT_API_TOKEN takes precedence, including an explicitly empty value;
+# VIBESIM_API_TOKEN remains a fallback for the legacy backend.
 #
 # Usage:
 #   scripts/agent_api_smoke.sh [BASE_URL]
-#   VIBESIM_API_TOKEN=secret scripts/agent_api_smoke.sh http://127.0.0.1:8765
+#   VIBESIM_AGENT_API_TOKEN=secret scripts/agent_api_smoke.sh http://127.0.0.1:8765
 set -euo pipefail
 
 BASE="${1:-${VIBESIM_BASE_URL:-http://127.0.0.1:8765}}"
-TOKEN="${VIBESIM_API_TOKEN:-}"
+TOKEN="${VIBESIM_AGENT_API_TOKEN-${VIBESIM_API_TOKEN:-}}"
 PROMPT="${SMOKE_PROMPT:-List the available VibeSim L1 profilers.}"
 
 AUTH=()

@@ -1,0 +1,127 @@
+{
+  "commit": "e26ad6dc11b08c225e5744a02fcc8a956f7adcd6",
+  "schema_source": "backend/store.py",
+  "schema_source_sha256": "283622e6f28711f207093b26399fb347d4b8126b9b5d6ef5ecd3144b53121184",
+  "config_source": "backend/codex_runtime/config.py",
+  "config_source_sha256": "32233ba2cb2e101994c00c894857e17a2e2cae758a2062b75ba299adedef5bb7",
+  "schema_sql_sha256": "c6c582cf05582e2abe9c9338052ac69c41caa72d70c0eb4f441f6ef0303b7c1e",
+  "sqlite_schema": [
+    [
+      "index",
+      "messages_conversation_order",
+      "messages",
+      "CREATE INDEX messages_conversation_order\n                        ON messages(conversation_id, id)"
+    ],
+    [
+      "index",
+      "sqlite_autoindex_codex_sessions_1",
+      "codex_sessions",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_conversation_experiments_1",
+      "conversation_experiments",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_conversations_1",
+      "conversations",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_execution_jobs_1",
+      "execution_jobs",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_experiments_1",
+      "experiments",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_experiments_2",
+      "experiments",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_turn_events_1",
+      "turn_events",
+      null
+    ],
+    [
+      "index",
+      "sqlite_autoindex_turns_1",
+      "turns",
+      null
+    ],
+    [
+      "table",
+      "codex_sessions",
+      "codex_sessions",
+      "CREATE TABLE codex_sessions (\n                        conversation_id TEXT NOT NULL REFERENCES conversations(id)\n                            ON DELETE CASCADE,\n                        role TEXT NOT NULL,\n                        family TEXT NOT NULL DEFAULT 'gpt',\n                        session_id TEXT NOT NULL,\n                        PRIMARY KEY (conversation_id, role)\n                    )"
+    ],
+    [
+      "table",
+      "conversation_experiments",
+      "conversation_experiments",
+      "CREATE TABLE conversation_experiments (\n                        conversation_id TEXT NOT NULL REFERENCES conversations(id)\n                            ON DELETE CASCADE,\n                        experiment_id TEXT NOT NULL REFERENCES experiments(id)\n                            ON DELETE CASCADE,\n                        turn_id TEXT,\n                        relation TEXT NOT NULL,\n                        PRIMARY KEY (conversation_id, experiment_id, relation)\n                    )"
+    ],
+    [
+      "table",
+      "conversations",
+      "conversations",
+      "CREATE TABLE conversations (\n                        id TEXT PRIMARY KEY,\n                        title TEXT NOT NULL,\n                        naming_state TEXT NOT NULL DEFAULT 'manual',\n                        sandbox TEXT NOT NULL,\n                        autonomous INTEGER NOT NULL,\n                        agent_mode TEXT NOT NULL DEFAULT 'orchestrated',\n                        interrupted_role TEXT NOT NULL DEFAULT '',\n                        orchestrator_model TEXT NOT NULL DEFAULT 'gpt-5.6-sol',\n                        orchestrator_effort TEXT NOT NULL DEFAULT 'xhigh',\n                        orchestrator_service_tier TEXT NOT NULL DEFAULT 'default',\n                        implementer_model TEXT NOT NULL DEFAULT 'gpt-5.6-sol',\n                        implementer_effort TEXT NOT NULL DEFAULT 'xhigh',\n                        implementer_service_tier TEXT NOT NULL DEFAULT 'default',\n                        assistant_model TEXT NOT NULL DEFAULT 'gpt-5.6-sol',\n                        assistant_effort TEXT NOT NULL DEFAULT 'xhigh',\n                        assistant_service_tier TEXT NOT NULL DEFAULT 'default',\n                        prompt_fingerprint TEXT,\n                        peer_workspace TEXT,\n                        created_at REAL NOT NULL,\n                        updated_at REAL NOT NULL\n                    )"
+    ],
+    [
+      "table",
+      "execution_jobs",
+      "execution_jobs",
+      "CREATE TABLE execution_jobs (\n                        id TEXT PRIMARY KEY,\n                        conversation_id TEXT NOT NULL REFERENCES conversations(id)\n                            ON DELETE CASCADE,\n                        turn_id TEXT NOT NULL,\n                        role TEXT NOT NULL,\n                        status TEXT NOT NULL,\n                        job_kind TEXT NOT NULL DEFAULT 'simulation',\n                        artifact_path TEXT,\n                        resource_id TEXT,\n                        analyzer_resource_id TEXT,\n                        descriptor_json TEXT NOT NULL DEFAULT '{}',\n                        summary_json TEXT,\n                        experiment_id TEXT,\n                        experiment_path TEXT,\n                        created_at REAL NOT NULL,\n                        updated_at REAL NOT NULL\n                    )"
+    ],
+    [
+      "table",
+      "experiments",
+      "experiments",
+      "CREATE TABLE experiments (\n                        id TEXT PRIMARY KEY,\n                        relative_path TEXT NOT NULL UNIQUE,\n                        status TEXT NOT NULL,\n                        origin_kind TEXT NOT NULL,\n                        job_id TEXT,\n                        created_at REAL NOT NULL,\n                        updated_at REAL NOT NULL\n                    )"
+    ],
+    [
+      "table",
+      "messages",
+      "messages",
+      "CREATE TABLE messages (\n                        id INTEGER PRIMARY KEY AUTOINCREMENT,\n                        conversation_id TEXT NOT NULL REFERENCES conversations(id)\n                            ON DELETE CASCADE,\n                        role TEXT NOT NULL,\n                        content TEXT NOT NULL,\n                        ts REAL NOT NULL,\n                        metadata_json TEXT NOT NULL,\n                        -- The turn that produced this message. Null for rows\n                        -- imported from the legacy JSON store, which predates\n                        -- turns; a citation into one of those can name the\n                        -- message but not a turn.\n                        turn_id TEXT\n                    )"
+    ],
+    [
+      "table",
+      "schema_migrations",
+      "schema_migrations",
+      "CREATE TABLE schema_migrations (\n                        version INTEGER PRIMARY KEY,\n                        applied_at REAL NOT NULL\n                    )"
+    ],
+    [
+      "table",
+      "sqlite_sequence",
+      "sqlite_sequence",
+      "CREATE TABLE sqlite_sequence(name,seq)"
+    ],
+    [
+      "table",
+      "turn_events",
+      "turn_events",
+      "CREATE TABLE turn_events (\n                        id INTEGER PRIMARY KEY AUTOINCREMENT,\n                        turn_id TEXT NOT NULL REFERENCES turns(id) ON DELETE CASCADE,\n                        sequence INTEGER NOT NULL,\n                        kind TEXT NOT NULL,\n                        payload_json TEXT NOT NULL,\n                        UNIQUE(turn_id, sequence)\n                    )"
+    ],
+    [
+      "table",
+      "turns",
+      "turns",
+      "CREATE TABLE turns (\n                        id TEXT PRIMARY KEY,\n                        conversation_id TEXT NOT NULL REFERENCES conversations(id)\n                            ON DELETE CASCADE,\n                        status TEXT NOT NULL,\n                        created_at REAL NOT NULL,\n                        updated_at REAL NOT NULL\n                    )"
+    ]
+  ],
+  "generation": "git archive e26ad6d backend into a private Agent directory; run its unmodified Store(WorkspaceRegistry(private_state, main_dir=private_main)) in a clean environment with legacy defaults and synthetic CODEX_MAIN_LOCK_SHA (avoids unrelated VibeSim lock file lookup); export sqlite_schema SQL with tables before indices, sorted by name within each group, without whitespace rewriting. No new-package schema was imported.",
+  "implicit_objects": "sqlite_sequence and sqlite_autoindex entries are recreated by the original AUTOINCREMENT/PRIMARY KEY/UNIQUE DDL, not executed separately.",
+  "migration_rows": "Fresh legacy Store writes versions 1 and 8 with wall-clock timestamps. The test helper preserves exactly those versions with synthetic applied_at=float(version); no generated timestamps are frozen."
+}

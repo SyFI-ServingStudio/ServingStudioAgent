@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # End-to-end smoke for the VibeSim agent CONVERSATION API (the real interactive
 # interface): create -> turn -> follow-up turn -> history -> delete. When
-# VIBESIM_API_TOKEN is set it also asserts a tokenless create is rejected with 401.
+# an API token is set it also asserts a tokenless create is rejected with 401.
 #
-# Requires the backend running (./run.sh) and, for the turn steps, Docker + Codex
+# Requires the configured backend running (see README.md) and Docker + provider
 # auth (each turn spins up / reuses the conversation's isolated container). The
 # two turns use a read-only prompt so the smoke stays cheap. Needs curl + uv.
+# VIBESIM_AGENT_API_TOKEN takes precedence, including an explicitly empty value;
+# VIBESIM_API_TOKEN remains a fallback for the legacy backend.
 #
 # Usage:
 #   scripts/agent_conversation_smoke.sh [BASE_URL]
-#   VIBESIM_API_TOKEN=secret scripts/agent_conversation_smoke.sh http://127.0.0.1:8765
+#   VIBESIM_AGENT_API_TOKEN=secret scripts/agent_conversation_smoke.sh http://127.0.0.1:8765
 #   SMOKE_AGENT_MODE=single scripts/agent_conversation_smoke.sh   # one-role loop
 set -euo pipefail
 
 BASE="${1:-${VIBESIM_BASE_URL:-http://127.0.0.1:8765}}"
-TOKEN="${VIBESIM_API_TOKEN:-}"
+TOKEN="${VIBESIM_AGENT_API_TOKEN-${VIBESIM_API_TOKEN:-}}"
 PROMPT1="${SMOKE_PROMPT1:-Which VibeSim L1 profilers are available? Do not change any files.}"
 PROMPT2="${SMOKE_PROMPT2:-Thanks. Of those, which one would cost a bf16 GEMM?}"
 WORKSPACE_ID="${SMOKE_WORKSPACE_ID:-w_main}"

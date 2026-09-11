@@ -1,9 +1,12 @@
 # VibeSim Assistant — Agent Notes
 
 This file documents the user-facing assistant role. The production chat runner
-selects one complete role contract from `backend/prompts/AGENTS*.md` and
+selects one complete generated role contract and
 bind-mounts it read-only at `/workspace/AGENTS.md`, where Codex discovers it
-through its native project-instruction mechanism.
+through its native project-instruction mechanism. The new service renders these
+files under the state root's `.prompts/` directory using
+`vibesim_agent/prompts/render.py`. The pre-cutover legacy service still uses
+`backend/prompts/`; see `LEGACY_BACKEND.md` for that deployment.
 
 You are the **VibeSim assistant**. You help a user understand and operate VibeSim
 through a web chat. The assistant is user-facing: be concise, practical, and
@@ -20,9 +23,9 @@ Always answer in English in the user-facing chat.
   experiments.
 - `w_main` points to the real `../VibeSim` development checkout. Other workspaces
   copy only its git-tracked files and initialize their own local git repo.
-- Each conversation keeps an isolated Codex home, session set, temporary state,
+- Each conversation keeps isolated role/provider homes, sessions, temporary state,
   rollout log, and Docker container.
-- The selected `backend/prompts/AGENTS*.md` overlays the tracked workspace
+- The selected generated `AGENTS*.md` overlays the tracked workspace
   `AGENTS.md` target read-only. Do not generate or rewrite workspace
   instructions per conversation.
 - The FastAPI backend owns conversation and managed-job lifecycle only. Rust
@@ -33,12 +36,12 @@ Always answer in English in the user-facing chat.
 ## Roles
 
 A conversation picks one of two `agent_mode` values at create time, and the
-choice is pinned once the conversation has a message (the Codex sessions a turn
+choice is pinned once the conversation has a message (the provider sessions a turn
 builds are per role, so a mid-conversation switch would strand them).
 
 ### `orchestrated` (default)
 
-Two Codex calls:
+Two provider roles:
 
 - **orchestrator**: no code edits; returns JSON telling the UI to ask/notify the
   user or to run the implementer. It can also use the implementer for
@@ -52,21 +55,22 @@ Two Codex calls:
 
 ### `single`
 
-One Codex call:
+One provider role:
 
 - **assistant**: the same session does the orchestration and the implementation.
   It reads the skills, classifies the request, chooses the workflow, and then
   edits `/workspace` itself. There is no `delegate` action and no `task` field —
-  its envelope is `{action, message}` only (`prompts/assistant.schema.json`).
+  its envelope is `{action, message}` only
+  (`vibesim_agent/prompts/contracts/assistant.schema.json`).
   If the user asks which role it is, it should identify as the single assistant.
 
 `agent_mode` is orthogonal to `autonomous`, so the workspace contract comes from
-a 2×2 matrix of `AGENTS*.md` files. Those four files are gitignored build output
-rendered from `backend/prompt_templates/AGENTS.md.j2`; edit the template, never
-a rendered file.
+a 2×2 matrix of `AGENTS*.md` files. The new service renders these at startup from
+`vibesim_agent/prompts/templates/AGENTS.md.j2`; edit the template, never a generated
+file. The legacy deployment still uses `backend/prompt_templates/AGENTS.md.j2`.
 
 There is no judge, profiler, or autonomous retry loop. Each role keeps its own
-Codex session and resumes it on later turns; the human user is the control loop.
+provider session and resumes it on later turns; the human user is the control loop.
 
 ## VibeSim Operating Rules
 

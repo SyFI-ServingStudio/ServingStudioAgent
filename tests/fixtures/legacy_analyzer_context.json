@@ -1,0 +1,1232 @@
+{
+  "commit": "e26ad6dc11b08c225e5744a02fcc8a956f7adcd6",
+  "source": "backend/analyzer_context.py",
+  "source_sha256": "30f04682dd5ba7809405833f799b3b7905a9d78e783f6e37d466eee5e82f7a77",
+  "generation": "Unmodified git-show legacy module executed in isolation. Original synthetic dictionary literal parsed from the test; schema, serialization, prompt and merge generated only by legacy functions.",
+  "payload": {
+    "protocol": "vibesim.conversation-context/v2",
+    "selection": null,
+    "citationDictionary": {
+      "protocol": "vibesim.citation-dictionary/v2",
+      "identity": "s_test:1",
+      "document": "Use `exp.tp2.rate20.throughput`.",
+      "entries": [
+        {
+          "token": "exp.tp2.rate20.throughput",
+          "displayLabel": "TP=2 \u00b7 rate=20 \u00b7 Total throughput",
+          "target": {
+            "kind": "aggregate",
+            "workspaceId": "w_test",
+            "experimentId": "s_test",
+            "panelId": "total_tps",
+            "metricKey": "total_tps",
+            "statistic": null,
+            "runId": "r_test",
+            "coordinates": {
+              "tensor_parallel": 2,
+              "request_rate": 20
+            },
+            "protocol": "vibesim.analyzer/v2"
+          }
+        }
+      ]
+    }
+  },
+  "markdown": "Use `exp.tp2.rate20.throughput` twice: `exp.tp2.rate20.throughput`.",
+  "schema": {
+    "$defs": {
+      "AggregateEvidenceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "aggregate",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "experimentId": {
+            "minLength": 1,
+            "title": "Experimentid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Panelid"
+          },
+          "metricKey": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metrickey"
+          },
+          "statistic": {
+            "anyOf": [
+              {
+                "enum": [
+                  "mean",
+                  "p99"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Statistic"
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runid"
+          },
+          "coordinates": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Coordinates"
+          },
+          "protocol": {
+            "const": "vibesim.analyzer/v2",
+            "title": "Protocol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "experimentId",
+          "protocol"
+        ],
+        "title": "AggregateEvidenceRef",
+        "type": "object"
+      },
+      "AggregateSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "aggregate",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "experimentId": {
+            "minLength": 1,
+            "title": "Experimentid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Panelid"
+          },
+          "metricKey": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Metrickey"
+          },
+          "statistic": {
+            "anyOf": [
+              {
+                "enum": [
+                  "mean",
+                  "p99"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Statistic"
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runid"
+          },
+          "coordinates": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Coordinates"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "experimentId"
+        ],
+        "title": "AggregateSelection",
+        "type": "object"
+      },
+      "CitationDictionaryEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "maxLength": 160,
+            "minLength": 5,
+            "title": "Token",
+            "type": "string"
+          },
+          "displayLabel": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Displaylabel",
+            "type": "string"
+          },
+          "target": {
+            "discriminator": {
+              "mapping": {
+                "aggregate": "#/$defs/AggregateEvidenceRef",
+                "kernel_measurement": "#/$defs/KernelMeasurementEvidenceRef",
+                "kernel_profile": "#/$defs/KernelProfileEvidenceRef",
+                "prediction": "#/$defs/PredictionEvidenceRef",
+                "run": "#/$defs/RunEvidenceRef"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/AggregateEvidenceRef"
+              },
+              {
+                "$ref": "#/$defs/RunEvidenceRef"
+              },
+              {
+                "$ref": "#/$defs/PredictionEvidenceRef"
+              },
+              {
+                "$ref": "#/$defs/KernelProfileEvidenceRef"
+              },
+              {
+                "$ref": "#/$defs/KernelMeasurementEvidenceRef"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "token",
+          "displayLabel",
+          "target"
+        ],
+        "title": "CitationDictionaryEntry",
+        "type": "object"
+      },
+      "CitationDictionarySnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "protocol": {
+            "const": "vibesim.citation-dictionary/v2",
+            "title": "Protocol",
+            "type": "string"
+          },
+          "identity": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Identity",
+            "type": "string"
+          },
+          "document": {
+            "maxLength": 64000,
+            "minLength": 1,
+            "title": "Document",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/$defs/CitationDictionaryEntry"
+            },
+            "maxItems": 2000,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "protocol",
+          "identity",
+          "document",
+          "entries"
+        ],
+        "title": "CitationDictionarySnapshot",
+        "type": "object"
+      },
+      "KernelMeasurementEvidenceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "kernel_measurement",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "measurementId": {
+            "minLength": 1,
+            "title": "Measurementid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panelid"
+          },
+          "metricKey": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metrickey"
+          },
+          "plotName": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plotname"
+          },
+          "protocol": {
+            "const": "vibesim.analyzer/v2",
+            "title": "Protocol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "measurementId",
+          "panelId",
+          "metricKey",
+          "plotName",
+          "protocol"
+        ],
+        "title": "KernelMeasurementEvidenceRef",
+        "type": "object"
+      },
+      "KernelMeasurementSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "kernel_measurement",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "measurementId": {
+            "minLength": 1,
+            "title": "Measurementid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panelid"
+          },
+          "metricKey": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metrickey"
+          },
+          "plotName": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plotname"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "measurementId",
+          "panelId",
+          "metricKey",
+          "plotName"
+        ],
+        "title": "KernelMeasurementSelection",
+        "type": "object"
+      },
+      "KernelProfileEvidenceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "kernel_profile",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "profileId": {
+            "minLength": 1,
+            "title": "Profileid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panelid"
+          },
+          "metricKey": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metrickey"
+          },
+          "protocol": {
+            "const": "vibesim.analyzer/v2",
+            "title": "Protocol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "profileId",
+          "panelId",
+          "metricKey",
+          "protocol"
+        ],
+        "title": "KernelProfileEvidenceRef",
+        "type": "object"
+      },
+      "KernelProfileSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "kernel_profile",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "profileId": {
+            "minLength": 1,
+            "title": "Profileid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panelid"
+          },
+          "metricKey": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metrickey"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "profileId",
+          "panelId",
+          "metricKey"
+        ],
+        "title": "KernelProfileSelection",
+        "type": "object"
+      },
+      "OperationRef": {
+        "additionalProperties": false,
+        "properties": {
+          "iterId": {
+            "minLength": 1,
+            "title": "Iterid",
+            "type": "string"
+          },
+          "batchId": {
+            "minLength": 1,
+            "title": "Batchid",
+            "type": "string"
+          },
+          "operationId": {
+            "minLength": 1,
+            "title": "Operationid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "iterId",
+          "batchId",
+          "operationId"
+        ],
+        "title": "OperationRef",
+        "type": "object"
+      },
+      "PredictionEvidenceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "prediction",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "predictionId": {
+            "minLength": 1,
+            "title": "Predictionid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panelid"
+          },
+          "caseId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caseid"
+          },
+          "operationId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operationid"
+          },
+          "leafId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leafid"
+          },
+          "parallelId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parallelid"
+          },
+          "optimalityMode": {
+            "enum": [
+              "unlocked",
+              "batch_locked"
+            ],
+            "title": "Optimalitymode",
+            "type": "string"
+          },
+          "protocol": {
+            "const": "vibesim.analyzer/v2",
+            "title": "Protocol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "predictionId",
+          "panelId",
+          "caseId",
+          "operationId",
+          "leafId",
+          "parallelId",
+          "optimalityMode",
+          "protocol"
+        ],
+        "title": "PredictionEvidenceRef",
+        "type": "object"
+      },
+      "PredictionSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "prediction",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "predictionId": {
+            "minLength": 1,
+            "title": "Predictionid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panelid"
+          },
+          "caseId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caseid"
+          },
+          "operationId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operationid"
+          },
+          "leafId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leafid"
+          },
+          "parallelId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parallelid"
+          },
+          "optimalityMode": {
+            "enum": [
+              "unlocked",
+              "batch_locked"
+            ],
+            "title": "Optimalitymode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "predictionId",
+          "panelId",
+          "caseId",
+          "operationId",
+          "leafId",
+          "parallelId",
+          "optimalityMode"
+        ],
+        "title": "PredictionSelection",
+        "type": "object"
+      },
+      "RunEvidenceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "run",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "title": "Runid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panelid"
+          },
+          "scope": {
+            "enum": [
+              "cluster",
+              "pool",
+              "worker",
+              "kernel",
+              "parallel"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "poolRole": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poolrole"
+          },
+          "workerKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workerkey"
+          },
+          "leafId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leafid"
+          },
+          "parId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parid"
+          },
+          "cursorMs": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursorms"
+          },
+          "cursorNeedsSeek": {
+            "title": "Cursorneedsseek",
+            "type": "boolean"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OperationRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workerAnalysisLevel": {
+            "enum": [
+              "worker",
+              "iteration"
+            ],
+            "title": "Workeranalysislevel",
+            "type": "string"
+          },
+          "protocol": {
+            "const": "vibesim.analyzer/v2",
+            "title": "Protocol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "runId",
+          "panelId",
+          "scope",
+          "poolRole",
+          "workerKey",
+          "leafId",
+          "parId",
+          "cursorMs",
+          "cursorNeedsSeek",
+          "operation",
+          "workerAnalysisLevel",
+          "protocol"
+        ],
+        "title": "RunEvidenceRef",
+        "type": "object"
+      },
+      "RunSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "run",
+            "title": "Kind",
+            "type": "string"
+          },
+          "workspaceId": {
+            "minLength": 1,
+            "title": "Workspaceid",
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "title": "Runid",
+            "type": "string"
+          },
+          "panelId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Panelid"
+          },
+          "scope": {
+            "enum": [
+              "cluster",
+              "pool",
+              "worker",
+              "kernel",
+              "parallel"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "poolRole": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poolrole"
+          },
+          "workerKey": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workerkey"
+          },
+          "leafId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Leafid"
+          },
+          "parId": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parid"
+          },
+          "cursorMs": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursorms"
+          },
+          "cursorNeedsSeek": {
+            "title": "Cursorneedsseek",
+            "type": "boolean"
+          },
+          "operation": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/OperationRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "workerAnalysisLevel": {
+            "enum": [
+              "worker",
+              "iteration"
+            ],
+            "title": "Workeranalysislevel",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workspaceId",
+          "runId",
+          "panelId",
+          "scope",
+          "poolRole",
+          "workerKey",
+          "leafId",
+          "parId",
+          "cursorMs",
+          "cursorNeedsSeek",
+          "operation",
+          "workerAnalysisLevel"
+        ],
+        "title": "RunSelection",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "protocol": {
+        "const": "vibesim.conversation-context/v2",
+        "title": "Protocol",
+        "type": "string"
+      },
+      "selection": {
+        "anyOf": [
+          {
+            "discriminator": {
+              "mapping": {
+                "aggregate": "#/$defs/AggregateSelection",
+                "kernel_measurement": "#/$defs/KernelMeasurementSelection",
+                "kernel_profile": "#/$defs/KernelProfileSelection",
+                "prediction": "#/$defs/PredictionSelection",
+                "run": "#/$defs/RunSelection"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/AggregateSelection"
+              },
+              {
+                "$ref": "#/$defs/RunSelection"
+              },
+              {
+                "$ref": "#/$defs/PredictionSelection"
+              },
+              {
+                "$ref": "#/$defs/KernelProfileSelection"
+              },
+              {
+                "$ref": "#/$defs/KernelMeasurementSelection"
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Selection"
+      },
+      "citationDictionary": {
+        "$ref": "#/$defs/CitationDictionarySnapshot"
+      }
+    },
+    "required": [
+      "protocol",
+      "citationDictionary"
+    ],
+    "title": "AnalyzerTurnContext",
+    "type": "object"
+  },
+  "persisted_json": "{\"protocol\": \"vibesim.conversation-context/v2\", \"selection\": null, \"citationDictionary\": {\"protocol\": \"vibesim.citation-dictionary/v2\", \"identity\": \"s_test:1\", \"document\": \"Use `exp.tp2.rate20.throughput`.\", \"entries\": [{\"token\": \"exp.tp2.rate20.throughput\", \"displayLabel\": \"TP=2 \u00b7 rate=20 \u00b7 Total throughput\", \"target\": {\"kind\": \"aggregate\", \"workspaceId\": \"w_test\", \"experimentId\": \"s_test\", \"panelId\": \"total_tps\", \"metricKey\": \"total_tps\", \"statistic\": null, \"runId\": \"r_test\", \"coordinates\": {\"tensor_parallel\": 2, \"request_rate\": 20}, \"protocol\": \"vibesim.analyzer/v2\"}}]}}",
+  "prompt": "Use `exp.tp2.rate20.throughput` twice: `exp.tp2.rate20.throughput`.\n\n## Active Analyzer context\nSelection (literal JSON): `null`\n\nRead this exact resource through the Analyzer MCP before reporting its values. Exact sweep, run, prediction, profile, and measurement responses place complete citation token beside the returned evidence. Copy the matching token unchanged as Markdown inline code; do not invent tokens or write navigation JSON. A citation navigates only after the user clicks it.",
+  "frozen_json": "[{\"protocol\": \"vibesim.citation/v2\", \"token\": \"exp.tp2.rate20.throughput\", \"sourceStart\": 4, \"sourceEnd\": 31, \"displayLabel\": \"TP=2 \u00b7 rate=20 \u00b7 Total throughput\", \"target\": {\"kind\": \"aggregate\", \"workspaceId\": \"w_test\", \"experimentId\": \"s_test\", \"panelId\": \"total_tps\", \"metricKey\": \"total_tps\", \"runId\": \"r_test\", \"coordinates\": {\"tensor_parallel\": 2, \"request_rate\": 20}, \"protocol\": \"vibesim.analyzer/v2\"}}, {\"protocol\": \"vibesim.citation/v2\", \"token\": \"exp.tp2.rate20.throughput\", \"sourceStart\": 39, \"sourceEnd\": 66, \"displayLabel\": \"TP=2 \u00b7 rate=20 \u00b7 Total throughput\", \"target\": {\"kind\": \"aggregate\", \"workspaceId\": \"w_test\", \"experimentId\": \"s_test\", \"panelId\": \"total_tps\", \"metricKey\": \"total_tps\", \"runId\": \"r_test\", \"coordinates\": {\"tensor_parallel\": 2, \"request_rate\": 20}, \"protocol\": \"vibesim.analyzer/v2\"}}]",
+  "previous_json": "{\"protocol\":\"vibesim.citation-dictionary/v2\",\"identity\":\"run-1nupi8i\",\"document\":\"Use `run.cluster.utilization` for run old \u00b7 utilization.\",\"entries\":[{\"token\":\"run.cluster.utilization\",\"displayLabel\":\"run old \u00b7 utilization\",\"target\":{\"kind\":\"run\",\"workspaceId\":\"w_test\",\"runId\":\"old\",\"panelId\":\"utilization\",\"scope\":\"cluster\",\"poolRole\":null,\"workerKey\":null,\"leafId\":null,\"parId\":null,\"cursorMs\":null,\"cursorNeedsSeek\":false,\"operation\":null,\"workerAnalysisLevel\":\"worker\",\"protocol\":\"vibesim.analyzer/v2\"}}]}",
+  "current_json": "{\"protocol\":\"vibesim.citation-dictionary/v2\",\"identity\":\"run-pk8rxc\",\"document\":\"Use `run.cluster.utilization` for run new \u00b7 utilization.\",\"entries\":[{\"token\":\"run.cluster.utilization\",\"displayLabel\":\"run new \u00b7 utilization\",\"target\":{\"kind\":\"run\",\"workspaceId\":\"w_test\",\"runId\":\"new\",\"panelId\":\"utilization\",\"scope\":\"cluster\",\"poolRole\":null,\"workerKey\":null,\"leafId\":null,\"parId\":null,\"cursorMs\":null,\"cursorNeedsSeek\":false,\"operation\":null,\"workerAnalysisLevel\":\"worker\",\"protocol\":\"vibesim.analyzer/v2\"}}]}",
+  "merged_json": "{\"protocol\":\"vibesim.citation-dictionary/v2\",\"identity\":\"combined-12kvn1o\",\"document\":\"Use `run.cluster.utilization` for run old \u00b7 utilization.\\n\\nUse `run.cluster.utilization` for run new \u00b7 utilization.\",\"entries\":[{\"token\":\"run.cluster.utilization\",\"displayLabel\":\"run new \u00b7 utilization\",\"target\":{\"kind\":\"run\",\"workspaceId\":\"w_test\",\"runId\":\"new\",\"panelId\":\"utilization\",\"scope\":\"cluster\",\"poolRole\":null,\"workerKey\":null,\"leafId\":null,\"parId\":null,\"cursorMs\":null,\"cursorNeedsSeek\":false,\"operation\":null,\"workerAnalysisLevel\":\"worker\",\"protocol\":\"vibesim.analyzer/v2\"}}]}"
+}

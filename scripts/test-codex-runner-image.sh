@@ -15,7 +15,18 @@ app_uid="${CODEX_DOCKER_UID:-$(id -u)}"
 app_gid="${CODEX_DOCKER_GID:-$(id -g)}"
 app_user="${CODEX_DOCKER_USER:-${USER:-kanzhu}}"
 app_home="${CODEX_DOCKER_HOME:-/home/$app_user}"
-smoke_level="${1:-build}"
+smoke_level=build
+if [ "$#" -gt 0 ] && [ "$1" != "--main-dir" ]; then
+  smoke_level="$1"
+  shift
+fi
+if [ "$#" -gt 0 ]; then
+  if [ "$#" -ne 2 ] || [ "$1" != "--main-dir" ]; then
+    echo "usage: $0 [build|timing] [--main-dir PATH]" >&2
+    exit 2
+  fi
+  main_dir="$(cd "$2" && pwd)"
+fi
 
 # shellcheck source=lib/main-tree-copy.sh
 source "$ui_dir/scripts/lib/main-tree-copy.sh"
@@ -23,7 +34,7 @@ source "$ui_dir/scripts/lib/main-tree-copy.sh"
 case "$smoke_level" in
   build|timing) ;;
   *)
-    echo "usage: $0 [build|timing]" >&2
+    echo "usage: $0 [build|timing] [--main-dir PATH]" >&2
     exit 2
     ;;
 esac

@@ -1,0 +1,10 @@
+{
+  "commit": "e26ad6dc11b08c225e5744a02fcc8a956f7adcd6",
+  "sources_sha256": {
+    "backend/naming.py": "1b0b44ee0c341ce51a84e260dce5d907743da023d5d43c4f1874f2c79a14c2c2",
+    "backend/prompts/naming-system.txt": "bdb35e8cd804a450dbf45776dd6a0fcf8b38fe1a14002454ebba5b48c0368588",
+    "backend/prompts/naming-user.txt": "18b524fe3b4f3c14ee4406898360b459a6ab5bfa1e8136e09d5449966d0d9107"
+  },
+  "golden_sha256": "69d729602a41106c2419112134f22d87c41aa2387aa625a42e6a6064028b76d8",
+  "generation": "Run unmodified archived e26ad6d backend.naming.generate_names with synthetic inputs A*4500+middle*1000+Z*1500 and B*7000, patched naming config (synthetic private-key/model/https://naming.invalid/v1/timeout2), and httpx.MockTransport synthetic response. Capture actual request and GeneratedNames results. No network or new naming implementation used."
+}

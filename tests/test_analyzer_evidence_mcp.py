@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from backend.analyzer_evidence_mcp import server
+from vibesim_agent.analyzer_evidence_mcp import server
 
 
 class _JsonResponse(BytesIO):

@@ -1,0 +1,120 @@
+{
+  "commit": "e26ad6dc11b08c225e5744a02fcc8a956f7adcd6",
+  "source": "backend/artifacts.py",
+  "source_sha256": "628ddf346e1783a9da08502f05db029813f51d8f8f43d1cc7f84725ed2b6a547",
+  "generation": "Unmodified archived legacy module with synthetic files and registry paths. All mtimes set to 1. Only listing root is replaced by $REPO and filesystem-dependent directory size by $DIRECTORY_SIZE; tests compare directory size to actual stat. Resolved Paths stored relative to the fixture repo.",
+  "ordinary": {
+    "recursive": {
+      "workspace_id": "w_test",
+      "root": "$REPO",
+      "path": ".",
+      "count": 3,
+      "truncated": false,
+      "files": [
+        {
+          "path": "logs/summary.json",
+          "size": 19,
+          "mtime": 1
+        },
+        {
+          "path": "notes.md",
+          "size": 10,
+          "mtime": 1
+        },
+        {
+          "path": "plot.png",
+          "size": 5,
+          "mtime": 1
+        }
+      ]
+    },
+    "shallow": {
+      "workspace_id": "w_test",
+      "root": "$REPO",
+      "path": ".",
+      "count": 3,
+      "truncated": false,
+      "files": [
+        {
+          "path": "logs",
+          "name": "logs",
+          "size": "$DIRECTORY_SIZE",
+          "mtime": 1,
+          "is_dir": true,
+          "preview_kind": "directory"
+        },
+        {
+          "path": "notes.md",
+          "name": "notes.md",
+          "size": 10,
+          "mtime": 1,
+          "is_dir": false,
+          "preview_kind": "text"
+        },
+        {
+          "path": "plot.png",
+          "name": "plot.png",
+          "size": 5,
+          "mtime": 1,
+          "is_dir": false,
+          "preview_kind": "image"
+        }
+      ]
+    },
+    "meta": {
+      "workspace_id": "w_test",
+      "path": "notes.md",
+      "name": "notes.md",
+      "size": 10,
+      "mtime": 1,
+      "is_dir": false,
+      "preview_kind": "text",
+      "language": "markdown",
+      "preview_byte_limit": 5242880
+    },
+    "preview": [
+      "notes.md",
+      "text"
+    ]
+  },
+  "alias": {
+    "listing": {
+      "workspace_id": "w_test",
+      "root": "$REPO",
+      "path": ".",
+      "count": 1,
+      "truncated": false,
+      "files": [
+        {
+          "path": "result.txt",
+          "size": 5,
+          "mtime": 1
+        }
+      ]
+    },
+    "meta": {
+      "workspace_id": "w_test",
+      "path": "result.txt",
+      "name": "result.txt",
+      "size": 5,
+      "mtime": 1,
+      "is_dir": false,
+      "preview_kind": "text",
+      "language": null,
+      "preview_byte_limit": 5242880
+    },
+    "preview": [
+      "result.txt",
+      "text"
+    ]
+  },
+  "legacy_sniff": {
+    "valid": "binary",
+    "invalid": "text",
+    "incomplete": "text"
+  },
+  "bounded_preview": [
+    "first\nsecond\n",
+    true
+  ]
+}
