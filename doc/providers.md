@@ -52,7 +52,12 @@ Claude home authentication copies only `.credentials.json` into the isolated
 runtime home. CLI-refreshed credentials remain there; a changed host credential
 file supplies a new copy on the next prepare. Personal history/settings are not
 copied and refreshed credentials are not written back into the host login. This
-file-based path has local fixture coverage; real provider acceptance is separate.
+file-based path has local fixture coverage. A real `claudeme` acceptance run also
+passed with the accepted runner: two assistant calls retained the same session and
+recalled an exact synthetic marker after container recreation. The original session
+JSONL advanced, host credentials stayed unchanged, and test containers and credential
+copies were removed (`tmp/agent-claudeme-lqxfakyw/report.json` at the workspace root).
+This proves login and single-role resume, not token refresh or legacy-state migration.
 
 ## Sessions And Compatibility
 
