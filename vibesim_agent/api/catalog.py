@@ -5,6 +5,10 @@ from fastapi import APIRouter, HTTPException
 from ..services.conversation import ConversationService
 
 
+def _environment_names(names: tuple[str, ...]) -> list[str]:
+    return [name for name in names if not name.startswith("inline:")]
+
+
 def catalog_router(conversations: ConversationService) -> APIRouter:
     router = APIRouter(prefix="/api/agent/v1")
 
@@ -22,8 +26,10 @@ def catalog_router(conversations: ConversationService) -> APIRouter:
                     "label": provider.label,
                     "runner": provider.adapter.adapter_id,
                     "available": item["available"],
-                    "requiredEnvironment": list(provider.credentials.all_secrets),
-                    "credentialEnvironmentAlternatives": list(
+                    "requiredEnvironment": _environment_names(
+                        provider.credentials.all_secrets
+                    ),
+                    "credentialEnvironmentAlternatives": _environment_names(
                         provider.credentials.any_secrets
                     ),
                 }

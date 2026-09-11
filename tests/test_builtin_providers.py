@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock
 
+from vibesim_agent.api.catalog import _environment_names
 from vibesim_agent.providers.builtin import (
     build_registry,
     guarded_profile_prepare,
@@ -124,6 +125,14 @@ class ConfiguredProviderTests(unittest.TestCase):
             },
         )
         self.assertNotIn("private-token", json.dumps(available.catalog()))
+
+    def test_inline_secret_references_are_not_browser_environment_names(self):
+        self.assertEqual(
+            _environment_names(
+                ("WORK_CLAUDE_TOKEN", "inline:claudek:ANTHROPIC_AUTH_TOKEN")
+            ),
+            ["WORK_CLAUDE_TOKEN"],
+        )
 
     def test_scope_tracks_backend_not_credentials(self):
         settings = self.settings(CLAUDE_TOKEN="one")
