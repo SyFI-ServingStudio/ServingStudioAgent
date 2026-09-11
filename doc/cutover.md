@@ -4,6 +4,37 @@ This is a preparation record, not authorization to switch a running service.
 Provider resume, stopped-state migration rehearsal and final image acceptance
 must pass before the Phase 6 cutover in `plan.md`. The old deployment remains active.
 
+## Frozen Candidate
+
+The implemented component candidates are Agent `72ea745`, launcher `2be79b8`
+and UI `31a04bb`. These are local commits, not deployed revisions. The local
+`tmp/agent-refactor-deployment/release.sh` records full commits and artifact hashes;
+later documentation-only commits may advance its Agent pin without changing code.
+Its UI script now selects `wt-agent-ui-compat`, containing the accepted settings,
+citations and pagination fixes. Historical main workspace paths remain unchanged.
+
+Before managed startup can stop the old deployment, the candidate backend checks
+the Agent/UI revisions, tracked changes and unexpected untracked files, the
+accepted launcher product files in the main checkout, Analyzer checksum and
+local immutable runner image. Each bridge also checks Agent source. The current
+main checkout still requires launcher integration; this check rejects it before
+migration. Existing copied workspaces retain the tested legacy callback aliases.
+
+The accepted Node22 runner image is
+`sha256:9dc036db25b06d1c28d6f7dcaac60987e8441788fdc0c26d9dc95a6dc01475a4`
+(tag `vibesim-agent-runner:kanzhu-refactor-v12-node22`). Build evidence is
+`tmp/agent-final-image-96v01nld/report.json`; real runtime evidence is
+`tmp/agent-runtime-real-fft3c7rt/report.json`. The accepted Analyzer executable is
+`tmp/agent-analyzer-build-mwml3zse/repo/target/release/analyze`, SHA256
+`1a3ff3f88d1d936fa87443e6e5fc3a283a84b651a6aadc9d2f38d844f56f13aa`.
+The candidate scripts pin these artifacts. The older image observations below
+describe earlier evidence and the original deployment, not this candidate.
+
+Version checks do not establish provider acceptance or current deployment
+ownership. Claude historical resume, a fresh stop audit, final backup/migration,
+production cutover and observation are still required. No candidate script has
+been installed or started; only read-only release checks have run.
+
 ## Observed Deployment
 
 On 2026-09-11, the workspace's five `agent-workspaces/services/*.sh` scripts
@@ -74,10 +105,10 @@ workspace root. They target `wt-agent-refactor`, the existing `VibeSim` main
 checkout. Both services require the same absolute `VIBESIM_STARTUP_CONFIG` path;
 Agent performs managed startup and Analyzer obtains the published target through
 `selected-root`. They retain the Claude wrapper and existing ports, use the root
-`.env` for temporary/cache paths, and require an explicitly selected runner image.
-Analyzer also requires an absolute executable `VIBESIM_ANALYZER_BINARY` whose API
-has passed integration acceptance. An existing binary may predate the current
-source and expose a different API prefix. They are not installed or executed.
+`.env` for temporary/cache paths, and select the accepted immutable runner image.
+Analyzer selects the accepted absolute executable and verifies its SHA256;
+conflicting image or binary overrides are rejected. An arbitrary existing binary
+may expose a different API prefix. They are not installed or executed.
 The existing `agent-workspaces/services/claude.env`, when present, remains an
 external deployment asset; candidate logs go to
 `tmp/agent-refactor-deployment/logs/`, outside both state roots. Preserve
