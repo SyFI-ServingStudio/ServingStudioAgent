@@ -1,7 +1,7 @@
 [project]
 name = "vibesim-agent"
 version = "0.1.0"
-description = "VibeSim Agent service for durable workspaces, conversations, and provider execution"
+description = "ServingStudio Agent service for durable workspaces, conversations, and provider execution"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",

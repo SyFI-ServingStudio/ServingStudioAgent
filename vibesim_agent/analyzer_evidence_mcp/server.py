@@ -94,7 +94,7 @@ alter, or invent tokens. They become clickable only when the user clicks the
 final answer."""
 
 mcp = FastMCP(
-    "VibeSim Analyzer",
+    "ServingStudio Analyzer",
     instructions=(
         "Use read_analyzer_resource to discover and inspect Analyzer-owned "
         "simulation sweeps, runs, timing predictions, kernel profiles, and "

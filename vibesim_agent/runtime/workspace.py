@@ -112,7 +112,7 @@ class WorkspaceSnapshot:
             return
         self._git(destination, "init", "--template=")
         self._git(destination, "checkout", "-B", "main")
-        self._git(destination, "config", "user.name", "VibeSim UI")
+        self._git(destination, "config", "user.name", "ServingStudio UI")
         self._git(destination, "config", "user.email", "vibesim-ui@example.invalid")
         self._git(destination, "add", "-A")
         self._git(
@@ -122,5 +122,5 @@ class WorkspaceSnapshot:
             "commit",
             "--allow-empty",
             "-m",
-            "Initial VibeSim workspace snapshot",
+            "Initial ServingStudioSim workspace snapshot",
         )

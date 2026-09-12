@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke for the VibeSim agent CONVERSATION API (the real interactive
+# End-to-end smoke for the ServingStudioSim agent CONVERSATION API (the real interactive
 # interface): create -> turn -> follow-up turn -> history -> delete. When
 # an API token is set it also asserts a tokenless create is rejected with 401.
 #
@@ -17,7 +17,7 @@ set -euo pipefail
 
 BASE="${1:-${VIBESIM_BASE_URL:-http://127.0.0.1:8765}}"
 TOKEN="${VIBESIM_AGENT_API_TOKEN-${VIBESIM_API_TOKEN:-}}"
-PROMPT1="${SMOKE_PROMPT1:-Which VibeSim L1 profilers are available? Do not change any files.}"
+PROMPT1="${SMOKE_PROMPT1:-Which ServingStudioSim L1 profilers are available? Do not change any files.}"
 PROMPT2="${SMOKE_PROMPT2:-Thanks. Of those, which one would cost a bf16 GEMM?}"
 WORKSPACE_ID="${SMOKE_WORKSPACE_ID:-w_main}"
 AGENT_MODE="${SMOKE_AGENT_MODE:-orchestrated}"
@@ -31,7 +31,7 @@ json_get() { uv run python -c 'import sys,json; d=json.load(sys.stdin); print(d'
 post_body() { uv run python -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])))' "$1"; }
 
 echo "== 0. GET /api/agent/v1/tools/skill (public) =="
-curl -fsS "$BASE/api/agent/v1/tools/skill" | grep -q "VibeSim" && echo "  ok: skill doc served"
+curl -fsS "$BASE/api/agent/v1/tools/skill" | grep -q "ServingStudioSim" && echo "  ok: skill doc served"
 
 if [ -n "$TOKEN" ]; then
   echo "== 0b. POST workspace conversation without token -> expect 401 =="

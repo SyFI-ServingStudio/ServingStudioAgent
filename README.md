@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="doc/assets/vibesim-logo.svg" alt="VibeSim logo" width="64">
+  <img src="doc/assets/servingstudio-symbol.svg" alt="ServingStudio logo" width="64">
 </p>
 
-<h1 align="center">VibeSim Agent</h1>
+<h1 align="center">ServingStudio Agent</h1>
 
 <p align="center">
-  <strong>An agent runtime for running and analyzing VibeSim experiments.</strong>
+  <strong>An agent runtime for running and analyzing LLM serving experiments.</strong>
 </p>
 
 <p align="center">
@@ -17,19 +17,19 @@
 
 ---
 
-VibeSim Agent connects Codex and Claude Code to a persistent VibeSim workspace.
+ServingStudio Agent connects Codex and Claude Code to persistent experiment workspaces.
 Describe a serving question, let the agent prepare and run an experiment, and
 follow its analysis back to the results. Conversations, provider sessions, and
 experiment files persist across turns.
 
 The Agent manages **execution and conversation history**.
-[VibeSim](https://github.com/SyFI-VibeSim/VibeSim) supplies the simulator and
-Analyzer; [VibeSimUI](https://github.com/SyFI-VibeSim/VibeSimUI) provides the
+[ServingStudio Sim](https://github.com/SyFI-ServingStudio/ServingStudioSim) supplies the simulator and
+Analyzer; [ServingStudio UI](https://github.com/SyFI-ServingStudio/ServingStudioUI) provides the
 browser interface.
 
 ## 📣 News
 
-- **September 2026:** VibeSim Agent is now available!
+- **September 2026:** ServingStudio Agent is now available!
 
 ---
 
@@ -59,7 +59,7 @@ browser interface.
 ## 🗂️ Repository map
 
 ```text
-VibeSimAgent/
+ServingStudioAgent/
 ├── vibesim_agent/
 │   ├── api/          HTTP routes and streamed events
 │   ├── services/     Conversations, turns, jobs, and workspace lifecycle
@@ -83,17 +83,17 @@ VibeSimAgent/
 ## 🚀 Quick start
 
 > [!TIP]
-> **Recommended: set up through [VibeSimWorkspace](https://github.com/SyFI-VibeSim/VibeSimWorkspace).**
+> **Recommended: set up through [ServingStudio](https://github.com/SyFI-ServingStudio/ServingStudio).**
 > It pins compatible Agent, simulator, and UI revisions and provides shared
 > build and service commands. Follow its
-> [setup guide](https://github.com/SyFI-VibeSim/VibeSimWorkspace/blob/main/reproduce.md)
+> [setup guide](https://github.com/SyFI-ServingStudio/ServingStudio/blob/main/reproduce.md)
 > for the complete application.
 
 ### Requirements
 
 - **Linux**, **Git**, and **Python 3.12** managed by **uv**.
 - **Docker Engine** with daemon access and a prepared Agent runner image.
-- A **VibeSim checkout** and a writable directory for persistent workspace state.
+- A **ServingStudio Sim checkout** and a writable directory for persistent workspace state.
 - At least one configured **Codex or Claude connection** with valid credentials.
 - An **Analyzer service** reachable from the runner containers.
 - NVIDIA Container Toolkit and compatible GPUs when experiments require GPU
@@ -104,8 +104,8 @@ VibeSimAgent/
 For a standalone Agent checkout:
 
 ```bash
-git clone https://github.com/SyFI-VibeSim/VibeSimAgent.git
-cd VibeSimAgent
+git clone https://github.com/SyFI-ServingStudio/ServingStudioAgent.git
+cd ServingStudioAgent
 uv sync --frozen
 
 cp examples/providers.yaml providers.yaml
@@ -123,7 +123,7 @@ Inspect the supported service and runner settings:
 uv run --frozen python -m vibesim_agent env-reference
 ```
 
-Set `VIBESIM_AGENT_MAIN_DIR` to the absolute VibeSim checkout path and
+Set `VIBESIM_AGENT_MAIN_DIR` to the absolute ServingStudio Sim checkout path and
 `VIBESIM_AGENT_WORKSPACES_ROOT` to an absolute state path outside that checkout.
 For fresh initialization, the state directory must not already exist.
 
@@ -145,7 +145,7 @@ uv run --frozen python -m vibesim_agent serve
 
 Build the image once, initialize fresh state once, and use `serve` for subsequent
 starts. Serving does not build the image or launch the browser UI. Configure
-Analyzer with the state directory's `registry.json` and connect VibeSimUI to this
+Analyzer with the state directory's `registry.json` and connect ServingStudio UI to this
 service. The workspace setup guide provides coordinated startup commands.
 
 Existing deployments should follow the [migration guide](doc/migration-v1.md)
@@ -153,7 +153,7 @@ and [cutover guide](doc/cutover.md) before changing their state directory.
 
 ### 3. Start an experiment
 
-In VibeSimUI, choose a workspace, create a conversation, and select your provider
+In ServingStudio UI, choose a workspace, create a conversation, and select your provider
 and execution mode. A first task could be:
 
 > Run the included Llama 3 8B smoke simulation and summarize request completion,

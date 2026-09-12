@@ -47,7 +47,7 @@ _main_tree_copy_tracked_files() {
 
 # copy_main_tree <main_dir> <destination_root>
 #
-# Copies VibeSim/'s tracked files plus the tracked files of every submodule that is
+# Copies ServingStudioSim/'s tracked files plus the tracked files of every submodule that is
 # not in MAIN_TREE_SKIPPED_SUBMODULES. Fails loudly on an uninitialized
 # submodule rather than producing a tree that cannot build.
 copy_main_tree() {

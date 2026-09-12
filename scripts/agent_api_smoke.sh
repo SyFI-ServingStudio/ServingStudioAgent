@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end smoke for the VibeSim agent HTTP API.
+# End-to-end smoke for the ServingStudioSim agent HTTP API.
 #
 # Exercises: GET /api/agent/v1/tools/skill, POST /api/agent/v1/tools/eval (read-only prompt), and workspace-scoped
 # artifact list/download. When an API token is set it also asserts that a
@@ -17,7 +17,7 @@ set -euo pipefail
 
 BASE="${1:-${VIBESIM_BASE_URL:-http://127.0.0.1:8765}}"
 TOKEN="${VIBESIM_AGENT_API_TOKEN-${VIBESIM_API_TOKEN:-}}"
-PROMPT="${SMOKE_PROMPT:-List the available VibeSim L1 profilers.}"
+PROMPT="${SMOKE_PROMPT:-List the available ServingStudioSim L1 profilers.}"
 
 AUTH=()
 if [ -n "$TOKEN" ]; then
@@ -29,7 +29,7 @@ json_get() { uv run python -c 'import sys,json; d=json.load(sys.stdin); print(d'
 
 echo "== 1. GET /api/agent/v1/tools/skill (public) =="
 skill="$(curl -fsS "$BASE/api/agent/v1/tools/skill")"
-echo "$skill" | grep -q "VibeSim Agent API" && echo "  ok: skill doc served"
+echo "$skill" | grep -q "ServingStudio Agent API" && echo "  ok: skill doc served"
 
 if [ -n "$TOKEN" ]; then
   echo "== 1b. POST /api/agent/v1/tools/eval without token -> expect 401 =="

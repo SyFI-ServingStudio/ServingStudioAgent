@@ -36,7 +36,7 @@ class ApiSmokeAuthTests(unittest.TestCase):
                         "with open(os.environ['SMOKE_REQUESTS'], 'a') as out:\n"
                         "    out.write(json.dumps(args) + '\\n')\n"
                         "if args[-1].endswith('/tools/skill'):\n"
-                        "    print('VibeSim Agent API')\n"
+                        "    print('ServingStudio Agent API')\n"
                         "elif '%{http_code}' in args:\n"
                         "    print('401')\n"
                         "else:\n"

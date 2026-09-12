@@ -1,16 +1,16 @@
 ---
 name: use-vibesim
-description: Use the hosted VibeSim Agent API for ML-serving simulation, timing prediction, kernel/GPU queries, analyzer work, model exploration, and simulator extension. Use when an external agent needs a durable VibeSim workspace, one or more multi-turn conversations, generated simulation artifacts, or Analyzer-backed performance evidence.
+description: Use the hosted ServingStudio Agent API for ML-serving simulation, timing prediction, kernel/GPU queries, analyzer work, model exploration, and simulator extension. Use when an external agent needs a durable ServingStudio Sim workspace, one or more multi-turn conversations, generated simulation artifacts, or Analyzer-backed performance evidence.
 ---
 
-# VibeSim — Agent Skill
+# ServingStudio Sim — Agent Skill
 
-**This is a skill for other agents.** It tells you *what VibeSim can do*, *when to
+**This is a skill for other agents.** It tells you *what ServingStudio Sim can do*, *when to
 reach for it*, *what to expect when you do*, and *how to call it* over plain HTTP.
 It is served live at `GET /api/agent/v1/tools/skill`, so you can fetch this one URL and start
-driving VibeSim with no framework-specific glue.
+driving ServingStudio Sim with no framework-specific glue.
 
-VibeSim (a.k.a. VibeSim) is a **discrete-event simulator for ML serving/training
+ServingStudio Sim (a.k.a. ServingStudio Sim) is a **discrete-event simulator for ML serving/training
 workloads**. It predicts the performance of an LLM inference *deployment* from
 **measured GPU kernel costs** — not from a real serving run. You do not call
 low-level functions; you talk to an interactive assistant that plans the work,
@@ -19,7 +19,7 @@ and returns a written answer plus any artifacts (logs, JSON, plots) it produced.
 
 ---
 
-## 1. What VibeSim can do
+## 1. What ServingStudio Sim can do
 
 | Capability | What it gives you | Typical ask |
 |---|---|---|
@@ -31,11 +31,11 @@ and returns a written answer plus any artifacts (logs, JSON, plots) it produced.
 | **Understand a model** | Architecture summary: layers, heads, hidden dim, context, MoE layout. | "Summarize Qwen-3.6 27B's architecture." |
 | **Extend the simulator** | Add a new L1 kernel, or a whole new model architecture, so future sims can cost it. | "GLM-5.2's DSA attention isn't covered — add support so sims can use measured costs." |
 | **Run / extend the analyzer** | Metric reports + plots (attention breakdown, throughput, etc.) from a run directory. | "Re-run the analyzer on logs/<run> and summarize the attention time breakdown." |
-| **Align against a real framework** | Compare VibeSim's predictions to vLLM (kernel timing, duty cycle, TTFT/TPOT). | "How well does VibeSim match vLLM for Llama-3-8B decode?" |
+| **Align against a real framework** | Compare ServingStudio Sim's predictions to vLLM (kernel timing, duty cycle, TTFT/TPOT). | "How well does ServingStudio Sim match vLLM for Llama-3-8B decode?" |
 
 ---
 
-## 2. When to call VibeSim
+## 2. When to call ServingStudio Sim
 
 Route a task here when you need any of:
 
@@ -49,18 +49,18 @@ Route a task here when you need any of:
 
 Do **not** route here when:
 
-- You want a **real serving benchmark** on a live cluster — VibeSim predicts, it
+- You want a **real serving benchmark** on a live cluster — ServingStudio Sim predicts, it
   does not serve traffic.
 - You need a **general coding assistant** unrelated to ML-serving simulation.
 - You want authoritative numbers for a **kernel/GPU that has never been measured**
-  — VibeSim can *add* that coverage (a profiling/kernel task), but it will not
+  — ServingStudio Sim can *add* that coverage (a profiling/kernel task), but it will not
   invent an unmeasured number.
 
 ---
 
 ## 3. What to expect
 
-VibeSim is an **interactive assistant**, not a fire-and-forget function. Plan for:
+ServingStudio Sim is an **interactive assistant**, not a fire-and-forget function. Plan for:
 
 - **It may ask you clarifying questions.** In the default (non-autonomous) mode
   the assistant will stop and ask when a request is ambiguous, risky, or needs a

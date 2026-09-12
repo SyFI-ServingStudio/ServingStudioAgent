@@ -1,7 +1,7 @@
 # Agent Architecture
 
 Agent owns durable workspace, conversation, turn and managed-job lifecycle.
-VibeSimUI owns browser presentation. Rust Analyzer owns numerical results and
+ServingStudio UI owns browser presentation. Rust Analyzer owns numerical results and
 resource catalogs; Agent links to those results by stable resource identity.
 
 ## Component Boundaries

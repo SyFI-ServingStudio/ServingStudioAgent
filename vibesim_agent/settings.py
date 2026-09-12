@@ -42,7 +42,7 @@ class AgentSettings(ConfigModel):
     repo_root: Path = Field(
         description="Agent source checkout", json_schema_extra={"env": False}
     )
-    main_dir: Path = Field(description="Source VibeSim checkout")
+    main_dir: Path = Field(description="Source ServingStudioSim checkout")
     workspaces_root: Path = Field(description="Workspace registry and durable state")
     bind: str = Field(
         default="127.0.0.1", min_length=1, description="HTTP bind address"
@@ -276,7 +276,7 @@ def load_settings(
         environment,
         {
             "repo_root": root,
-            "main_dir": root.parent / "VibeSim",
+            "main_dir": root.parent / "ServingStudioSim",
             "workspaces_root": root.parent / "agent-workspaces",
         },
         host_paths=("main_dir", "workspaces_root"),

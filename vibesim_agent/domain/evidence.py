@@ -160,7 +160,7 @@ class CitationDictionaryEntry(BaseModel):
     @model_validator(mode="after")
     def validate_token_and_target(self) -> "CitationDictionaryEntry":
         if _CITATION_TOKEN.fullmatch(self.token) is None:
-            raise ValueError("citation token does not match VibeSim Citation DSL v2")
+            raise ValueError("citation token does not match ServingStudioSim Citation DSL v2")
         return self
 
 

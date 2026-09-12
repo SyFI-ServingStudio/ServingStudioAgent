@@ -7,7 +7,7 @@ directories. See [Migration](migration-v1.md) for converter and startup formats.
 
 ## Prepare
 
-Record the Agent, VibeSim launcher and VibeSimUI revisions, immutable runner image,
+Record the Agent, ServingStudio Sim launcher and ServingStudio UI revisions, immutable runner image,
 dependency lock hashes, Analyzer executable and service configuration. Validate
 their integration before admitting production writes. Existing copied launchers
 still require the [legacy callback aliases](managed-jobs.md).

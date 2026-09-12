@@ -1,11 +1,11 @@
 # Service Operations
 
-VibeSim Agent runs Codex and Claude Code in Docker and owns durable workspaces,
-conversations, turns, provider sessions and managed jobs. VibeSimUI is the browser
+ServingStudio Agent runs Codex and Claude Code in Docker and owns durable workspaces,
+conversations, turns, provider sessions and managed jobs. ServingStudio UI is the browser
 application; Rust Analyzer owns numerical results and their catalogs.
 
 `run.sh` starts the `vibesim_agent` service. The browser application lives in
-VibeSimUI. See [Architecture](architecture.md) for component ownership and
+ServingStudio UI. See [Architecture](architecture.md) for component ownership and
 [Deployment Cutover](cutover.md) when replacing a legacy deployment.
 
 For workspace setup, use the parent workspace's `README.md` and `reproduce.md`.
@@ -21,7 +21,7 @@ commands. Starting the service does not build the UI or a runner image.
 uv run --frozen python -m vibesim_agent env-reference
 ```
 
-For fresh state, set `VIBESIM_AGENT_MAIN_DIR` to the absolute VibeSim checkout
+For fresh state, set `VIBESIM_AGENT_MAIN_DIR` to the absolute ServingStudio Sim checkout
 path and `VIBESIM_AGENT_WORKSPACES_ROOT` to a new absolute directory outside that
 checkout. Initialization creates the external `w_main` descriptor, current
 SQLite schema and registry index; it does not copy or modify the main checkout
@@ -178,7 +178,7 @@ compatibility checks. Browser compatibility names such as `codex_runtime` and
 Managed simulation, timing prediction, kernel profile and kernel measurement jobs
 share the new registration/status endpoints. Existing workspace launchers retain
 their legacy callback aliases. These callbacks use a turn-scoped capability;
-they do not use the tools API token. Deploy the companion VibeSim launcher changes
+they do not use the tools API token. Deploy the companion ServingStudio Sim launcher changes
 with this service. See [Managed Job Callbacks](managed-jobs.md).
 
 ## Configuration
@@ -226,4 +226,4 @@ importing a legacy backend. Legacy snapshot tools require a separately retained
 source checkout; they do not inventory the current router-based application.
 
 [Browser acceptance](browser-acceptance.md) describes integration checks for
-VibeSimUI, Agent and Analyzer.
+ServingStudio UI, Agent and Analyzer.

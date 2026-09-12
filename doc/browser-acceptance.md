@@ -1,6 +1,6 @@
 # Browser Integration Validation
 
-Run these checks against VibeSimUI, Agent and a compatible Rust Analyzer using an
+Run these checks against ServingStudio UI, Agent and a compatible Rust Analyzer using an
 isolated workspace. This document defines validation scope, not a record of a
 particular deployment's results. Record exact revisions, configuration, commands
 and observed outcomes separately.

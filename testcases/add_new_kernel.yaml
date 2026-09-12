@@ -1,26 +1,26 @@
 topic: add_new_kernel
-description: User-facing prompts for adding new VibeSim L1 kernels. These cases currently draft only the user question; answer rubrics will be filled in later.
+description: User-facing prompts for adding new ServingStudioSim L1 kernels. These cases currently draft only the user question; answer rubrics will be filled in later.
 defaults:
   sandbox: workspace-write
   autonomous: true
 cases:
   - id: add_layernorm_fp8
-    question: "I want to use FP8 LayerNorm in upcoming VibeSim runs, but the simulator does not know its runtime cost yet. Can you add support for measuring that kernel and making the measured cost available to simulations?"
+    question: "I want to use FP8 LayerNorm in upcoming ServingStudioSim runs, but the simulator does not know its runtime cost yet. Can you add support for measuring that kernel and making the measured cost available to simulations?"
     requirements:
       gpu: H200
 
   - id: compare_rmsnorm_fp16_fp8_add_missing
-    question: "I am looking at Llama 3 8B and want to know whether FP8 RMSNorm is faster than FP16 RMSNorm. Can you compare their latency in VibeSim, and if the simulator is missing either measured cost, add the missing support first?"
+    question: "I am looking at Llama 3 8B and want to know whether FP8 RMSNorm is faster than FP16 RMSNorm. Can you compare their latency in ServingStudioSim, and if the simulator is missing either measured cost, add the missing support first?"
     requirements:
       gpu: H200
 
   - id: add_convolution_fp16
-    question: "I am planning to run simulations that include FP16 convolution work. Can you add support so VibeSim can measure that kernel and use the resulting cost during simulation?"
+    question: "I am planning to run simulations that include FP16 convolution work. Can you add support so ServingStudioSim can measure that kernel and use the resulting cost during simulation?"
     requirements:
       gpu: H200
 
   - id: add_glm52_dsa_attention
-    question: "I want to simulate GLM-5.2, and its DSA attention cost is not covered in VibeSim yet. Can you add support for that attention kernel so simulations can use measured costs?"
+    question: "I want to simulate GLM-5.2, and its DSA attention cost is not covered in ServingStudioSim yet. Can you add support for that attention kernel so simulations can use measured costs?"
     requirements:
       gpu: H200
 

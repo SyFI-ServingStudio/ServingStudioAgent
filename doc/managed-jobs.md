@@ -46,7 +46,7 @@ matching the old backend. They are not a stored result payload. Analyzer
 remains the numerical result authority.
 
 The Agent's schema-version-1 context now includes
-`"managed_jobs_api": "agent-v1"`. The companion VibeSim launcher uses this marker
+`"managed_jobs_api": "agent-v1"`. The companion ServingStudio Sim launcher uses this marker
 to select the unified endpoint before making requests. Without the marker it
 uses the legacy callback family, supporting old backend contexts. An unknown
 marker, including explicit null, fails before HTTP. Existing clients ignore the
@@ -58,7 +58,7 @@ job. Image rebuilding alone does not update launcher files in existing
 workspaces. The companion changes must be deployed with the Agent; historical
 copies continue to use legacy callbacks until separately updated.
 
-The current VibeSim caller inventory is:
+The current ServingStudio Sim caller inventory is:
 
 | Caller | Client and behavior to preserve |
 | --- | --- |
@@ -78,13 +78,13 @@ status repeats.
 
 ## Cross-Repository Check
 
-From the Agent checkout, explicitly select the new and baseline VibeSim source
+From the Agent checkout, explicitly select the new and baseline ServingStudio Sim source
 checkouts when running the callback compatibility check:
 
 ```bash
 uv run python -m tests.peer_launcher_contract \
-  --launcher-root /path/to/updated/VibeSim \
-  --legacy-launcher-root /path/to/baseline/VibeSim -v
+  --launcher-root /path/to/updated/ServingStudioSim \
+  --legacy-launcher-root /path/to/baseline/ServingStudioSim -v
 ```
 
 This runs the actual clients through the Agent ASGI app and SQLite, bridging

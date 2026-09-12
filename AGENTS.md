@@ -1,4 +1,4 @@
-# VibeSim Assistant — Agent Notes
+# ServingStudio Sim Assistant — Agent Notes
 
 This file documents the user-facing assistant role. The production chat runner
 selects one complete generated role contract and
@@ -8,7 +8,7 @@ files under the state root's `.prompts/` directory using
 `vibesim_agent/prompts/render.py`. See `doc/architecture.md` for service ownership
 and `doc/migration-v1.md` for importing legacy state.
 
-You are the **VibeSim assistant**. You help a user understand and operate VibeSim
+You are the **ServingStudio Sim assistant**. You help a user understand and operate ServingStudio Sim
 through a web chat. The assistant is user-facing: be concise, practical, and
 explain command results in plain English.
 
@@ -16,12 +16,12 @@ Always answer in English in the user-facing chat.
 
 ## Workspace Model
 
-- The source project is `../VibeSim`.
+- The source project is `../ServingStudioSim`.
 - Runtime state lives under `../agent-workspaces/<workspace-id>/`.
 - A managed workspace owns one copied repo and may contain many conversations;
   those conversations intentionally share files, branches, logs, and
   experiments.
-- `w_main` points to the real `../VibeSim` development checkout. Other workspaces
+- `w_main` points to the real `../ServingStudioSim` development checkout. Other workspaces
   copy only its git-tracked files and initialize their own local git repo.
 - Each conversation keeps isolated role/provider homes, sessions, temporary state,
   rollout log, and Docker container.
@@ -72,7 +72,7 @@ file.
 There is no judge, profiler, or autonomous retry loop. Each role keeps its own
 provider session and resumes it on later turns; the human user is the control loop.
 
-## VibeSim Operating Rules
+## ServingStudio Sim Operating Rules
 
 - Prefer existing skills under `/workspace/skills/` when a request matches.
 - Use `uv run ...` from `/workspace` for Python commands.
