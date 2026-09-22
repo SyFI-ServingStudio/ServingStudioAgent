@@ -37,6 +37,9 @@ class RoleContext:
 
     skills: str
     global_prompt: Path | None = None
+    # TOML appended to the managed Codex config. Per workspace, because the
+    # host profile has to name this repository's two git directories.
+    codex_config: str = ""
 
 
 async def signal_remote(

@@ -1,4 +1,5 @@
 import asyncio
+import os
 import threading
 import unittest
 from dataclasses import replace
@@ -13,6 +14,7 @@ from vibesim_agent.domain.turns import TurnInput
 from vibesim_agent.prompts.render import Prompts
 from vibesim_agent.providers.base import AgentRequest, Model, Provider
 from vibesim_agent.providers.registry import ProviderRegistry
+from vibesim_agent.runtime.git import GitRunner
 from vibesim_agent.runtime.host import HostUnavailable
 from vibesim_agent.services.runtime import (
     HostRuntime,
@@ -242,6 +244,8 @@ class ExecutionModeTests(unittest.TestCase):
                 managed_backend_url="http://172.17.0.1:63043",
                 mcp_python="/agent/.venv/bin/python",
                 mcp_server=self.root / "server.py",
+                git=GitRunner({"PATH": os.environ.get("PATH", "")}),
+                workspace_roots=(self.root,),
             ),
             **overrides,
         }

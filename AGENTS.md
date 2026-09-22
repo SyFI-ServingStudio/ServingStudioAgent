@@ -78,6 +78,12 @@ directory is shared by every worktree, so an agent able to commit in one
 worktree can also rewrite shared refs and objects and delete other branches.
 That is inherent to committing from a worktree and cannot be fixed in a profile.
 
+The profile also grants a few directories outside the tree, because `uv run`
+and the profiling environments need them: `$TMPDIR`, `$UV_CACHE_DIR`,
+`~/.cargo` and `~/profile_envs`. Anything nested under one of those becomes
+writable, so `VIBESIM_AGENT_WORKTREE_ROOT` must not point inside them — the
+sibling-worktree boundary depends on the worktrees living somewhere else.
+
 The versions also differ. The container pins its CLIs in `runner.Dockerfile`;
 the host uses whatever is on `PATH`, so one `npm i -g` can silently move host
 turns onto a Codex with different permission semantics. The readiness check logs

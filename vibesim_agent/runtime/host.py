@@ -17,7 +17,7 @@ import re
 import shutil
 import signal
 import subprocess
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 # What `docker/runner.Dockerfile` installs. Kept here rather than imported from
@@ -92,6 +92,33 @@ def _version(path, *, run) -> str | None:
     if key not in _versions:
         _versions[key] = _read_version(path, run=run)
     return _versions[key]
+
+
+# Where a host turn writes outside its worktree. `:workspace` grants the tree
+# and nothing else, so `uv run` fails on its own cache and profiling fails on
+# its environments unless these are named. Derived from the backend's own
+# environment rather than configured: they are the same values this process
+# already uses, and a deployment that had to declare them would get it wrong.
+ROOT_VARIABLES = ("TMPDIR", "UV_CACHE_DIR", "CARGO_HOME")
+ROOT_HOME_DIRECTORIES = (".cargo", "profile_envs")
+
+
+def host_workspace_roots(environment: Mapping[str, str]) -> tuple[Path, ...]:
+    candidates = [
+        Path(environment[name]) for name in ROOT_VARIABLES if environment.get(name)
+    ]
+    home = environment.get("HOME")
+    if home:
+        candidates.extend(Path(home) / name for name in ROOT_HOME_DIRECTORIES)
+    return tuple(
+        dict.fromkeys(
+            # Only real directories: a path that does not exist grants nothing
+            # and makes the profile harder to read than it already is.
+            path
+            for path in candidates
+            if path.is_absolute() and path.is_dir()
+        )
+    )
 
 
 PGID_SUFFIX = ".pgid"

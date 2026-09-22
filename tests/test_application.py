@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import sqlite3
 import unittest
 from pathlib import Path
@@ -19,6 +21,20 @@ from vibesim_agent.settings import ProviderSettings, Settings
 from vibesim_agent.storage.database import Database, SchemaMismatch
 
 
+def git_init(repo):
+    subprocess.run(
+        ["git", "-C", str(repo), "init", "--template=", "-q"],
+        env={
+            **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+        },
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+
 class ApplicationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.root = Path(self.enterContext(TemporaryDirectory()))
@@ -28,6 +44,10 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.repo.mkdir()
         (self.repo / "AGENTS.md").write_text("workspace instructions")
         (self.repo / "uv.lock").write_text("lock contents")
+        # `w_main` is external, so its turns run on the host and the Codex
+        # permission profile is built from this repository's own git
+        # directories. A plain directory would have none.
+        git_init(self.repo)
         self.mcp = self.root / "mcp"
         self.mcp.mkdir()
         (self.state / "workspace.json").write_text(

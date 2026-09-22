@@ -13,6 +13,7 @@ from tests.runtime_fixtures import agent_request, docker_execution, execution_en
 from vibesim_agent.runtime.execution import PID_WRAPPER, DockerExecution, HostExecution
 from vibesim_agent.runtime.host import reap_process_groups
 from vibesim_agent.runtime.invocation import STOP_TIMEOUT, HostInvocation, InvocationHome
+from vibesim_agent.runtime.permissions import host_permissions
 from vibesim_agent.runtime.process import kill_process_group
 
 
@@ -150,6 +151,10 @@ class HostExecutionTests(unittest.TestCase):
                 "managed_backend_url": "http://172.17.0.1:63043",
                 "mcp_python": "/trees/wt-topic/.venv/bin/python",
                 "mcp_server": "/agent/vibesim_agent/analyzer_evidence_mcp/server.py",
+                "permissions": host_permissions(
+                    git_dir=Path("/trees/wt-topic/.git"),
+                    git_common_dir=Path("/base/.git"),
+                ),
                 **overrides,
             }
         )

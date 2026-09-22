@@ -17,6 +17,7 @@ from ..providers.base import AgentRequest
 from ..providers.registry import ProviderRegistry
 from ..runtime.container import ContainerManager, ContainerSpec
 from ..runtime.execution import DockerExecution, Execution, HostExecution
+from ..runtime.git import GitRunner
 from ..runtime.homes import role_home
 from ..runtime.host import check_host_binaries, reap_process_groups
 from ..runtime.invocation import InvocationHome, RoleContext
@@ -27,6 +28,7 @@ from ..runtime.mounts import (
     managed_context_target,
     workspace_mounts,
 )
+from ..runtime.permissions import host_permissions
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,14 @@ class HostRuntime:
     managed_backend_url: str
     mcp_python: str
     mcp_server: Path
+    git: GitRunner
+    # Directories outside the worktree that a turn legitimately writes: the
+    # cache and temporary roots `uv run` needs, and the profiling environments.
+    workspace_roots: tuple[Path, ...] = ()
+    # Granting the Docker socket is equivalent to granting root. It is here
+    # because 57 of the 81 profiled kernels run through a containerized
+    # environment, which is the main reason host execution exists at all.
+    unix_sockets: tuple[str, ...] = ("/var/run/docker.sock",)
 
 
 class RuntimeService:
@@ -193,11 +203,21 @@ class RuntimeService:
             logger=self.logger,
         )
         environment = self.containers.environment
+        permissions = host_permissions(
+            # Absolute, and asked of this repository: in a worktree `.git` is a
+            # file pointing outside the tree, and the profile has to name the
+            # real directories or `git commit` fails on a read-only index.lock.
+            git_dir=Path(self._git(workspace.repo, "--absolute-git-dir")),
+            git_common_dir=self._common_dir(workspace.repo),
+            workspace_roots=self.host.workspace_roots,
+            unix_sockets=self.host.unix_sockets,
+        )
         context = RoleContext(
             skills=str(workspace.repo / "skills"),
             # Only the host delivers the contract this way. In a container it
             # arrives as a mount over the workspace's own AGENTS.md instead.
             global_prompt=prompt,
+            codex_config=permissions.config,
         )
         for _, _, provision, home in active:
             provision.prepare(home, context)
@@ -214,7 +234,19 @@ class RuntimeService:
             managed_backend_url=self.host.managed_backend_url,
             mcp_python=self.host.mcp_python,
             mcp_server=str(self.host.mcp_server),
+            permissions=permissions,
         )
+
+    def _git(self, repo: Path, *arguments: str) -> str:
+        # `GitRunner` returns stdout verbatim, and a trailing newline inside a
+        # TOML key would produce a profile Codex refuses to load.
+        return self.host.git(repo, "rev-parse", *arguments).strip()
+
+    def _common_dir(self, repo: Path) -> Path:
+        # `--git-common-dir` is relative to the repository unless it is already
+        # absolute, and the profile only accepts absolute paths.
+        common = Path(self._git(repo, "--git-common-dir"))
+        return common if common.is_absolute() else (repo / common).resolve()
 
     def _container(self, request, workspace, active, directory, prompt) -> Execution:
         mounts = list(

@@ -20,6 +20,7 @@ from .invocation import (
     signal_remote,
 )
 from .mounts import WORKSPACE_TARGET
+from .permissions import CONTAINER_PERMISSIONS, CodexPermissions
 from .process import KillProcess, kill_process, kill_process_group
 
 # The pid file is written by the process itself rather than read from the
@@ -64,6 +65,7 @@ class Execution(Protocol):
     analyzer_source: str
     analyzer_base_url: str
     managed_backend_url: str
+    permissions: CodexPermissions
     stop_timeout: float
     start_new_session: bool
     kill: KillProcess
@@ -108,6 +110,7 @@ class DockerExecution:
     # interpreter has to come from the turn rather than from the command builder.
     mcp_python: str = "/opt/vibesim-analyzer-mcp-venv/bin/python"
     mcp_server: str = "/opt/vibesim/analyzer-evidence-mcp/server.py"
+    permissions: CodexPermissions = CONTAINER_PERMISSIONS
     stop_timeout: float = STOP_TIMEOUT
     # The CLI leads no group of its own: it is a `docker exec` client, and the
     # process that matters lives in the container where killpg cannot reach.
@@ -232,6 +235,7 @@ class HostExecution:
     managed_backend_url: str
     mcp_python: str
     mcp_server: str
+    permissions: CodexPermissions
 
     stop_timeout: float = STOP_TIMEOUT
     # The CLI is the process, so it leads its own group and the group is what

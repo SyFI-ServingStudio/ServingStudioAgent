@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ...runtime.invocation import InvocationHome, RoleContext
+from ...runtime.permissions import reject_retired_settings
 
 PROFILE_ENTRIES = (
     "auth.json",
@@ -46,6 +47,18 @@ class CodexProfile:
                 shutil.copytree(entry, target)
             elif entry.is_file():
                 shutil.copy2(entry, target)
+        # The user's whole `config.toml` is copied in above, so a `sandbox_mode`
+        # they added for themselves would silently switch Codex back to the
+        # retired permission system and take the profile with it.
+        config = home.host / "config.toml"
+        existing = config.read_text() if config.is_file() else ""
+        reject_retired_settings(existing)
+        if context.codex_config:
+            reject_retired_settings(context.codex_config)
+            config.write_text(
+                existing + ("\n" if existing and not existing.endswith("\n") else "")
+                + "\n" + context.codex_config
+            )
         # `PROFILE_ENTRIES` does not include AGENTS.md, so this slot is free.
         # Codex reads `$CODEX_HOME/AGENTS.md` as global instructions, which is
         # how the role contract reaches a host turn -- additively, alongside the

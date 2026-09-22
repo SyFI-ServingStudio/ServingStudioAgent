@@ -24,7 +24,9 @@ from .providers.base import AgentRequest
 from .providers.registry import ProviderRegistry
 from .runtime.command import ExecutionEnvironment
 from .runtime.container import ContainerManager
+from .runtime.git import GitRunner
 from .runtime.homes import role_home
+from .runtime.host import host_workspace_roots
 from .runtime.invocation import InvocationHome
 from .runtime.mounts import PROMPTS_TARGET, managed_context_target
 from .runtime.workspace import WorkspaceSnapshot
@@ -219,6 +221,8 @@ def build_application(
                 settings.agent.repo_root
                 / "vibesim_agent/analyzer_evidence_mcp/server.py"
             ),
+            git=GitRunner(workspace_environment or {}),
+            workspace_roots=host_workspace_roots(workspace_environment or {}),
         ),
     )
     driver = ConversationDriver(
