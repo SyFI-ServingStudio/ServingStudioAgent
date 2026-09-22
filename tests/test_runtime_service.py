@@ -22,6 +22,7 @@ from vibesim_agent.services.runtime import (
     RuntimeService,
     WorkspaceRuntime,
 )
+from tests.test_application import git_init
 from vibesim_agent.settings import ProviderSettings
 
 
@@ -222,7 +223,13 @@ class RuntimeServiceTests(unittest.IsolatedAsyncioTestCase):
 class ExecutionModeTests(unittest.TestCase):
     """The one branch: a copy of the tracked files, or a real git tree."""
 
-    setUp = RuntimeServiceTests.setUp
+    def setUp(self):
+        RuntimeServiceTests.setUp(self)
+        # A real repository, because the host branch asks git where this tree's
+        # `.git` is. Without the `init` the answer came from whichever ancestor
+        # of the temporary directory happened to be a checkout -- which passed
+        # only while TMPDIR sat inside this workspace.
+        git_init(self.repo)
 
     def service(self, storage_kind, **overrides):
         state = self.root / "state"
@@ -282,6 +289,11 @@ class ExecutionModeTests(unittest.TestCase):
         self.assertEqual(execution.analyzer_base_url, "http://172.17.0.1:63044")
         self.assertEqual(execution.managed_backend_url, "http://172.17.0.1:63043")
         self.assertEqual(execution.mcp_server, str(self.root / "server.py"))
+        # Where the role schemas are, from the CLI's side. Codex is handed this
+        # path verbatim as `--output-schema`, and the container's mount target
+        # is a file that does not exist out here: a host turn built with it
+        # exits before it reads its prompt.
+        self.assertEqual(execution.schema_directory, str(self.prompts.directory))
 
     def test_the_host_contract_reaches_the_role_homes_and_the_repo_skills(self):
         contexts = []

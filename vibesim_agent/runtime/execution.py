@@ -19,7 +19,7 @@ from .invocation import (
     RemoteInvocation,
     signal_remote,
 )
-from .mounts import WORKSPACE_TARGET
+from .mounts import PROMPTS_TARGET, WORKSPACE_TARGET
 from .permissions import CONTAINER_PERMISSIONS, CodexPermissions
 from .process import KillProcess, kill_process, kill_process_group
 
@@ -59,6 +59,12 @@ class Execution(Protocol):
 
     cwd: Path | None
     agent_prompt: str
+    # Where the rendered role schemas are readable *from the CLI's side*. In a
+    # container that is the read-only mount; on the host it is the directory
+    # they were rendered into. Codex is handed the path verbatim
+    # (`--output-schema`), so a container path reaches a host turn as a file
+    # that does not exist and the CLI exits before it reads its prompt.
+    schema_directory: str
     managed_context: str
     mcp_python: str
     mcp_server: str
@@ -106,6 +112,7 @@ class DockerExecution:
 
     cwd: Path | None = None
     agent_prompt: str = str(PurePosixPath(WORKSPACE_TARGET) / "AGENTS.md")
+    schema_directory: str = str(PROMPTS_TARGET)
     # Baked into the runner image; on the host neither path exists, so the
     # interpreter has to come from the turn rather than from the command builder.
     mcp_python: str = "/opt/vibesim-analyzer-mcp-venv/bin/python"
@@ -229,6 +236,7 @@ class HostExecution:
 
     repo: Path
     agent_prompt: str
+    schema_directory: str
     managed_context: str
     analyzer_source: str
     analyzer_base_url: str

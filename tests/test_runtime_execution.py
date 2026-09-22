@@ -145,6 +145,7 @@ class HostExecutionTests(unittest.TestCase):
             **{
                 "repo": Path("/trees/wt-topic"),
                 "agent_prompt": "/state/prompts/AGENTS.md",
+                "schema_directory": "/state/prompts",
                 "managed_context": "/state/c/managed/context.json",
                 "analyzer_source": "external",
                 "analyzer_base_url": "http://172.17.0.1:63044",

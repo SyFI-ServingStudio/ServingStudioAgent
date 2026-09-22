@@ -28,7 +28,7 @@ from .runtime.git import GitRunner
 from .runtime.homes import role_home
 from .runtime.host import host_workspace_roots
 from .runtime.invocation import InvocationHome
-from .runtime.mounts import PROMPTS_TARGET, managed_context_target
+from .runtime.mounts import managed_context_target
 from .runtime.workspace import WorkspaceSnapshot
 from .runtime.worktree import WorktreeProvisioner
 from .services.artifacts import ArtifactService
@@ -230,7 +230,6 @@ def build_application(
         prompts,
         prepare=runtime.prepare,
         before_call=prepare_call,
-        schema_directory=Path(str(PROMPTS_TARGET)),
         after_turn=finish_turn,
     )
     naming = NamingService(

@@ -3,9 +3,11 @@ import json
 import logging
 import unittest
 from dataclasses import replace
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.runtime_fixtures import docker_execution
 from vibesim_agent.domain.conversations import RoleRuntime
 from vibesim_agent.domain.roles import AgentMode, Role, Sandbox
 from vibesim_agent.domain.turns import Outcome, TurnInput
@@ -87,7 +89,9 @@ class OrchestratedDriverTests(unittest.IsolatedAsyncioTestCase):
             )
 
         async def prepare(request):
-            return "container"
+            # An execution rather than a name: the driver reads the schema
+            # directory off it, because that path differs by mode.
+            return replace(docker_execution(), schema_directory="/contracts")
 
         async def before_call(request):
             pass
@@ -97,7 +101,6 @@ class OrchestratedDriverTests(unittest.IsolatedAsyncioTestCase):
             Prompts.prepare(root / "prompts"),
             prepare=prepare,
             before_call=before_call,
-            schema_directory=Path("/contracts"),
         )
         request = TurnInput(
             "w", "c", "t", "question", AgentMode.ORCHESTRATED, runtimes, {}, ""

@@ -228,6 +228,7 @@ class RuntimeService:
         return HostExecution(
             repo=workspace.repo,
             agent_prompt=str(prompt),
+            schema_directory=str(self.prompts.directory),
             managed_context=managed_context,
             analyzer_source=environment.agent.analyzer_source,
             analyzer_base_url=self.host.analyzer_base_url,

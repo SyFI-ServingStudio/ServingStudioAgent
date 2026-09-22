@@ -2,9 +2,11 @@ import json
 import logging
 import unittest
 from contextlib import aclosing
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tests.runtime_fixtures import docker_execution
 from vibesim_agent.domain.conversations import RoleRuntime
 from vibesim_agent.domain.roles import AgentMode, Role
 from vibesim_agent.domain.turns import Outcome, TurnInput, TurnResult
@@ -42,6 +44,31 @@ class ScriptedAdapter:
 
 
 class SingleDriverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_the_schema_path_comes_from_the_execution(self):
+        # Not from the driver: the same contract file is a read-only mount
+        # target in a container and a state-root path on the host, and Codex is
+        # handed whichever one this turn produced as `--output-schema`.
+        driver, adapter = self.driver(
+            [json.dumps({"action": "final_answer", "message": "done"})]
+        )
+        directory = Path(self.enterContext(TemporaryDirectory()))
+        database = Database.create(directory / "workspace.sqlite")
+        store = TurnStorage(
+            Conversations(database), Sessions(database), Turns(database)
+        )
+        store.conversations.create(
+            "c", agent_mode=AgentMode.SINGLE, runtimes=self.request().runtimes
+        )
+        service = TurnService(
+            lambda _: store, driver, logger=logging.getLogger("schema-test")
+        )
+        self.addAsyncCleanup(service.close)
+        await service.wait(service.start("w", "c", "question"))
+        [request] = adapter.requests
+        self.assertEqual(
+            request.output_schema, Path("/contracts/assistant.schema.json")
+        )
+
     async def test_service_driver_provider_storage_roundtrip_and_resume(self):
         driver, adapter = self.driver(
             [
@@ -97,7 +124,9 @@ class SingleDriverTests(unittest.IsolatedAsyncioTestCase):
         root = Path(self.enterContext(TemporaryDirectory()))
 
         async def prepare(request):
-            return "container"
+            # An execution rather than a name: the driver reads the schema
+            # directory off it, because that path differs by mode.
+            return replace(docker_execution(), schema_directory="/contracts")
 
         async def before_call(request):
             pass
@@ -107,7 +136,6 @@ class SingleDriverTests(unittest.IsolatedAsyncioTestCase):
             Prompts.prepare(root),
             prepare=prepare,
             before_call=before_call,
-            schema_directory=Path("/contracts"),
         ), adapter
 
     def request(self):

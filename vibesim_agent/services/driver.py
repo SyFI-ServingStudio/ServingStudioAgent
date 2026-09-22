@@ -31,14 +31,12 @@ class ConversationDriver:
         *,
         prepare: Callable[[TurnInput], Awaitable[Execution]],
         before_call: Callable[[AgentRequest], Awaitable[None]],
-        schema_directory: Path,
         after_turn: Callable[[TurnInput], None] | None = None,
     ):
         self.providers = providers
         self.prompts = prompts
         self.prepare = prepare
         self.before_call = before_call
-        self.schema_directory = schema_directory
         self.after_turn = after_turn
 
     def selection(self, request: TurnInput, role: Role) -> Selection:
@@ -83,7 +81,10 @@ class ConversationDriver:
             execution,
             selection,
             session_id=sessions.get(role),
-            output_schema=self.schema_directory / f"{role.value}.schema.json",
+            # From the execution: the same file is a mount target in a
+            # container and a state-root path on the host, and only the
+            # execution knows which side this turn is running on.
+            output_schema=Path(execution.schema_directory) / f"{role.value}.schema.json",
         )
         # Invalidate the previous role's ready state before preparation can yield.
         yield {"kind": "role_start", "role": role.value}
