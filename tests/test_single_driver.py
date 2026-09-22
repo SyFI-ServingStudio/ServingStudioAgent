@@ -69,6 +69,25 @@ class SingleDriverTests(unittest.IsolatedAsyncioTestCase):
             request.output_schema, Path("/contracts/assistant.schema.json")
         )
 
+    async def test_every_prompt_of_a_turn_names_the_paths_that_turn_can_see(self):
+        driver, adapter = self.driver(
+            [
+                "not JSON",
+                json.dumps({"action": "final_answer", "message": "done"}),
+            ]
+        )
+        host = Prompts.prepare(
+            Path(self.enterContext(TemporaryDirectory())), workspace=Path("/repo/wt")
+        )
+        driver.prompts_for = lambda request: host.bound(autonomous=request.autonomous)
+        [event async for event in driver.run(self.request())]
+        # The repair prompt too, not only the first: each one restates the
+        # contract and the plan files by path.
+        self.assertEqual(len(adapter.requests), 2)
+        for request in adapter.requests:
+            self.assertNotIn("/workspace", request.prompt)
+            self.assertIn("`/repo/wt/c_plan.md`", request.prompt)
+
     async def test_service_driver_provider_storage_roundtrip_and_resume(self):
         driver, adapter = self.driver(
             [

@@ -231,6 +231,7 @@ def build_application(
         prepare=runtime.prepare,
         before_call=prepare_call,
         after_turn=finish_turn,
+        prompts_for=runtime.prompts_for,
     )
     naming = NamingService(
         workspaces,

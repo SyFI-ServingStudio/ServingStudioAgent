@@ -183,7 +183,8 @@ class RuntimeService:
             if self.context_directory is not None
             else None
         )
-        prompt = self.prompts.contract_path(request.mode, request.autonomous)
+        prompts = self._prompts(workspace)
+        prompt = prompts.contract_path(request.mode, request.autonomous)
         if self.prepare_workspace is not None:
             prepared = Path(self.prepare_workspace(request.workspace_id))
             if prepared != workspace.repo:
@@ -192,10 +193,12 @@ class RuntimeService:
         # records: a copy of the tracked files runs in a container, a real git
         # tree runs here so that profiling, Slurm and Docker are reachable.
         if workspace.storage_kind == "external":
-            return self._host(workspace, active, directory=directory, prompt=prompt)
+            return self._host(
+                workspace, active, directory=directory, prompt=prompt, prompts=prompts
+            )
         return self._container(request, workspace, active, directory, prompt)
 
-    def _host(self, workspace, active, *, directory, prompt) -> Execution:
+    def _host(self, workspace, active, *, directory, prompt, prompts) -> Execution:
         if self.host is None:
             raise ValueError("host execution is not configured")
         check_host_binaries(
@@ -232,7 +235,7 @@ class RuntimeService:
         return HostExecution(
             repo=workspace.repo,
             agent_prompt=str(prompt),
-            schema_directory=str(self.prompts.directory),
+            schema_directory=str(prompts.directory),
             managed_context=managed_context,
             analyzer_source=environment.agent.analyzer_source,
             analyzer_base_url=self.host.analyzer_base_url,
@@ -241,6 +244,21 @@ class RuntimeService:
             mcp_server=str(self.host.mcp_server),
             permissions=permissions,
         )
+
+    def prompts_for(self, request: TurnInput) -> Prompts:
+        """The prompts a turn's roles are given, naming the paths they can see."""
+        return self._prompts(self.workspace(request.workspace_id)).bound(
+            autonomous=request.autonomous
+        )
+
+    def _prompts(self, workspace: WorkspaceRuntime) -> Prompts:
+        # A container sees every repository at `/workspace`, so one rendering
+        # serves them all. On the host that path is not the repository -- it
+        # may not exist, or may be someone else's -- so each workspace gets a
+        # rendering that names its own tree, kept with the workspace's state.
+        if workspace.storage_kind != "external":
+            return self.prompts
+        return Prompts.prepare(workspace.state / "prompts", workspace=workspace.repo)
 
     def _git(self, repo: Path, *arguments: str) -> str:
         # `GitRunner` returns stdout verbatim, and a trailing newline inside a

@@ -293,7 +293,32 @@ class ExecutionModeTests(unittest.TestCase):
         # path verbatim as `--output-schema`, and the container's mount target
         # is a file that does not exist out here: a host turn built with it
         # exits before it reads its prompt.
-        self.assertEqual(execution.schema_directory, str(self.prompts.directory))
+        self.assertEqual(
+            Path(execution.schema_directory), Path(execution.agent_prompt).parent
+        )
+        self.assertTrue(
+            (Path(execution.schema_directory) / "assistant.schema.json").is_file()
+        )
+
+    def test_a_host_turn_is_told_its_own_tree_rather_than_the_mount(self):
+        with patch("vibesim_agent.services.runtime.check_host_binaries"):
+            execution = self.prepare("external")
+        # `/workspace` is a mount target; on a host it is some other directory
+        # or none, and an agent told to work there works in the wrong tree.
+        contract = Path(execution.agent_prompt).read_text()
+        self.assertNotIn("/workspace", contract)
+        self.assertIn(f"`{self.repo}/skills/skill-of-skills/SKILL.md`", contract)
+        prompts = self.service("external").prompts_for(
+            replace(self.request, autonomous=True)
+        )
+        self.assertIn(
+            f"Read and follow `{Path(execution.agent_prompt).with_name('AGENTS.single.autonomous.md')}`",
+            prompts.role_text(Role.ASSISTANT),
+        )
+        self.assertIn(
+            f"Conversation plan: `{self.repo}/c_plan.md`.",
+            prompts.driver_contract(AgentMode.SINGLE, "c"),
+        )
 
     def test_the_host_contract_reaches_the_role_homes_and_the_repo_skills(self):
         contexts = []

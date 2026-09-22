@@ -62,12 +62,19 @@ class PromptBundleTests(unittest.TestCase):
                 for p in (Path(render.__file__).parent / "contracts").iterdir()
                 if p.is_file()
             }
-            self.assertEqual(set(sources), set(self.golden["contracts_sha256"]))
-            for name, source in sources.items():
-                expected = self.golden["contracts_sha256"][name]
-                self.assertEqual(
-                    hashlib.sha256(source.read_bytes()).hexdigest(), expected, name
-                )
+            # `implementer.txt` is rendered now, so that the host can name its
+            # real contract path; the container's copy must still be the same
+            # bytes the verbatim file was.
+            self.assertEqual(
+                set(sources) | {"implementer.txt"}, set(self.golden["contracts_sha256"])
+            )
+            for name, expected in self.golden["contracts_sha256"].items():
+                if name in sources:
+                    self.assertEqual(
+                        hashlib.sha256(sources[name].read_bytes()).hexdigest(),
+                        expected,
+                        name,
+                    )
                 self.assertEqual(
                     hashlib.sha256((bundle.directory / name).read_bytes()).hexdigest(),
                     expected,
@@ -151,3 +158,48 @@ class PromptBundleTests(unittest.TestCase):
                                     and item["autonomous"] == autonomous
                                 ),
                             )
+
+
+class HostRenderingTests(unittest.TestCase):
+    def test_a_host_rendering_names_the_repository_and_never_the_mount(self):
+        with TemporaryDirectory() as directory:
+            bundle = Prompts.prepare(Path(directory), workspace=Path("/repo/wt-x"))
+            # On a host `/workspace` is not this repository -- on this machine
+            # it exists and belongs to something else -- so one surviving
+            # reference sends the agent to read or write the wrong tree.
+            for path in bundle.directory.iterdir():
+                self.assertNotIn("/workspace", path.read_text(), path.name)
+            self.assertIn(
+                "`/repo/wt-x/skills/skill-of-skills/SKILL.md`",
+                bundle.contract_path(AgentMode.SINGLE, False).read_text(),
+            )
+            self.assertIn(
+                "Conversation plan: `/repo/wt-x/c_plan.md`.",
+                bundle.driver_prompt("hi", mode=AgentMode.SINGLE, conversation_id="c"),
+            )
+
+    def test_each_role_text_names_the_contract_its_turn_was_given(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = Prompts.prepare(root, workspace=Path("/repo/wt-x"))
+            for autonomous in (False, True):
+                bound = bundle.bound(autonomous=autonomous)
+                for mode in AgentMode:
+                    with self.subTest(mode=mode, autonomous=autonomous):
+                        self.assertIn(
+                            f"Read and follow `{bundle.contract_path(mode, autonomous)}`",
+                            bound.role_text(mode.driver),
+                        )
+                self.assertIn(
+                    f"`{bundle.contract_path(AgentMode.ORCHESTRATED, autonomous)}`",
+                    bound.implementer_prompt("task", is_resume=False),
+                )
+
+    def test_a_container_rendering_ignores_autonomy_for_the_role_texts(self):
+        with TemporaryDirectory() as directory:
+            bundle = Prompts.prepare(Path(directory))
+            self.assertEqual(
+                bundle.bound(autonomous=True).role_text(Role.ORCHESTRATOR),
+                bundle.role_text(Role.ORCHESTRATOR),
+            )
+            self.assertFalse((bundle.directory / "orchestrator.autonomous.txt").exists())
