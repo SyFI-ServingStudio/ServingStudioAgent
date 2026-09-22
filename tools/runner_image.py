@@ -14,8 +14,8 @@ from vibesim_agent.settings import ConfigurationError
 BUILD_OPTIONS = {
     "CUDA_IMAGE": "nvidia/cuda:12.8.1-devel-ubuntu24.04",
     "UV_IMAGE": "ghcr.io/astral-sh/uv:python3.12-bookworm",
-    "CODEX_NPM_PACKAGE": "@openai/codex@0.144.0",
-    "CLAUDE_NPM_PACKAGE": "@anthropic-ai/claude-code@2.1.250",
+    "CODEX_NPM_PACKAGE": "@openai/codex@0.155.1",
+    "CLAUDE_NPM_PACKAGE": "@anthropic-ai/claude-code@2.1.278",
     "NODE_VERSION": "v22.23.2",
     "NODE_ARCH": "linux-x64",
     "RUST_TOOLCHAIN": "stable",

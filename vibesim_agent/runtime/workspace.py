@@ -6,6 +6,8 @@ import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from .git import GitError, GitRunner
+
 
 class WorkspaceSnapshot:
     def __init__(
@@ -20,28 +22,17 @@ class WorkspaceSnapshot:
         self.source = source.resolve()
         self.run = run
         # Ambient Git routing must not redirect initialization into the source.
-        self.environment = {
-            key: value
-            for key, value in process_environment.items()
-            if not key.startswith("GIT_")
-        }
-        self.environment.update(
-            GIT_CONFIG_GLOBAL=os.devnull,
-            GIT_CONFIG_NOSYSTEM="1",
-        )
+        self.git = GitRunner(process_environment, run=run)
+
+    @property
+    def environment(self) -> dict[str, str]:
+        return self.git.environment
 
     def _git(self, root: Path, *arguments: str) -> str:
-        result = self.run(
-            ["git", "-C", str(root), "-c", "core.hooksPath=/dev/null", *arguments],
-            env=self.environment,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=120,
-        )
-        if result.returncode:
-            raise RuntimeError("workspace Git operation failed")
-        return result.stdout
+        try:
+            return self.git(root, *arguments)
+        except GitError as error:
+            raise RuntimeError("workspace Git operation failed") from error
 
     def tracked_entries(self) -> tuple[list[Path], list[Path]]:
         files, submodules = [], []

@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 
 from tests.provider_fixture import write_minimal_providers
 from tools import runner_image
+from tools.runner_image import BUILD_OPTIONS
 from vibesim_agent.bootstrap import configuration
 
 
@@ -335,3 +336,24 @@ class RunnerImageBuildTests(unittest.TestCase):
         )
         self.assertEqual(len(copied), 1)
         self.assertEqual(self.source_bytes(), before)
+
+
+class RunnerImagePinTests(unittest.TestCase):
+    def test_build_defaults_match_the_dockerfile_args(self):
+        """`BUILD_OPTIONS` is passed as `--build-arg`, so it wins over the ARG.
+
+        The two therefore have to agree, and nothing else would notice if they
+        stopped: the image would simply be built with a different CLI than the
+        Dockerfile documents.
+        """
+        dockerfile = (
+            Path(__file__).parents[1] / "docker/runner.Dockerfile"
+        ).read_text()
+        declared = dict(
+            line.removeprefix("ARG ").split("=", 1)
+            for line in dockerfile.splitlines()
+            if line.startswith("ARG ") and "=" in line
+        )
+        for name, default in BUILD_OPTIONS.items():
+            with self.subTest(option=name):
+                self.assertEqual(declared.get(name), default)
