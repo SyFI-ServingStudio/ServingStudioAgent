@@ -4,6 +4,7 @@ import sqlite3
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from tests import test_application as application_fixture
 from tests import test_tools as fixtures
 from vibesim_agent.domain.turns import Outcome
 from vibesim_agent.runtime.container import OWNER_LABEL
@@ -12,19 +13,29 @@ from vibesim_agent.storage.jobs import Jobs
 
 class ConversationDeletionTests(unittest.IsolatedAsyncioTestCase):
     setUp = fixtures.ToolsTests.setUp
-    asyncSetUp = fixtures.ToolsTests.asyncSetUp
     app = fixtures.ToolsTests.app
     providers = fixtures.ToolsTests.providers
     create = fixtures.ToolsTests.create
+    managed_workspace = application_fixture.ApplicationTests.managed_workspace
 
-    def browser_path(self, cid):
-        return f"/api/agent/v1/workspaces/w_main/conversations/{cid}"
+    async def asyncSetUp(self):
+        # Container ownership is only a managed workspace's problem now, so the
+        # tests that exercise it need one beside the external `w_main`.
+        self.managed_workspace()
+        await fixtures.ToolsTests.asyncSetUp(self)
 
-    def runtime_path(self, cid):
-        return self.state / "runtime" / cid
+    def base_for(self, wid):
+        return f"/api/agent/v1/tools/workspaces/{wid}/conversations"
 
-    def store(self):
-        return self.application.state.turns.storage("w_main")
+    def browser_path(self, cid, wid="w_main"):
+        return f"/api/agent/v1/workspaces/{wid}/conversations/{cid}"
+
+    def runtime_path(self, cid, wid="w_main"):
+        root = self.state if wid == "w_main" else self.state.parent / wid
+        return root / "runtime" / cid
+
+    def store(self, wid="w_main"):
+        return self.application.state.turns.storage(wid)
 
     async def test_browser_delete_active_turn_cascades_but_keeps_experiment_and_logs(
         self,
@@ -83,7 +94,9 @@ class ConversationDeletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(jobs.get_experiment("e"))
         self.assertEqual((logs / "result.txt").read_text(), "preserved")
         self.assertEqual((outside / "keep").read_text(), "preserved")
-        self.assertIn(["docker", "rm", "-f", "owned"], self.docker.calls)
+        # `w_main` is external, so there was never a container to remove. The
+        # managed case is asserted below.
+        self.assertEqual(self.docker.calls, [])
 
     async def test_tools_delete_requires_token_and_removes_idle_conversation(self):
         path = await self.create()
@@ -172,11 +185,22 @@ class ConversationDeletionTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(deleting, 3)
         self.assertIsNone(self.store().conversations.get(cid))
 
+    async def create_managed(self):
+        response = await self.client.post(
+            self.base_for("w_copy"),
+            headers=self.headers,
+            json={"agentMode": "single"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["id"]
+
     async def test_cleanup_failure_and_foreign_owner_preserve_home_and_database_then_retry(
         self,
     ):
-        await self.create()
-        root = self.runtime_path(self.cid)
+        # A managed workspace, because container ownership is the subject here
+        # and an external one deliberately never asks Docker anything.
+        cid = await self.create_managed()
+        root = self.runtime_path(cid, "w_copy")
         root.mkdir(parents=True)
         (root / "state").write_text("keep")
         runtime = self.application.state.runtime
@@ -186,25 +210,24 @@ class ConversationDeletionTests(unittest.IsolatedAsyncioTestCase):
             "Config": {"Labels": {OWNER_LABEL: "other"}},
         }
         with self.assertRaisesRegex(RuntimeError, "another owner"):
-            await turns.delete("w_main", self.cid, runtime.cleanup)
+            await turns.delete("w_copy", cid, runtime.cleanup)
         self.assertEqual((root / "state").read_text(), "keep")
-        self.assertIsNotNone(self.store().conversations.get(self.cid))
+        self.assertIsNotNone(self.store("w_copy").conversations.get(cid))
         self.assertFalse(any(command[1] == "rm" for command in self.docker.calls))
         self.docker.current = {
             "Id": "owned",
-            "Config": {
-                "Labels": {OWNER_LABEL: json.dumps(["test", "w_main", self.cid])}
-            },
+            "Config": {"Labels": {OWNER_LABEL: json.dumps(["test", "w_copy", cid])}},
         }
         self.docker.fail = "rm"
         with self.assertRaises(RuntimeError):
-            await turns.delete("w_main", self.cid, runtime.cleanup)
+            await turns.delete("w_copy", cid, runtime.cleanup)
         self.assertEqual((root / "state").read_text(), "keep")
-        self.assertIsNotNone(self.store().conversations.get(self.cid))
+        self.assertIsNotNone(self.store("w_copy").conversations.get(cid))
         self.docker.fail = None
-        await turns.delete("w_main", self.cid, runtime.cleanup)
+        await turns.delete("w_copy", cid, runtime.cleanup)
         self.assertFalse(root.exists())
-        self.assertIsNone(self.store().conversations.get(self.cid))
+        self.assertIsNone(self.store("w_copy").conversations.get(cid))
+        self.assertIn(["docker", "rm", "-f", "owned"], self.docker.calls)
 
     async def test_shutdown_drains_pending_deletion(self):
         await self.create()

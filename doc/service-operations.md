@@ -118,12 +118,19 @@ its path for diagnosis; successful runs remove the private copy.
 No image is built at Agent
 service startup. The image retains dependency caches; first-party simulator
 and Analyzer binaries still build in the workspace when the launcher needs them.
-The image does not currently provide Docker for nested profiling containers.
-A cold profile cache that needs a container-backed kernel, such as the preset's
-`kv_cache_append:vllm_cuda`, fails with `docker is required for container profiling`.
-GPU visibility and prebuilt dependency caches alone do not satisfy that runtime
-requirement. Validate the intended cold-cache profiling path separately from
-image startup and warm-cache simulation.
+Most kernel profiling is unreachable from inside the runner, and not by a
+narrow margin. Of the 81 kernels in `ServingStudioSim/profiling/`, 68 cannot be
+profiled there: 57 use `vllm_env`, a `ContainerProfileEnv` that fails at
+`shutil.which("docker")`; 11 use `sglang_env`, whose submodule is mounted
+read-only; and the rest live in `~/profile_envs/*`, which is not mounted at all.
+The image also has no Slurm client. GPU visibility and prebuilt dependency
+caches do not change any of this.
+
+This is the limitation host execution exists to remove. A workspace backed by a
+real git tree (`w_main`, or a provisioned worktree) runs its turns on the host,
+where `docker`, `sbatch` and the profiling environments are all present. A
+managed copy keeps the container and keeps this limitation; see
+`../README.md#execution-modes` for what each mode costs.
 
 ## State And Migration
 

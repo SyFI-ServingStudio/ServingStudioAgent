@@ -18,7 +18,7 @@ from ..providers.registry import ProviderRegistry
 from ..runtime.container import ContainerManager, ContainerSpec
 from ..runtime.execution import DockerExecution, Execution, HostExecution
 from ..runtime.homes import role_home
-from ..runtime.host import check_host_binaries
+from ..runtime.host import check_host_binaries, reap_process_groups
 from ..runtime.invocation import InvocationHome, RoleContext
 from ..runtime.mounts import (
     PROMPTS_TARGET,
@@ -266,12 +266,21 @@ class RuntimeService:
         root = self._root(workspace_id, conversation_id)
         if root.exists() and not root.is_dir():
             raise ValueError("conversation runtime cleanup requires a real directory")
-        self._remove_container(workspace_id, conversation_id)
+        self._release(workspace_id, conversation_id)
         if root.exists():
             shutil.rmtree(root)
 
-    def _remove_container(self, workspace_id: str, conversation_id: str) -> None:
-        self._root(workspace_id, conversation_id)
+    def _release(self, workspace_id: str, conversation_id: str) -> None:
+        """Let go of whatever the conversation's last turn was still holding."""
+        root = self._root(workspace_id, conversation_id)
+        if self.workspace(workspace_id).storage_kind == "external":
+            # Deliberately never reaches Docker. A host-only deployment may not
+            # have it installed at all, and `ContainerManager` does not catch
+            # `FileNotFoundError`, so asking would take the backend down during
+            # startup recovery rather than recovering anything.
+            if root.exists():
+                reap_process_groups(root, logger=self.logger)
+            return
         name, owner = self._identity(workspace_id, conversation_id)
         self.containers.remove(name, owner=owner)
 
@@ -281,8 +290,8 @@ class RuntimeService:
     async def cleanup(self, workspace_id: str, conversation_id: str) -> None:
         await self._thread(self._cleanup, workspace_id, conversation_id)
 
-    async def remove_container(self, workspace_id: str, conversation_id: str) -> None:
-        await self._thread(self._remove_container, workspace_id, conversation_id)
+    async def release(self, workspace_id: str, conversation_id: str) -> None:
+        await self._thread(self._release, workspace_id, conversation_id)
 
     @staticmethod
     async def _thread(operation, *args):

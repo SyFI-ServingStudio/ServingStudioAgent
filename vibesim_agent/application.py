@@ -267,14 +267,14 @@ def build_application(
         workspace_service,
         conversations,
         turns,
-        remove_container=runtime.remove_container,
+        release=runtime.release,
     )
     recovery = RecoveryService(
         workspaces,
         storage,
         capabilities=capabilities,
         context=context,
-        remove_container=runtime.remove_container,
+        release=runtime.release,
         ownership=ownership,
     )
 

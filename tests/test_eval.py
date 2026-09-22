@@ -221,7 +221,7 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
     ):
         evaluations = self.application.state.evaluations
         entered, release = asyncio.Event(), asyncio.Event()
-        original = evaluations.remove_container
+        original = evaluations.release
         self.fail_adapter = fail_driver
         self.failed_result = failed_result
 
@@ -232,7 +232,7 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("private removal failure")
             await original(wid, cid)
 
-        with patch.object(evaluations, "remove_container", side_effect=cleanup):
+        with patch.object(evaluations, "release", side_effect=cleanup):
             sending = asyncio.create_task(self.send(agent_mode="single"))
             try:
                 await asyncio.wait_for(entered.wait(), 3)
@@ -280,7 +280,7 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
     async def test_workspace_next_turn_cannot_run_before_eval_container_cleanup(self):
         evaluations = self.application.state.evaluations
         entered, release = asyncio.Event(), asyncio.Event()
-        original = evaluations.remove_container
+        original = evaluations.release
 
         async def cleanup(wid, cid):
             entered.set()
@@ -288,7 +288,7 @@ class EvaluationTests(unittest.IsolatedAsyncioTestCase):
             await original(wid, cid)
             self.docker.current = None
 
-        with patch.object(evaluations, "remove_container", side_effect=cleanup):
+        with patch.object(evaluations, "release", side_effect=cleanup):
             sending = asyncio.create_task(self.send(agent_mode="single"))
             try:
                 await asyncio.wait_for(entered.wait(), 3)

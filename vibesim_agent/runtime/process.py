@@ -20,6 +20,7 @@ class ProcessOutput:
 
 StopProcess = Callable[[asyncio.subprocess.Process], Awaitable[None]]
 KillProcess = Callable[[asyncio.subprocess.Process], None]
+NoteProcess = Callable[[asyncio.subprocess.Process], None]
 
 
 def kill_process(process: asyncio.subprocess.Process) -> None:
@@ -64,6 +65,7 @@ class ProcessStream:
         cwd: Path | None = None,
         start_new_session: bool = False,
         kill: KillProcess | None = None,
+        started: NoteProcess | None = None,
     ):
         for value in (idle_timeout, poll_interval, stop_timeout):
             if not math.isfinite(value) or value <= 0:
@@ -77,6 +79,7 @@ class ProcessStream:
         self.cwd = cwd
         self.start_new_session = start_new_session
         self.kill = kill if kill is not None else kill_process
+        self.started = started
         self.command = tuple(command)
         self.input_data = input_data
         self.idle_timeout = idle_timeout
@@ -116,12 +119,22 @@ class ProcessStream:
             # Cancellation must not lose the process handle while spawn finishes.
             async def finish_startup():
                 self.process = await startup
+                self._note()
                 await self._close()
 
             await self._shield_cleanup(finish_startup())
             raise
+        self._note()
         self.touch()
         return self
+
+    def _note(self) -> None:
+        # Before anything can go wrong with the stream: a local execution mode
+        # has to be able to find this process again after a backend restart,
+        # and only the running process can tell it how.
+        if self.started is not None:
+            assert self.process is not None
+            self.started(self.process)
 
     async def __aexit__(self, *exc) -> None:
         await self._shield_cleanup(self._close())

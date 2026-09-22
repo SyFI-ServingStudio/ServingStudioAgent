@@ -72,6 +72,7 @@ class CodexAdapter:
             cwd=request.execution.cwd,
             start_new_session=request.execution.start_new_session,
             kill=request.execution.kill,
+            started=invocation.record,
         )
         ready = False
 

@@ -25,8 +25,13 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     app = fixtures.ApplicationTests.app
     providers = fixtures.ApplicationTests.providers
 
+    managed_workspace = fixtures.ApplicationTests.managed_workspace
+
     async def asyncSetUp(self):
         Database.create(self.state / "workspace.sqlite")
+        # Both modes have to recover: `w_main` is external and runs on the host,
+        # `w_copy` is a managed copy and still owns a container.
+        self.managed_workspace()
         self.application = self.app()
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=self.application), base_url="http://test"
@@ -113,7 +118,10 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(
                 self.application.state.capabilities.authorize(capability.token)
             )
-            self.assertIn(["docker", "rm", "-f", "owned"], self.docker.calls)
+            # `w_main` is external. Startup recovery must not reach Docker for
+            # it at all -- a host-only deployment may not have Docker installed,
+            # and the container client does not survive its absence.
+            self.assertEqual(self.docker.calls, [])
             response = await self.client.get(
                 f"/api/agent/v1/workspaces/w_main/conversations/{cid}"
             )
@@ -185,10 +193,16 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             connection.execute("DROP TRIGGER fail_recovery")
         self.assertEqual(await self.application.state.recovery.recover(), 1)
 
+    async def test_a_managed_workspace_still_removes_its_container(self):
+        cid, _, _, _, _ = await self.seed("w_copy")
+        self.owned(cid, wid="w_copy")
+        async with self.application.router.lifespan_context(self.application):
+            self.assertIn(["docker", "rm", "-f", "owned"], self.docker.calls)
+
     async def test_foreign_owner_and_remove_failure_block_startup_until_retry(self):
-        cid, store, home, _, _ = await self.seed()
+        cid, store, home, _, _ = await self.seed("w_copy")
         for foreign in (True, False):
-            self.owned("someone-else" if foreign else cid)
+            self.owned("someone-else" if foreign else cid, wid="w_copy")
             self.docker.fail = None if foreign else "rm"
             yielded = False
             with self.assertRaises(RuntimeError):
@@ -254,7 +268,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
                 raise TimeoutError("test cleanup thread was not released")
 
         with patch.object(
-            self.application.state.runtime, "_remove_container", side_effect=slow_remove
+            self.application.state.runtime, "_release", side_effect=slow_remove
         ):
             recovering = asyncio.create_task(self.application.state.recovery.recover())
             try:

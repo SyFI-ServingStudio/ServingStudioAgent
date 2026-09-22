@@ -11,6 +11,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from .host import PGID_SUFFIX, record_process_group
+
 SIGNAL_TIMEOUT = 5
 SIGNAL_GRACE = 5
 # Include helper timeout/reap and remote grace for all three signal attempts.
@@ -95,6 +97,13 @@ class RemoteInvocation:
         self._marker_attempted = False
         self._marker_error: OSError | None = None
 
+    def record(self, process: asyncio.subprocess.Process) -> None:
+        """Nothing to note: the container is the reaping unit, not the group.
+
+        The local process here is a `docker exec` client. Whatever it leaves
+        running lives in the container and goes away with it.
+        """
+
     def mark_cancelled(self) -> None:
         if self._marker_attempted:
             return
@@ -153,6 +162,17 @@ class HostInvocation:
         self.signal_grace = signal_grace
         self.host_pid = home.host / f"call-{execution_id}.pid"
         self.pid_file = str(self.host_pid)
+        self.group_file = home.host / f"call-{execution_id}{PGID_SUFFIX}"
+
+    def record(self, process: asyncio.subprocess.Process) -> None:
+        # Written while the process is alive, because after a backend restart
+        # this file is the only thing that can find it again.
+        try:
+            record_process_group(self.group_file, process.pid)
+        except OSError as error:
+            self.logger.warning(
+                "Could not record the %s process group: %s", self.label, error
+            )
 
     def mark_cancelled(self) -> None:
         """Genuinely nothing to do, and not a placeholder.
@@ -183,5 +203,8 @@ class HostInvocation:
         raise RuntimeError(f"{self.label} invocation did not stop after INT/TERM/KILL")
 
     def remove_pid(self) -> None:
-        with contextlib.suppress(OSError):
-            self.host_pid.unlink(missing_ok=True)
+        # The group record goes with it: the turn is over, and leaving it would
+        # make a later reap chase a process ID that has already been reused.
+        for path in (self.host_pid, self.group_file):
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)

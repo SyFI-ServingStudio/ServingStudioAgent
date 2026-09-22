@@ -63,6 +63,7 @@ class ClaudeAdapter:
             cwd=request.execution.cwd,
             start_new_session=request.execution.start_new_session,
             kill=request.execution.kill,
+            started=invocation.record,
         )
         started = asyncio.get_running_loop().time()
         buffer = bytearray()

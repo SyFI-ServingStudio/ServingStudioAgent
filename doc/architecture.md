@@ -38,8 +38,11 @@ workspace repository or result artifacts.
 `orchestrated` mode runs an orchestrator and an implementer. The orchestrator
 returns decisions, can delegate work and resumes after the implementer handoff.
 `single` mode runs one assistant. Mode and autonomous policy become fixed once
-history exists. Supported sandbox modes retain the prompt and delegation policy;
-the shared workspace bind is writable, so read-only mode is not an OS sandbox.
+history exists. The per-turn `sandbox` field is retained on the wire for
+compatibility but no longer selects any CLI flag; it never was an OS sandbox.
+What the turn actually runs under is decided by the workspace: a managed copy
+gets a container, an external git tree runs on the host under the postures
+described in `../README.md#execution-modes`.
 
 ## Turns And Streams
 

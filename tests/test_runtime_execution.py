@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 
 from tests.runtime_fixtures import agent_request, docker_execution, execution_environment
 from vibesim_agent.runtime.execution import PID_WRAPPER, DockerExecution, HostExecution
+from vibesim_agent.runtime.host import reap_process_groups
 from vibesim_agent.runtime.invocation import STOP_TIMEOUT, HostInvocation, InvocationHome
 from vibesim_agent.runtime.process import kill_process_group
 
@@ -290,3 +291,51 @@ GRANDCHILD = (
     "print(child.pid, flush=True);"
     "time.sleep(30)"
 )
+
+
+class ProcessGroupRecordTests(unittest.IsolatedAsyncioTestCase):
+    """The record is written by the running turn and read by the next startup."""
+
+    async def test_the_record_survives_the_process_and_is_removed_with_it(self):
+        with TemporaryDirectory() as directory:
+            home = InvocationHome(Path(directory), str(directory))
+            invocation = HostInvocation(
+                execution_id="e1",
+                home=home,
+                logger=logging.getLogger("process-group-record-test"),
+                label="Codex",
+                signal_grace=0.2,
+            )
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", "import time;time.sleep(30)",
+                start_new_session=True,
+            )
+            invocation.record(process)
+            recorded = Path(directory) / "call-e1.pgid"
+            pgid, started = recorded.read_text().split()
+            self.assertEqual(int(pgid), os.getpgid(process.pid))
+            self.assertTrue(started.isdigit())
+            # A backend that died here would find this file and could act on it.
+            self.assertEqual(
+                reap_process_groups(
+                    Path(directory), logger=logging.getLogger("reap-test")
+                ),
+                1,
+            )
+            await process.wait()
+
+            # Recording a process that is already gone writes nothing rather
+            # than a number that now belongs to nobody.
+            with self.assertLogs("process-group-record-test", level="WARNING"):
+                invocation.record(process)
+            self.assertFalse(recorded.exists())
+
+            recorded.write_text("1 1\n")
+            invocation.remove_pid()
+            # Removed on the ordinary path too: the turn is over, and the number
+            # is free to be handed to something else.
+            self.assertFalse(recorded.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
