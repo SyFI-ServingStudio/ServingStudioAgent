@@ -15,10 +15,25 @@ class CodexCommand:
     mcp_server: str = "/opt/vibesim/analyzer-evidence-mcp/server.py"
     catalog_filename: str | None = None
     inherited_environment: tuple[str, ...] = ()
+    permission_profile: str = ":danger-full-access"
+    approval_policy: str = "never"
+    approvals_reviewer: str | None = None
 
     def __post_init__(self):
         if self.catalog_filename not in {None, "models_catalog.json"}:
             raise ValueError("unsupported Codex catalog filename")
+        if not self.permission_profile:
+            raise ValueError("Codex permission profile is required")
+        if self.approval_policy not in {"never", "on-request"}:
+            # `untrusted` is unsupported and `on-failure` deprecated since 0.155.
+            raise ValueError("unsupported Codex approval policy")
+        if self.approvals_reviewer not in {None, "user", "auto_review"}:
+            raise ValueError("unsupported Codex approvals reviewer")
+        if self.approvals_reviewer is not None and self.approval_policy == "never":
+            # `never` tells the model not to request escalation at all, so a
+            # reviewer would never be consulted. Rejecting the pair keeps a dead
+            # setting from reading like an active boundary.
+            raise ValueError("Codex approvals reviewer requires an approval policy")
 
     def build_tracked(
         self, request: AgentRequest, *, home: str, pid_file: str
@@ -74,9 +89,21 @@ class CodexCommand:
         )
         for key, value in settings.items():
             command.extend(["-c", f"{key}={json.dumps(value, ensure_ascii=False)}"])
+        # Retired `--dangerously-bypass-approvals-and-sandbox` for a named
+        # permission profile. `-s`/`sandbox_mode` must stay absent: whenever the
+        # older sandbox settings appear, Codex silently ignores
+        # `default_permissions`, and a sandbox that fails open without saying so
+        # is the worst outcome available here.
+        posture = {
+            "default_permissions": self.permission_profile,
+            "approval_policy": self.approval_policy,
+        }
+        if self.approvals_reviewer is not None:
+            posture["approvals_reviewer"] = self.approvals_reviewer
+        for key, value in posture.items():
+            command.extend(["-c", f"{key}={json.dumps(value, ensure_ascii=False)}"])
         command.extend(
             [
-                "--dangerously-bypass-approvals-and-sandbox",
                 "--skip-git-repo-check",
                 "--json",
             ]

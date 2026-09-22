@@ -17,6 +17,25 @@ class ClaudeCommand:
     inherited_environment: tuple[str, ...] = ()
     mcp_python: str = "/opt/vibesim-analyzer-mcp-venv/bin/python"
     mcp_server: str = "/opt/vibesim/analyzer-evidence-mcp/server.py"
+    permission_mode: str = "auto"
+    permission_prompts: str = "none"
+    allowed_tools: tuple[str, ...] = ("Bash(uv run *)",)
+
+    def __post_init__(self):
+        if self.permission_mode not in {
+            "acceptEdits",
+            "auto",
+            "bypassPermissions",
+            "dontAsk",
+            "plan",
+        }:
+            raise ValueError("unsupported Claude permission mode")
+        if self.permission_prompts not in {"host", "none"}:
+            raise ValueError("unsupported Claude permission prompt target")
+        if any("," in tool or not tool for tool in self.allowed_tools):
+            # The flag is comma-or-space separated, so an embedded comma would
+            # silently split one pattern into two broader ones.
+            raise ValueError("Claude allowed tools must not contain commas")
 
     def output_schema(self, request: AgentRequest) -> dict | None:
         if not request.structured_output:
@@ -79,7 +98,14 @@ class ClaudeCommand:
                 request.selection.model.model_id,
                 "--effort",
                 request.selection.effort,
-                "--dangerously-skip-permissions",
+                # Retired `--dangerously-skip-permissions`. `--permission-prompts
+                # none` is load-bearing, not decoration: `auto` falls back to a
+                # manual prompt when its classifier cannot evaluate an action,
+                # and under `-p` the default `host` target has nobody to ask.
+                "--permission-mode",
+                self.permission_mode,
+                "--permission-prompts",
+                self.permission_prompts,
                 "--setting-sources",
                 "",
                 "--append-system-prompt-file",
@@ -89,6 +115,11 @@ class ClaudeCommand:
                 json.dumps(mcp),
             ]
         )
+        if self.allowed_tools:
+            # `--setting-sources ""` drops every settings file, so without this
+            # the workspace's own hot path would reach the classifier on each
+            # call. Read-only commands are already allowed by the CLI itself.
+            command.extend(["--allowedTools", ",".join(self.allowed_tools)])
         schema = self.output_schema(request)
         if schema is not None:
             # The CLI rejects the dialect URI; retain it in the validation copy.

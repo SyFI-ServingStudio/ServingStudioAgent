@@ -106,3 +106,68 @@ class CodexCommandTests(unittest.TestCase):
             parsed["mcp_servers"]["analyzer"]["command"], builder.mcp_python
         )
         self.assertNotIn(self.request().prompt, command)
+
+
+class CodexSandboxPostureTests(unittest.TestCase):
+    """Pins the posture that replaced `--dangerously-bypass-approvals-and-sandbox`."""
+
+    def builder(self, **overrides):
+        return replace(CodexCommandTests().builder(), **overrides)
+
+    def settings(self, command):
+        return tomllib.loads(
+            "\n".join(
+                command[index + 1]
+                for index, part in enumerate(command)
+                if part == "-c"
+            )
+        )
+
+    def test_container_posture_is_explicit_and_retires_the_bypass_flag(self):
+        command = self.builder().build(
+            CodexCommandTests().request(), home="/role-home"
+        )
+        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", command)
+        settings = self.settings(command)
+        self.assertEqual(settings["default_permissions"], ":danger-full-access")
+        self.assertEqual(settings["approval_policy"], "never")
+        self.assertNotIn("approvals_reviewer", settings)
+
+    def test_legacy_sandbox_generation_is_never_emitted(self):
+        # Codex ignores `default_permissions` outright whenever the older sandbox
+        # settings are present, so their absence is the whole posture.
+        command = self.builder(
+            permission_profile="vibesim_host",
+            approval_policy="on-request",
+            approvals_reviewer="auto_review",
+        ).build(CodexCommandTests().request(), home="/role-home")
+        self.assertNotIn("-s", command)
+        self.assertNotIn("--sandbox", command)
+        self.assertNotIn("sandbox_mode", self.settings(command))
+        self.assertFalse(
+            any(arg.startswith("sandbox_workspace_write") for arg in command)
+        )
+
+    def test_host_posture_carries_the_reviewer(self):
+        command = self.builder(
+            permission_profile="vibesim_host",
+            approval_policy="on-request",
+            approvals_reviewer="auto_review",
+        ).build(CodexCommandTests().request(), home="/role-home")
+        settings = self.settings(command)
+        self.assertEqual(settings["default_permissions"], "vibesim_host")
+        self.assertEqual(settings["approval_policy"], "on-request")
+        self.assertEqual(settings["approvals_reviewer"], "auto_review")
+
+    def test_retired_and_dead_posture_values_are_rejected(self):
+        for policy in ("untrusted", "on-failure", ""):
+            with self.subTest(policy=policy):
+                with self.assertRaisesRegex(ValueError, "approval policy"):
+                    self.builder(approval_policy=policy)
+        with self.assertRaisesRegex(ValueError, "approvals reviewer"):
+            self.builder(approvals_reviewer="everyone")
+        with self.assertRaisesRegex(ValueError, "requires an approval policy"):
+            # A reviewer under `never` is dead config that reads like a boundary.
+            self.builder(approvals_reviewer="auto_review")
+        with self.assertRaisesRegex(ValueError, "permission profile"):
+            self.builder(permission_profile="")

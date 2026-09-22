@@ -7,7 +7,7 @@ FROM ${CUDA_IMAGE}
 
 ARG NODE_VERSION=v22.23.2
 ARG NODE_ARCH=linux-x64
-ARG CODEX_NPM_PACKAGE=@openai/codex@0.144.0
+ARG CODEX_NPM_PACKAGE=@openai/codex@0.155.1
 ARG APP_UID=1001
 ARG APP_GID=1001
 ARG APP_USER=runner
@@ -189,7 +189,7 @@ WORKDIR /workspace
 
 # Keep the Claude CLI layer independent of the CUDA/Python/Cargo caches.
 USER root
-ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code@2.1.250
+ARG CLAUDE_NPM_PACKAGE=@anthropic-ai/claude-code@2.1.278
 RUN npm install -g --engine-strict --include=optional "${CLAUDE_NPM_PACKAGE}" \
   && command -v claude \
   && claude --version
