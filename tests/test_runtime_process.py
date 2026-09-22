@@ -1,7 +1,11 @@
 import asyncio
+import contextlib
 import os
+import signal
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from vibesim_agent.runtime.process import ProcessStream
@@ -196,3 +200,103 @@ class ProcessTests(unittest.IsolatedAsyncioTestCase):
         finally:
             for descriptor in retained:
                 os.close(descriptor)
+
+
+GRANDCHILD = (
+    "import subprocess,sys,time;"
+    "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']);"
+    "print(child.pid, flush=True);"
+    "time.sleep(30)"
+)
+
+
+class LocalExecutionTests(unittest.IsolatedAsyncioTestCase):
+    """A host execution mode runs the CLI directly instead of through Docker."""
+
+    async def idle_stop(self, process):
+        """Leave the process running so cleanup has to fall back to `kill`."""
+
+    async def terminating_stop(self, process):
+        process.terminate()
+        await process.wait()
+
+    def call(self, code, **options):
+        return ProcessStream(
+            [sys.executable, "-u", "-c", code],
+            stop=options.pop("stop", self.idle_stop),
+            idle_timeout=options.pop("idle_timeout", 2),
+            poll_interval=0.02,
+            stop_timeout=options.pop("stop_timeout", 1),
+            **options,
+        )
+
+    async def collect(self, call):
+        output = bytearray()
+        async with call:
+            async for event in call.events():
+                if event.stream == "stdout":
+                    output.extend(event.data)
+        return bytes(output).strip()
+
+    async def wait_gone(self, pid, timeout=3):
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            await asyncio.sleep(0.02)
+        return False
+
+    async def test_cwd_becomes_the_child_working_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            expected = Path(directory).resolve()
+            call = self.call(
+                "import os; print(os.getcwd())",
+                cwd=expected,
+                stop=self.terminating_stop,
+            )
+            self.assertEqual(await self.collect(call), str(expected).encode())
+
+    async def test_default_cwd_is_inherited(self):
+        call = self.call(
+            "import os; print(os.getcwd())", stop=self.terminating_stop
+        )
+        self.assertEqual(await self.collect(call), os.getcwd().encode())
+
+    def test_rejects_a_relative_or_missing_working_directory(self):
+        for candidate in (Path("relative"), Path("/nonexistent-vibesim-agent-cwd")):
+            with self.assertRaisesRegex(ValueError, "working directory"):
+                self.call("pass", cwd=candidate)
+
+    @unittest.skipUnless(sys.platform == "linux", "requires POSIX process groups")
+    async def test_start_new_session_makes_the_child_its_own_group_leader(self):
+        call = self.call("import time; time.sleep(30)", start_new_session=True)
+        async with call:
+            self.assertEqual(os.getpgid(call.process.pid), call.process.pid)
+        # Without a group kill the leader itself still dies through the fallback.
+        self.assertIsNotNone(call.process.returncode)
+
+    @unittest.skipUnless(sys.platform == "linux", "requires POSIX process groups")
+    async def test_leader_only_kill_orphans_a_grandchild(self):
+        """Pins the behavior that the injected group kill exists to correct."""
+        call = self.call(GRANDCHILD, start_new_session=True)
+        async with call:
+            grandchild = int(await call.process.stdout.readline())
+        self.assertIsNotNone(call.process.returncode)
+        try:
+            self.assertFalse(await self.wait_gone(grandchild, timeout=0.5))
+        finally:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(grandchild, signal.SIGKILL)
+
+    @unittest.skipUnless(sys.platform == "linux", "requires POSIX process groups")
+    async def test_group_kill_reaps_the_grandchild(self):
+        def group_kill(process):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+
+        call = self.call(GRANDCHILD, start_new_session=True, kill=group_kill)
+        async with call:
+            grandchild = int(await call.process.stdout.readline())
+        self.assertIsNotNone(call.process.returncode)
+        self.assertTrue(await self.wait_gone(grandchild))
