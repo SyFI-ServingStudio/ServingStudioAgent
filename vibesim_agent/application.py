@@ -27,6 +27,7 @@ from .runtime.homes import role_home
 from .runtime.invocation import InvocationHome
 from .runtime.mounts import PROMPTS_TARGET, managed_context_target
 from .runtime.workspace import WorkspaceSnapshot
+from .runtime.worktree import WorktreeProvisioner
 from .services.artifacts import ArtifactService
 from .services.capabilities import CapabilityRegistry, ManagedContext
 from .services.citations import CitationService
@@ -83,12 +84,27 @@ def build_application(
     )
     workspaces = WorkspaceRegistry(settings.agent.workspaces_root)
     artifacts = ArtifactService(workspaces)
+    worktree_root = settings.agent.worktree_root
     workspace_service = WorkspaceService(
         workspaces,
         WorkspaceSnapshot(
             settings.agent.main_dir,
             process_environment=workspace_environment or {},
         ),
+        # Opt-in: provisioning writes real branches into the user's checkout, so
+        # a deployment that has not chosen a location does not get the feature.
+        worktrees=(
+            # Real `subprocess.run`, like the snapshot beside it. `run` here is
+            # the Docker boundary; sharing it would let a stubbed container
+            # runner silently stub Git too.
+            WorktreeProvisioner(
+                settings.agent.main_dir,
+                process_environment=workspace_environment or {},
+            )
+            if worktree_root is not None
+            else None
+        ),
+        worktree_root=worktree_root,
     )
     stores = {}
 

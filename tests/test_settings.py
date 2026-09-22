@@ -181,3 +181,30 @@ with patch.dict(os.environ, {}, clear=True):
         (self.repo / "providers.yaml").unlink()
         with self.assertRaisesRegex(ConfigurationError, "required"):
             load_settings(environment={}, repo_root=self.repo)
+
+
+class WorktreeRootSettingTests(unittest.TestCase):
+    # Reuses the suite's own valid providers.yaml rather than a second copy.
+    setUp = SettingsTests.setUp
+
+    def load(self, **environment):
+        return load_settings(
+            environment={"HOME": str(self.repo), **environment}, repo_root=self.repo
+        )
+
+    def test_unset_and_empty_both_leave_worktrees_disabled(self):
+        self.assertIsNone(self.load().agent.worktree_root)
+        self.assertIsNone(self.load(VIBESIM_AGENT_WORKTREE_ROOT="").agent.worktree_root)
+
+    def test_absolute_path_enables_them_and_relative_is_refused(self):
+        settings = self.load(VIBESIM_AGENT_WORKTREE_ROOT="/srv/trees")
+        self.assertEqual(settings.agent.worktree_root, Path("/srv/trees"))
+        with self.assertRaises(ConfigurationError) as caught:
+            self.load(VIBESIM_AGENT_WORKTREE_ROOT="trees")
+        self.assertIn("VIBESIM_AGENT_WORKTREE_ROOT", str(caught.exception))
+
+    def test_home_relative_path_expands_like_the_other_host_paths(self):
+        settings = self.load(
+            VIBESIM_AGENT_WORKTREE_ROOT="~/trees", HOME="/home/someone"
+        )
+        self.assertEqual(settings.agent.worktree_root, Path("/home/someone/trees"))

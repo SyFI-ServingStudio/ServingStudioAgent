@@ -230,3 +230,103 @@ class WorkspaceHttpTests(unittest.IsolatedAsyncioTestCase):
         repository.symlink_to(self.repo, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, "managed repository"):
             service.prepare(wid)
+
+
+class WorktreeWorkspaceHttpTests(WorkspaceHttpTests):
+    """Worktree creation over HTTP, against the fixture's real Git checkout."""
+
+    def setUp(self):
+        super().setUp()
+        self.trees = self.root / "trees"
+        self.trees.mkdir()
+        self.settings = self.settings.model_copy(
+            update={
+                "agent": self.settings.agent.model_copy(
+                    update={"worktree_root": self.trees}
+                )
+            }
+        )
+
+    async def create_worktree(self, **body):
+        return await self.client.post(
+            self.base, json={"displayName": "Kv Cache Logging", "kind": "worktree", **body}
+        )
+
+    async def test_capability_is_announced_beside_the_listing(self):
+        listing = (await self.client.get(self.base)).json()
+        self.assertEqual(
+            listing["capabilities"]["workspaceKinds"], ["copy", "worktree"]
+        )
+
+    async def test_creates_a_real_branch_and_registers_it_external(self):
+        response = await self.create_worktree()
+        self.assertEqual(response.status_code, 200, response.text)
+        descriptor = response.json()
+
+        self.assertEqual(descriptor["storage_kind"], "external")
+        self.assertEqual(descriptor["workspace_kind"], "worktree")
+        self.assertIs(descriptor["worktree_owned"], True)
+        # Derived from the display name, and the server reports what it used;
+        # the UI must never re-derive this.
+        self.assertEqual(descriptor["worktree_branch"], "kv-cache-logging")
+        self.assertEqual(descriptor["repo_path"], str(self.trees / "wt-kv-cache-logging"))
+        self.assertIn("kv-cache-logging", self.git("branch", "--list"))
+        self.assertEqual(descriptor["base_revision"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(
+            (Path(descriptor["repo_path"]) / "AGENTS.md").read_text(),
+            "workspace instructions",
+        )
+
+    async def test_second_workspace_with_the_same_name_gets_its_own_branch(self):
+        first = (await self.create_worktree()).json()
+        second = (await self.create_worktree()).json()
+        self.assertEqual(first["worktree_branch"], "kv-cache-logging")
+        self.assertEqual(second["worktree_branch"], "kv-cache-logging-2")
+        self.assertNotEqual(first["repo_path"], second["repo_path"])
+
+    async def test_explicit_branch_collision_is_a_conflict_not_a_rename(self):
+        await self.create_worktree(branch="chosen")
+        response = await self.create_worktree(branch="chosen")
+        self.assertEqual(response.status_code, 409, response.text)
+
+    async def test_invalid_branch_is_rejected_before_anything_is_created(self):
+        response = await self.create_worktree(branch="bad branch")
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(self.git("worktree", "list").count("\n"), 0)
+
+    async def test_branch_and_base_do_not_apply_to_a_copy(self):
+        response = await self.client.post(
+            self.base, json={"displayName": "Trial", "kind": "copy", "branch": "x"}
+        )
+        self.assertEqual(response.status_code, 400, response.text)
+
+    async def test_unknown_kind_is_refused_by_the_schema(self):
+        response = await self.client.post(
+            self.base, json={"displayName": "Trial", "kind": "adopt"}
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+
+
+class WorktreeDisabledHttpTests(WorkspaceHttpTests):
+    """Unset `worktree_root` is the default; the feature must stay off and say so."""
+
+    async def test_capability_omits_worktree_and_creation_is_not_implemented(self):
+        listing = (await self.client.get(self.base)).json()
+        self.assertEqual(listing["capabilities"]["workspaceKinds"], ["copy"])
+        response = await self.client.post(
+            self.base, json={"displayName": "Trial", "kind": "worktree"}
+        )
+        self.assertEqual(response.status_code, 501, response.text)
+
+    async def test_copies_still_record_their_kind(self):
+        descriptor = await self.create()
+        self.assertEqual(descriptor["workspace_kind"], "copy")
+        self.assertEqual(descriptor["storage_kind"], "managed")
+
+    async def test_main_checkout_reports_a_kind_it_never_stored(self):
+        listing = (await self.client.get(self.base)).json()["workspaces"]
+        main = next(item for item in listing if item["workspace_id"] == "w_main")
+        # w_main's descriptor predates the kind axis entirely.
+        self.assertEqual(main["workspace_kind"], "checkout")
+        self.assertEqual(main["execution"], "container")
+        self.assertNotIn("workspace_kind", self.application.state.workspaces.get("w_main"))

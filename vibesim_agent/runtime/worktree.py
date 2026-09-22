@@ -70,6 +70,15 @@ class WorktreeProvisioner:
             return False
         return True
 
+    def branch_exists(self, branch: str) -> bool:
+        try:
+            self.git(
+                self.main, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"
+            )
+        except GitError:
+            return False
+        return True
+
     def base_revision(self, base: str | None = None) -> str:
         try:
             return self.git(
@@ -155,6 +164,10 @@ class WorktreeProvisioner:
         )
         if result.returncode or not target.exists():
             raise WorktreeError("worktree could not stage a working-copy artifact")
+
+    def discard(self, worktree: Worktree) -> None:
+        """Undo a completed creation; the caller owns whatever failed after it."""
+        self._discard(worktree.path, worktree.branch)
 
     def _discard(self, destination: Path, branch: str) -> None:
         for arguments in (

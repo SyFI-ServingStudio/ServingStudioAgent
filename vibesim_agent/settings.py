@@ -43,6 +43,10 @@ class AgentSettings(ConfigModel):
         description="Agent source checkout", json_schema_extra={"env": False}
     )
     main_dir: Path = Field(description="Source ServingStudioSim checkout")
+    worktree_root: Path | None = Field(
+        default=None,
+        description="Directory holding worktree workspaces; unset disables them",
+    )
     workspaces_root: Path = Field(description="Workspace registry and durable state")
     bind: str = Field(
         default="127.0.0.1", min_length=1, description="HTTP bind address"
@@ -110,6 +114,13 @@ class AgentSettings(ConfigModel):
     @classmethod
     def absolute_path(cls, value: Path) -> Path:
         if not value.is_absolute():
+            raise ValueError("must be an absolute path")
+        return value
+
+    @field_validator("worktree_root")
+    @classmethod
+    def optional_absolute_path(cls, value: Path | None) -> Path | None:
+        if value is not None and not value.is_absolute():
             raise ValueError("must be an absolute path")
         return value
 
@@ -225,7 +236,7 @@ def _load(
         key = _environment_name(prefix, name, field)
         if key is not None and key in environment:
             value = environment[key].strip()
-            if name == "hf_home" and not value:
+            if name in ("hf_home", "worktree_root") and not value:
                 values[name] = None
             else:
                 values[name] = value
@@ -279,7 +290,7 @@ def load_settings(
             "main_dir": root.parent / "ServingStudioSim",
             "workspaces_root": root.parent / "agent-workspaces",
         },
-        host_paths=("main_dir", "workspaces_root"),
+        host_paths=("main_dir", "workspaces_root", "worktree_root"),
     )
     container = _load(
         ContainerSettings,
