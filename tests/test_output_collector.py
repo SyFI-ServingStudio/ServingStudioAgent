@@ -15,7 +15,7 @@ from vibesim_agent.providers.codex.collector import CodexOutputCollector
 def _collector() -> CodexOutputCollector:
     return CodexOutputCollector(
         AgentRequest(
-            container="container",
+            execution="container",
             prompt="question",
             role=Role.ORCHESTRATOR,
             workspace_id="w_test",

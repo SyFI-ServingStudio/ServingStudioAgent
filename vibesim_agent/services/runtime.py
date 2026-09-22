@@ -15,6 +15,7 @@ from ..prompts.render import Prompts
 from ..providers.base import AgentRequest
 from ..providers.registry import ProviderRegistry
 from ..runtime.container import ContainerManager, ContainerSpec
+from ..runtime.execution import DockerExecution, Execution
 from ..runtime.homes import role_home
 from ..runtime.invocation import InvocationHome
 from ..runtime.mounts import (
@@ -113,7 +114,7 @@ class RuntimeService:
         owner = json.dumps([self.namespace, workspace_id, conversation_id])
         return "vibesim-agent-" + hashlib.sha256(owner.encode()).hexdigest()[:24], owner
 
-    def _prepare(self, request: TurnInput) -> str:
+    def _prepare(self, request: TurnInput) -> Execution:
         workspace = self.workspace(request.workspace_id)
         active = []
         # Validate all roles before refreshing profiles or creating a container.
@@ -189,7 +190,9 @@ class RuntimeService:
                 (role.value, runtime.session_scope) for role, runtime, _, _ in active
             ),
         )
-        return self.containers.ensure(spec)
+        # The only place the mode is decided. Host execution has not been
+        # switched on yet, so every turn is still a container.
+        return DockerExecution(self.containers.environment, self.containers.ensure(spec))
 
     def _cleanup(self, workspace_id: str, conversation_id: str) -> None:
         root = self._root(workspace_id, conversation_id)
@@ -204,7 +207,7 @@ class RuntimeService:
         name, owner = self._identity(workspace_id, conversation_id)
         self.containers.remove(name, owner=owner)
 
-    async def prepare(self, request: TurnInput) -> str:
+    async def prepare(self, request: TurnInput) -> Execution:
         return await self._thread(self._prepare, request)
 
     async def cleanup(self, workspace_id: str, conversation_id: str) -> None:

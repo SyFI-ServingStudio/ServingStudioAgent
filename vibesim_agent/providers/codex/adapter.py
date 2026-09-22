@@ -6,16 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping
 
-from ...runtime.invocation import (
-    SIGNAL_GRACE,
-    SIGNAL_TIMEOUT,
-    STOP_TIMEOUT,
-    RemoteInvocation,
-    signal_remote,
-)
-from ...runtime.invocation import (
-    InvocationHome as CodexHome,
-)
+from ...runtime.invocation import InvocationHome as CodexHome
 from ...runtime.process import ProcessStream
 from ..base import AgentRequest
 from .collector import CodexOutputCollector
@@ -46,16 +37,6 @@ class CodexAdapter:
             dict(process_environment) if process_environment is not None else None
         )
 
-    async def _signal(self, container: str, pid_file: str, signal: str) -> None:
-        await signal_remote(
-            container,
-            pid_file,
-            signal,
-            timeout=SIGNAL_TIMEOUT,
-            label="Codex",
-            environment=self.process_environment,
-        )
-
     async def run(self, request: AgentRequest) -> AsyncIterator[dict]:
         yield {"kind": "role_start", "role": request.role.value}
         home = self.home(request)
@@ -64,14 +45,12 @@ class CodexAdapter:
             if self.command_for_home is not None
             else self.command
         )
-        invocation = RemoteInvocation(
+        invocation = request.execution.invocation(
             execution_id=request.execution_id,
-            container=request.container,
             home=home,
-            signal=self._signal,
             logger=self.logger,
             label="Codex",
-            signal_grace=SIGNAL_GRACE,
+            process_environment=self.process_environment,
         )
         collector = CodexOutputCollector(
             request, home=home.host, idle_timeout=self.idle_timeout, logger=self.logger
@@ -80,14 +59,17 @@ class CodexAdapter:
         started = asyncio.get_running_loop().time()
         call = ProcessStream(
             command.build_tracked(
-                request, home=home.container, pid_file=invocation.pid_file
+                request,
+                home=request.execution.home_path(home),
+                pid_file=invocation.pid_file,
             ),
             input_data=request.prompt.encode("utf-8"),
             idle_timeout=self.idle_timeout,
             stop=invocation.stop,
             poll_interval=self.poll_interval,
-            stop_timeout=STOP_TIMEOUT,
-            environment=self.process_environment,
+            stop_timeout=request.execution.stop_timeout,
+            environment=request.execution.spawn_environment(self.process_environment),
+            cwd=request.execution.cwd,
         )
         ready = False
 

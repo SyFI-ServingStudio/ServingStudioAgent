@@ -14,6 +14,7 @@ from ..domain.turns import Outcome, TurnInput, TurnResult
 from ..prompts.render import Prompts
 from ..providers.base import AgentRequest, Selection
 from ..providers.registry import ProviderRegistry
+from ..runtime.execution import Execution
 
 
 @dataclass(frozen=True)
@@ -28,7 +29,7 @@ class ConversationDriver:
         providers: ProviderRegistry,
         prompts: Prompts,
         *,
-        prepare: Callable[[TurnInput], Awaitable[str]],
+        prepare: Callable[[TurnInput], Awaitable[Execution]],
         before_call: Callable[[AgentRequest], Awaitable[None]],
         schema_directory: Path,
         after_turn: Callable[[TurnInput], None] | None = None,
@@ -68,7 +69,7 @@ class ConversationDriver:
         *,
         role: Role,
         prompt: str,
-        container: str,
+        execution: Execution,
         selection: Selection,
         sessions: dict[Role, str],
         hold_usage: bool,
@@ -79,7 +80,7 @@ class ConversationDriver:
             request.turn_id,
             role,
             prompt,
-            container,
+            execution,
             selection,
             session_id=sessions.get(role),
             output_schema=self.schema_directory / f"{role.value}.schema.json",
@@ -149,7 +150,7 @@ class ConversationDriver:
         selections = {
             role: self.selection(request, role) for role in request.mode.roles
         }
-        container = await self.prepare(request)
+        execution = await self.prepare(request)
         context = (
             AnalyzerTurnContext.model_validate(request.analyzer_context)
             if request.analyzer_context is not None
@@ -182,7 +183,7 @@ class ConversationDriver:
                     request,
                     role=role,
                     prompt=prompt,
-                    container=container,
+                    execution=execution,
                     selection=selections[role],
                     sessions=sessions,
                     hold_usage=role is driving_role,

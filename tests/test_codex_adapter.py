@@ -15,6 +15,9 @@ from vibesim_agent.providers.base import AgentRequest, Model, Selection
 from vibesim_agent.providers.codex.adapter import CodexAdapter, CodexHome
 from vibesim_agent.providers.codex import adapter as adapter_module
 from vibesim_agent.providers.codex.command import CodexCommand
+from tests.runtime_fixtures import execution_environment
+from vibesim_agent.runtime import execution as execution_module
+from vibesim_agent.runtime.invocation import RemoteInvocation, signal_remote
 
 
 class LocalCommand:
@@ -34,8 +37,23 @@ class LocalCommand:
         ]
 
 
-class LocalAdapter(CodexAdapter):
-    async def _signal(self, container, pid_file, name):
+class LocalExecution:
+    """Stands in for the transport: a real local child, signalled by pid file.
+
+    `signal` is reassignable so a test can inject an unresponsive or failing
+    helper, which is what the Docker transport's failure modes look like from
+    the adapter's side.
+    """
+
+    cwd = None
+    agent_prompt = "/workspace/AGENTS.md"
+    managed_context = "/managed/context.json"
+    stop_timeout = execution_module.STOP_TIMEOUT
+
+    def __init__(self):
+        self.signal = self.local_signal
+
+    async def local_signal(self, container, pid_file, name):
         path = Path(pid_file)
         if path.exists():
             try:
@@ -43,8 +61,31 @@ class LocalAdapter(CodexAdapter):
             except ProcessLookupError:
                 pass
 
+    def command(self, arguments, *, environment, inherited=(), pid_file, label):
+        return list(arguments)
+
+    def spawn_environment(self, process_environment):
+        return dict(process_environment) if process_environment is not None else None
+
+    def home_path(self, home):
+        return home.container
+
+    def invocation(self, *, execution_id, home, logger, label, process_environment):
+        return RemoteInvocation(
+            execution_id=execution_id,
+            container="local",
+            home=home,
+            signal=lambda *arguments: self.signal(*arguments),
+            logger=logger,
+            label=label,
+            signal_grace=execution_module.SIGNAL_GRACE,
+        )
+
 
 class AdapterTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.execution = LocalExecution()
+
     async def test_signal_helper_timeout_is_reaped(self):
         original = asyncio.create_subprocess_exec
         helpers = []
@@ -56,15 +97,19 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
 
         with TemporaryDirectory() as directory:
             adapter = self.adapter(directory, "pass")
-            with patch("asyncio.create_subprocess_exec", sleeping_helper), patch.object(adapter_module, "SIGNAL_TIMEOUT", 0.05):
+            with patch("asyncio.create_subprocess_exec", sleeping_helper), patch.object(execution_module, "SIGNAL_TIMEOUT", 0.05):
                 with self.assertRaises(TimeoutError):
-                    await CodexAdapter._signal(adapter, "container", "pid", "INT")
+                    await signal_remote(
+                        "container", "pid", "INT",
+                        timeout=execution_module.SIGNAL_TIMEOUT,
+                        label="Codex", environment=None,
+                    )
             self.assertIsNotNone(helpers[0].returncode)
 
     async def test_signal_timeout_continues_escalation_with_sufficient_budget(self):
         with TemporaryDirectory() as directory:
             adapter = self.adapter(directory, "import time; time.sleep(30)", timeout=0.05)
-            original = adapter._signal
+            original = self.execution.local_signal
             signals = []
 
             async def signal_with_timeout(container, pid_file, name):
@@ -73,11 +118,11 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
                     raise TimeoutError("unresponsive signal helper")
                 await original(container, pid_file, name)
 
-            adapter._signal = signal_with_timeout
-            self.assertEqual(adapter_module.SIGNAL_GRACE, 5)
-            self.assertGreaterEqual(adapter_module.STOP_TIMEOUT,
-                                    3 * (2 * adapter_module.SIGNAL_TIMEOUT + adapter_module.SIGNAL_GRACE))
-            with patch.object(adapter_module, "SIGNAL_GRACE", 0.03):
+            self.execution.signal = signal_with_timeout
+            self.assertEqual(execution_module.SIGNAL_GRACE, 5)
+            self.assertGreaterEqual(execution_module.STOP_TIMEOUT,
+                                    3 * (2 * execution_module.SIGNAL_TIMEOUT + execution_module.SIGNAL_GRACE))
+            with patch.object(execution_module, "SIGNAL_GRACE", 0.03):
                 async with asyncio.timeout(3):
                     events = [event async for event in adapter.run(self.request())]
             self.assertEqual(signals, ["INT", "TERM", "KILL"])
@@ -86,14 +131,14 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_marker_write_failure_still_stops_known_remote_pid(self):
         with TemporaryDirectory() as directory:
             adapter = self.adapter(directory, "import time; time.sleep(30)")
-            original = adapter._signal
+            original = self.execution.local_signal
             signals = []
 
             async def record_signal(container, pid_file, name):
                 signals.append(name)
                 await original(container, pid_file, name)
 
-            adapter._signal = record_signal
+            self.execution.signal = record_signal
             request = self.request()
             task = asyncio.create_task(self.consume(adapter, request))
             async with asyncio.timeout(3):
@@ -108,31 +153,40 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(list(Path(directory).glob("call-*.pid")))
 
     async def test_delayed_remote_shell_observes_persistent_startup_cancellation(self):
-        class LocalEnvironment:
-            def prefix(self, container, *, environment, inherited=()):
-                return []
+        class WrappedLocalExecution(LocalExecution):
+            """Keeps the real pid wrapper, drops only the `docker exec` prefix.
+
+            The wrapper is what this test is about: the remote shell can start
+            after its local client has gone, and the `.cancel` check is the only
+            thing that stops it.
+            """
+
+            def command(self, arguments, *, environment, inherited=(), pid_file, label):
+                return ["sh", "-c", execution_module.PID_WRAPPER, label, pid_file, *arguments]
 
         class TrackedLocalCommand(CodexCommand):
-            def build(self, request, *, home):
+            def arguments(self, request, *, home):
                 return [sys.executable, "-c", "import sys; from pathlib import Path; Path(sys.argv[1]).touch()",
                         str(Path(home) / "executed")]
+
+        self.execution = WrappedLocalExecution()
 
         class DelayedRemoteCommand:
             remote = None
 
             def build_tracked(self, request, *, home, pid_file):
-                self.remote = TrackedLocalCommand(LocalEnvironment()).build_tracked(
+                self.remote = TrackedLocalCommand(execution_environment()).build_tracked(
                     request, home=home, pid_file=pid_file
                 )
                 return [sys.executable, "-c", "import time; time.sleep(30)"]
 
         with TemporaryDirectory() as directory:
             command = DelayedRemoteCommand()
-            adapter = LocalAdapter(command, home=lambda _: CodexHome(Path(directory), directory),
+            adapter = CodexAdapter(command, home=lambda _: CodexHome(Path(directory), directory),
                                    idle_timeout=10, logger=logging.getLogger("adapter-test"))
             request = self.request()
             task = asyncio.create_task(self.consume(adapter, request))
-            with patch.object(adapter_module, "SIGNAL_GRACE", 0.03):
+            with patch.object(execution_module, "SIGNAL_GRACE", 0.03):
                 async with asyncio.timeout(3):
                     while command.remote is None:
                         if task.done():
@@ -158,7 +212,7 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             fresh = self.request()
             fresh_pid = str(Path(directory) / f"call-{fresh.execution_id}.pid")
             followup = await asyncio.create_subprocess_exec(
-                *TrackedLocalCommand(LocalEnvironment()).build_tracked(
+                *TrackedLocalCommand(execution_environment()).build_tracked(
                     fresh, home=directory, pid_file=fresh_pid
                 )
             )
@@ -204,13 +258,13 @@ class AdapterTests(unittest.IsolatedAsyncioTestCase):
             "t",
             Role.ASSISTANT,
             "question",
-            "local",
+            self.execution,
             Selection("test", model, "high", "default", "scope"),
         )
 
     def adapter(self, directory, code, timeout=2):
         command = LocalCommand(code)
-        return LocalAdapter(
+        return CodexAdapter(
             command,
             home=lambda _: CodexHome(Path(directory), directory),
             idle_timeout=timeout,

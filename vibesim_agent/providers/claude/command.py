@@ -56,6 +56,19 @@ class ClaudeCommand:
     def build_tracked(
         self, request: AgentRequest, *, home: str, pid_file: str
     ) -> list[str]:
+        return request.execution.command(
+            self.arguments(request),
+            environment={
+                "CLAUDE_CONFIG_DIR": home,
+                "DISABLE_AUTOUPDATER": "1",
+                "VIBESIM_AGENT_PID_FILE": pid_file,
+            },
+            inherited=self.inherited_environment,
+            pid_file=pid_file,
+            label="vibesim-claude",
+        )
+
+    def arguments(self, request: AgentRequest) -> list[str]:
         mcp = {
             "mcpServers": {
                 "analyzer": {
@@ -64,57 +77,39 @@ class ClaudeCommand:
                     "env": {
                         "ANALYZER_MCP_SOURCE": self.environment.agent.analyzer_source,
                         "ANALYZER_MCP_BASE_URL": self.environment.agent.analyzer_base_url,
-                        "VIBESIM_MANAGED_RUN_CONTEXT": self.environment.managed_context,
+                        "VIBESIM_MANAGED_RUN_CONTEXT": request.execution.managed_context,
                     },
                 }
             }
         }
-        command = self.environment.prefix(
-            request.container,
-            environment={
-                "CLAUDE_CONFIG_DIR": home,
-                "DISABLE_AUTOUPDATER": "1",
-                "VIBESIM_AGENT_PID_FILE": pid_file,
-            },
-            inherited=self.inherited_environment,
-        )
-        command.extend(
-            [
-                "sh",
-                "-c",
-                (
-                    'printf "%s\\n" "$$" > "$1" || exit; '
-                    'if [ -e "$1.cancel" ]; then rm -f -- "$1"; exit 130; fi; '
-                    'shift; exec "$@"'
-                ),
-                "vibesim-claude",
-                pid_file,
-                "claude",
-                "-p",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--model",
-                request.selection.model.model_id,
-                "--effort",
-                request.selection.effort,
-                # Retired `--dangerously-skip-permissions`. `--permission-prompts
-                # none` is load-bearing, not decoration: `auto` falls back to a
-                # manual prompt when its classifier cannot evaluate an action,
-                # and under `-p` the default `host` target has nobody to ask.
-                "--permission-mode",
-                self.permission_mode,
-                "--permission-prompts",
-                self.permission_prompts,
-                "--setting-sources",
-                "",
-                "--append-system-prompt-file",
-                "/workspace/AGENTS.md",
-                "--strict-mcp-config",
-                "--mcp-config",
-                json.dumps(mcp),
-            ]
-        )
+        command = [
+            "claude",
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--model",
+            request.selection.model.model_id,
+            "--effort",
+            request.selection.effort,
+            # Retired `--dangerously-skip-permissions`. `--permission-prompts
+            # none` is load-bearing, not decoration: `auto` falls back to a
+            # manual prompt when its classifier cannot evaluate an action, and
+            # under `-p` the default `host` target has nobody to ask.
+            "--permission-mode",
+            self.permission_mode,
+            "--permission-prompts",
+            self.permission_prompts,
+            "--setting-sources",
+            "",
+            # A mount target in a container and a path outside the tree on the
+            # host; either way it is the role contract, not the repo's own file.
+            "--append-system-prompt-file",
+            request.execution.agent_prompt,
+            "--strict-mcp-config",
+            "--mcp-config",
+            json.dumps(mcp),
+        ]
         if self.allowed_tools:
             # `--setting-sources ""` drops every settings file, so without this
             # the workspace's own hot path would reach the classifier on each

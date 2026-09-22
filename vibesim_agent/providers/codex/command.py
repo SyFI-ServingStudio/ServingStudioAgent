@@ -38,34 +38,27 @@ class CodexCommand:
     def build_tracked(
         self, request: AgentRequest, *, home: str, pid_file: str
     ) -> list[str]:
-        prefix = self.environment.prefix(
-            request.container,
+        return request.execution.command(
+            self.arguments(request, home=home),
             environment={"CODEX_HOME": home},
             inherited=self.inherited_environment,
+            pid_file=pid_file,
+            label="vibesim-codex",
         )
-        arguments = self.build(request, home=home)[len(prefix) :]
-        return [
-            *prefix,
-            "sh",
-            "-c",
-            (
-                'printf "%s\\n" "$$" > "$1" || exit; '
-                'if [ -e "$1.cancel" ]; then rm -f -- "$1"; exit 130; fi; '
-                'shift; exec "$@"'
-            ),
-            "vibesim-codex",
-            pid_file,
-            *arguments,
-        ]
 
     def build(self, request: AgentRequest, *, home: str) -> list[str]:
+        """The untracked form: transport prefix plus argv, no pid wrapper."""
+        return [
+            *request.execution.prefix(
+                environment={"CODEX_HOME": home},
+                inherited=self.inherited_environment,
+            ),
+            *self.arguments(request, home=home),
+        ]
+
+    def arguments(self, request: AgentRequest, *, home: str) -> list[str]:
         selection = request.selection
-        command = self.environment.prefix(
-            request.container,
-            environment={"CODEX_HOME": home},
-            inherited=self.inherited_environment,
-        )
-        command.extend(["codex", "exec"])
+        command = ["codex", "exec"]
         if request.session_id is not None:
             command.append("resume")
         command.extend(["-m", selection.model.model_id])
@@ -84,7 +77,7 @@ class CodexCommand:
                 "mcp_servers.analyzer.args": [self.mcp_server],
                 "mcp_servers.analyzer.env.ANALYZER_MCP_SOURCE": self.environment.agent.analyzer_source,
                 "mcp_servers.analyzer.env.ANALYZER_MCP_BASE_URL": self.environment.agent.analyzer_base_url,
-                "mcp_servers.analyzer.env.VIBESIM_MANAGED_RUN_CONTEXT": self.environment.managed_context,
+                "mcp_servers.analyzer.env.VIBESIM_MANAGED_RUN_CONTEXT": request.execution.managed_context,
             }
         )
         for key, value in settings.items():

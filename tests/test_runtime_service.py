@@ -87,7 +87,10 @@ class RuntimeServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_prepares_active_roles_and_passes_complete_mounts_and_scope(self):
-        self.assertEqual(self.runtime._prepare(self.request), "container-id")
+        execution = self.runtime._prepare(self.request)
+        self.assertEqual(execution.container, "container-id")
+        # Host execution is not switched on yet; every turn is still a container.
+        self.assertIsNone(execution.cwd)
         spec = self.containers.ensure.call_args.args[0]
         self.assertEqual(len(self.prepared), 2)
         self.assertEqual(spec.binaries, ("test-cli",))

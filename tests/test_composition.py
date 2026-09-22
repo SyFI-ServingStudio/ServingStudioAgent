@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import sys
 import unittest
 from dataclasses import replace
@@ -7,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tests import test_builtin_providers as fixtures
+from tests.runtime_fixtures import docker_execution
 from vibesim_agent.composition import build_builtin_setup
 from vibesim_agent.domain.roles import Role
 from vibesim_agent.prompts.render import Prompts
@@ -82,7 +84,7 @@ class CompositionTests(unittest.IsolatedAsyncioTestCase):
             "t",
             Role.ASSISTANT,
             "question",
-            "container",
+            docker_execution(self.environment),
             self.setup.registry.select(provider_id),
             output_schema=Path("/contracts/assistant.schema.json"),
         )
@@ -204,6 +206,11 @@ class CompositionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("--resume", args)
 
     async def test_stop_helpers_use_same_docker_environment(self):
+        """Each provider signals with its own credential-bearing environment.
+
+        `docker exec -e NAME` inherits by name from the client process, so the
+        stop helper has to run with the same environment as the call it stops.
+        """
         original = asyncio.create_subprocess_exec
         environments = []
 
@@ -213,6 +220,13 @@ class CompositionTests(unittest.IsolatedAsyncioTestCase):
 
         for provider_id in ("gpt", "claude"):
             adapter = self.setup.registry.provider(provider_id).adapter
+            invocation = docker_execution(self.environment).invocation(
+                execution_id="e",
+                home=InvocationHome(Path("/tmp"), "/tmp"),
+                logger=logging.getLogger("composition-test"),
+                label=provider_id,
+                process_environment=adapter.process_environment,
+            )
             with patch("asyncio.create_subprocess_exec", spawn):
-                await adapter._signal("container", "/call.pid", "INT")
+                await invocation.signal("container", "/call.pid", "INT")
             self.assertEqual(environments[-1], adapter.process_environment)

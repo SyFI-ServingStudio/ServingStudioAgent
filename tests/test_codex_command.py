@@ -4,7 +4,11 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from tests.runtime_fixtures import agent_request, execution_environment
+from tests.runtime_fixtures import (
+    agent_request,
+    docker_execution,
+    execution_environment,
+)
 from vibesim_agent.domain.roles import Role
 from vibesim_agent.providers.base import OutputMode
 from vibesim_agent.providers.codex.command import CodexCommand
@@ -49,7 +53,11 @@ class CodexCommandTests(unittest.TestCase):
         )
 
     def request(self):
-        return replace(agent_request(), execution_id="fixed-execution")
+        return replace(
+            agent_request(),
+            execution_id="fixed-execution",
+            execution=docker_execution(self.builder().environment),
+        )
 
     def test_fresh_and_resume_match_old_command(self):
         cases = command_golden()["cases"]

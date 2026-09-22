@@ -5,6 +5,7 @@ from pathlib import Path
 from vibesim_agent.domain.roles import Role
 from vibesim_agent.providers.base import AgentRequest, Model, Selection
 from vibesim_agent.runtime.command import ExecutionEnvironment
+from vibesim_agent.runtime.execution import DockerExecution
 from vibesim_agent.settings import AgentSettings, ContainerSettings
 
 
@@ -33,6 +34,10 @@ def execution_environment() -> ExecutionEnvironment:
     )
 
 
+def docker_execution(environment: ExecutionEnvironment | None = None):
+    return DockerExecution(environment or execution_environment(), "container")
+
+
 def agent_request() -> AgentRequest:
     model = Model("gpt-5.6-sol", "GPT", ("high",), "high", ("default", "fast"))
     return AgentRequest(
@@ -41,7 +46,7 @@ def agent_request() -> AgentRequest:
         "t",
         Role.ASSISTANT,
         "text",
-        "container",
+        docker_execution(),
         Selection("gpt", model, "high", "fast", "scope"),
         output_schema=Path("/schema.json"),
     )
