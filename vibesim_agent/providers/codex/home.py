@@ -1,12 +1,12 @@
 """Refresh an isolated Codex profile without importing host conversation state."""
 
-import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from ...runtime.invocation import InvocationHome, RoleContext
 from ...runtime.permissions import reject_retired_settings
+from ..skills import link_skills, offered_skills
 
 PROFILE_ENTRIES = (
     "auth.json",
@@ -74,45 +74,13 @@ class CodexProfile:
             if path.is_symlink():
                 raise ValueError("Codex runtime directories must not be symlinks")
             path.mkdir(exist_ok=True)
-        self._link_skills(home, context)
-
-    def _link_skills(self, home: InvocationHome, context: RoleContext) -> None:
-        """Offer the workspace's skills to Codex as skills, one link each.
-
-        Codex reads `$CODEX_HOME/skills`, and until now nothing put anything
-        there: the workspace's own library was reachable only by the path named
-        in the role contract, so Codex could `cat` a SKILL.md but never had one
-        loaded. Claude has had the link since the legacy backend; the Codex arm
-        of that function returned before reaching it.
-
-        A link per skill rather than one link for the directory, because
-        `$CODEX_HOME/skills` is *also* where Codex installs its own `.system`
-        skills on first run. Pointed at the workspace, that write would land in
-        the user's repository — in a worktree, an untracked directory inside a
-        real checkout.
-        """
-        if context.skills_source is None:
-            return
-        skills = home.host / "skills"
-        if skills.is_symlink() or (skills.exists() and not skills.is_dir()):
-            skills.unlink()
-        skills.mkdir(exist_ok=True)
-        offered = {
-            entry.name: f"{context.skills.rstrip('/')}/{entry.name}"
-            for entry in sorted(context.skills_source.iterdir())
-            if entry.is_dir() and (entry / "SKILL.md").is_file()
-        } if context.skills_source.is_dir() else {}
-        for existing in skills.iterdir():
-            # Only links this method made are its to remove. `.system` and
-            # anything else Codex owns is a real directory and stays.
-            if existing.is_symlink() and offered.get(existing.name) != os.readlink(
-                existing
-            ):
-                existing.unlink()
-        for name, target in offered.items():
-            link = skills / name
-            if not link.is_symlink() and not link.exists():
-                link.symlink_to(target, target_is_directory=True)
+        # Codex already reads the user's own skills from `$HOME/.agents/skills`
+        # on the host, where `HOME` is inherited; only the workspace's need
+        # offering here, and a container sees nothing else.
+        link_skills(
+            home.host / "skills",
+            offered_skills(context.skills_source, context.skills),
+        )
 
     @property
     def catalog_filename(self) -> str | None:

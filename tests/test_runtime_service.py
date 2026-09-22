@@ -337,6 +337,8 @@ class ExecutionModeTests(unittest.TestCase):
             self.assertEqual(context.skills, str(self.repo / "skills"))
             # The same directory read from this side, so a profile can list it.
             self.assertEqual(context.skills_source, self.repo / "skills")
+            # The user's own skills are offered here and nowhere else.
+            self.assertTrue(context.user_skills)
         self.assertTrue(Path(execution.agent_prompt).is_file())
 
     def test_a_container_names_the_mount_but_still_says_where_to_read_it(self):
@@ -356,6 +358,7 @@ class ExecutionModeTests(unittest.TestCase):
             # target, and whoever enumerates the skills is out here.
             self.assertEqual(context.skills, "/workspace/skills")
             self.assertEqual(context.skills_source, self.repo / "skills")
+            self.assertFalse(context.user_skills)
 
     def test_a_missing_cli_refuses_the_turn_rather_than_spawning(self):
         with self.assertRaisesRegex(HostUnavailable, "test-cli"):

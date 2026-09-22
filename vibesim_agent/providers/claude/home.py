@@ -1,11 +1,11 @@
 """Isolated Claude state with optional host-login credential supply."""
 
-import os
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
 from ...runtime.invocation import InvocationHome, RoleContext
+from ..skills import link_skills, offered_skills
 
 
 @dataclass(frozen=True)
@@ -42,13 +42,17 @@ class ClaudeProfile:
                 target.write_bytes(content)
                 marker.write_text(digest)
                 marker.chmod(0o600)
-        skills = home.host / "skills"
-        # Re-point rather than create-if-absent: the role home outlives a switch
-        # between execution modes, and a stale container path would otherwise
-        # survive forever as a symlink into a directory that does not exist.
-        if skills.is_symlink():
-            if os.readlink(skills) != context.skills:
-                skills.unlink()
-                skills.symlink_to(context.skills, target_is_directory=True)
-        elif not skills.exists():
-            skills.symlink_to(context.skills, target_is_directory=True)
+        # `$CLAUDE_CONFIG_DIR/skills` is where Claude reads user-level skills,
+        # and the config dir is this isolated home, so the user's own skills
+        # appear only if they are linked here -- which happens on the host
+        # alone. A container turn gets the workspace's and nothing else.
+        user = (
+            self.source / "skills"
+            if self.source is not None and context.user_skills
+            else None
+        )
+        link_skills(
+            home.host / "skills",
+            offered_skills(context.skills_source, context.skills),
+            offered_skills(user, str(user)),
+        )

@@ -35,6 +35,9 @@ class RoleContext:
     string -- a profile that has to enumerate the skills needs the host path
     and has to write the CLI's path into the links it makes.
 
+    `user_skills` is set only on the host: the user's own skills are for
+    their machine, and a container is given the workspace's alone.
+
     `global_prompt` is set only on the host, where Codex reads
     `$CODEX_HOME/AGENTS.md` -- in a container the role contract arrives as a
     bind mount over the workspace's own AGENTS.md instead.
@@ -43,6 +46,7 @@ class RoleContext:
     skills: str
     skills_source: Path | None = None
     global_prompt: Path | None = None
+    user_skills: bool = False
     # TOML appended to the managed Codex config. Per workspace, because the
     # host profile has to name this repository's two git directories.
     codex_config: str = ""

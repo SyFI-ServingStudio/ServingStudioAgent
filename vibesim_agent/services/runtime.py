@@ -224,6 +224,7 @@ class RuntimeService:
             # Only the host delivers the contract this way. In a container it
             # arrives as a mount over the workspace's own AGENTS.md instead.
             global_prompt=prompt,
+            user_skills=True,
             codex_config=permissions.config,
         )
         for _, _, provision, home in active:

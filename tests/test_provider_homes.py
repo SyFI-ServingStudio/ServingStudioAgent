@@ -155,9 +155,10 @@ class ProviderHomesTests(unittest.TestCase):
         saved.write_text("saved")
         profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertEqual(saved.read_text(), "saved")
-        self.assertEqual(
-            (self.home.host / "skills").readlink(), Path("/workspace/skills")
-        )
+        # A directory of its own, never a link into the workspace; with no
+        # library to read there is nothing to offer in it.
+        self.assertTrue((self.home.host / "skills").is_dir())
+        self.assertFalse((self.home.host / "skills").is_symlink())
         self.assertEqual(self.home.host.stat().st_mode & 0o777, 0o700)
         self.assertFalse((self.home.host / "auth.json").exists())
 
@@ -189,21 +190,64 @@ class RoleContextTests(unittest.TestCase):
             skills=str(self.library),
             skills_source=self.library,
             global_prompt=self.contract,
+            user_skills=True,
         )
 
-    def test_claude_repoints_a_stale_skills_link_instead_of_keeping_it(self):
+    def user_skill(self, name):
+        (self.source / "skills" / name).mkdir(parents=True)
+        (self.source / "skills" / name / "SKILL.md").write_text(f"# user {name}")
+
+    def test_claude_replaces_the_legacy_directory_link_with_one_link_per_skill(self):
+        link = self.home.host / "skills"
+        self.home.host.mkdir(parents=True)
+        link.symlink_to("/workspace/skills", target_is_directory=True)
+        ClaudeProfile(self.source).prepare(self.home, self.container())
+        self.assertFalse(link.is_symlink())
+        self.assertEqual(
+            os.readlink(link / "dev-run-tests"), "/workspace/skills/dev-run-tests"
+        )
+
+    def test_claude_skill_links_follow_a_switch_of_execution_mode(self):
         profile = ClaudeProfile(self.source)
         profile.prepare(self.home, self.container())
-        link = self.home.host / "skills"
-        self.assertEqual(os.readlink(link), "/workspace/skills")
-
         profile.prepare(self.home, self.host())
+        link = self.home.host / "skills/dev-run-tests"
         # Left alone, a container path would survive as a link into a directory
         # that does not exist on this machine.
-        self.assertEqual(os.readlink(link), str(self.root / "wt-topic/skills"))
+        self.assertEqual(os.readlink(link), str(self.library / "dev-run-tests"))
+        profile.prepare(self.home, self.container())
+        self.assertEqual(os.readlink(link), "/workspace/skills/dev-run-tests")
+
+    def test_claude_is_offered_the_users_own_skills_on_the_host_only(self):
+        self.user_skill("run-gpu-job")
+        profile = ClaudeProfile(self.source)
+        skills = self.home.host / "skills"
+
+        profile.prepare(self.home, self.host())
+        # `$CLAUDE_CONFIG_DIR/skills` is Claude's user-level directory, and the
+        # config dir is this isolated home: unlinked, the skill that says how
+        # to submit a Slurm job is invisible exactly where `sbatch` works.
+        self.assertEqual(
+            os.readlink(skills / "run-gpu-job"),
+            str(self.source / "skills/run-gpu-job"),
+        )
 
         profile.prepare(self.home, self.container())
-        self.assertEqual(os.readlink(link), "/workspace/skills")
+        # The user's skills are for their machine; a container gets the
+        # workspace's and nothing else.
+        self.assertEqual(
+            sorted(entry.name for entry in skills.iterdir()),
+            ["dev-run-tests", "top-add-kernel"],
+        )
+
+    def test_the_workspace_skill_wins_a_name_the_user_also_has(self):
+        self.user_skill("dev-run-tests")
+        ClaudeProfile(self.source).prepare(self.home, self.host())
+        # The workspace's copy is the one that matches the code in front of it.
+        self.assertEqual(
+            os.readlink(self.home.host / "skills/dev-run-tests"),
+            str(self.library / "dev-run-tests"),
+        )
 
     def test_codex_writes_the_contract_only_where_it_is_the_delivery_path(self):
         profile = CodexProfile(self.source)
