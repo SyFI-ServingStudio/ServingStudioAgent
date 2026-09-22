@@ -1,4 +1,5 @@
 import json
+import os
 import tomllib
 import unittest
 from dataclasses import replace
@@ -11,7 +12,7 @@ from vibesim_agent.providers.claude.home import ClaudeProfile
 from vibesim_agent.providers.codex.command import CodexCommand
 from vibesim_agent.providers.codex.home import CodexProfile
 from vibesim_agent.runtime.homes import role_home
-from vibesim_agent.runtime.invocation import InvocationHome
+from vibesim_agent.runtime.invocation import InvocationHome, RoleContext
 
 
 class ProviderHomesTests(unittest.TestCase):
@@ -27,7 +28,7 @@ class ProviderHomesTests(unittest.TestCase):
         (self.source / "sessions/host.json").write_text("host conversation")
         (self.source / "history.jsonl").write_text("host history")
         profile = CodexProfile(self.source)
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertFalse((self.home.host / "sessions/host.json").exists())
         self.assertFalse((self.home.host / "history.jsonl").exists())
         saved = self.home.host / "sessions/saved.json"
@@ -35,14 +36,14 @@ class ProviderHomesTests(unittest.TestCase):
         marker = self.home.host / "call-cancelled.pid.cancel"
         marker.touch()
         (self.source / "auth.json").write_text('{"token":"new"}')
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertEqual(
             json.loads((self.home.host / "auth.json").read_text())["token"], "new"
         )
         self.assertEqual(saved.read_text(), "role conversation")
         self.assertTrue(marker.exists())
         (self.source / "auth.json").unlink()
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertFalse((self.home.host / "auth.json").exists())
 
     def test_codex_catalog_override_preserves_original_toml(self):
@@ -50,7 +51,7 @@ class ProviderHomesTests(unittest.TestCase):
         (self.source / "config.toml").write_text(config)
         (self.source / "models_catalog.json").write_text("{}")
         profile = CodexProfile(self.source)
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         builder = replace(
             CodexCommand(execution_environment()),
             catalog_filename=profile.catalog_filename,
@@ -65,11 +66,11 @@ class ProviderHomesTests(unittest.TestCase):
 
     def test_separate_roles_do_not_share_sessions(self):
         profile = CodexProfile(self.source)
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         saved = self.home.host / "sessions/saved.json"
         saved.write_text("first")
         second = InvocationHome(self.root / "second", "/second")
-        profile.prepare(second)
+        profile.prepare(second, RoleContext(skills="/workspace/skills"))
         self.assertEqual(list((second.host / "sessions").iterdir()), [])
         self.assertEqual(saved.read_text(), "first")
 
@@ -78,11 +79,11 @@ class ProviderHomesTests(unittest.TestCase):
         rules.mkdir()
         (rules / "default.rules").write_text("old rules")
         profile = CodexProfile(self.source)
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         (self.home.host / "cache/durable").write_text("cache")
         (rules / "default.rules").unlink()
         rules.rmdir()
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertFalse((self.home.host / "rules").exists())
         self.assertEqual((self.home.host / "cache/durable").read_text(), "cache")
 
@@ -93,7 +94,7 @@ class ProviderHomesTests(unittest.TestCase):
         (external / "saved").write_text("unchanged")
         (self.home.host / "sessions").symlink_to(external, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, "must not be symlinks"):
-            CodexProfile(self.source).prepare(self.home)
+            CodexProfile(self.source).prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertEqual(list(external.iterdir()), [external / "saved"])
         self.assertEqual((external / "saved").read_text(), "unchanged")
 
@@ -123,12 +124,12 @@ class ProviderHomesTests(unittest.TestCase):
         profile = CodexProfile(self.source)
         for target in (self.source, self.source / "nested", self.root):
             with self.subTest(target=target), self.assertRaises(ValueError):
-                profile.prepare(InvocationHome(target, "/home"))
+                profile.prepare(InvocationHome(target, "/home"), RoleContext(skills="/workspace/skills"))
         self.home.host.symlink_to(self.source, target_is_directory=True)
         with self.assertRaises(ValueError):
-            profile.prepare(self.home)
+            profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         with self.assertRaises(ValueError):
-            ClaudeProfile().prepare(self.home)
+            ClaudeProfile().prepare(self.home, RoleContext(skills="/workspace/skills"))
 
     def test_scoped_role_paths_reject_symlinks_before_profile_preparation(self):
         root = self.root / "conversation"
@@ -149,13 +150,75 @@ class ProviderHomesTests(unittest.TestCase):
 
     def test_claude_preserves_existing_sessions_and_creates_container_skills_link(self):
         profile = ClaudeProfile()
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         saved = self.home.host / "sessions.json"
         saved.write_text("saved")
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertEqual(saved.read_text(), "saved")
         self.assertEqual(
             (self.home.host / "skills").readlink(), Path("/workspace/skills")
         )
         self.assertEqual(self.home.host.stat().st_mode & 0o777, 0o700)
         self.assertFalse((self.home.host / "auth.json").exists())
+
+
+class RoleContextTests(unittest.TestCase):
+    """The role home outlives a switch between execution modes."""
+
+    def setUp(self):
+        self.root = Path(self.enterContext(TemporaryDirectory()))
+        self.source = self.root / "source"
+        self.source.mkdir()
+        (self.source / ".credentials.json").write_text('{"token":"t"}')
+        self.home = InvocationHome(self.root / "role", "/role-home")
+        self.contract = self.root / "AGENTS.md"
+        self.contract.write_text("role contract")
+
+    def container(self):
+        return RoleContext(skills="/workspace/skills")
+
+    def host(self):
+        return RoleContext(
+            skills=str(self.root / "wt-topic/skills"), global_prompt=self.contract
+        )
+
+    def test_claude_repoints_a_stale_skills_link_instead_of_keeping_it(self):
+        profile = ClaudeProfile(self.source)
+        profile.prepare(self.home, self.container())
+        link = self.home.host / "skills"
+        self.assertEqual(os.readlink(link), "/workspace/skills")
+
+        profile.prepare(self.home, self.host())
+        # Left alone, a container path would survive as a link into a directory
+        # that does not exist on this machine.
+        self.assertEqual(os.readlink(link), str(self.root / "wt-topic/skills"))
+
+        profile.prepare(self.home, self.container())
+        self.assertEqual(os.readlink(link), "/workspace/skills")
+
+    def test_codex_writes_the_contract_only_where_it_is_the_delivery_path(self):
+        profile = CodexProfile(self.source)
+        prompt = self.home.host / "AGENTS.md"
+
+        profile.prepare(self.home, self.host())
+        # Codex reads $CODEX_HOME/AGENTS.md as global instructions; this is how
+        # the contract reaches a host turn.
+        self.assertEqual(prompt.read_text(), "role contract")
+
+        profile.prepare(self.home, self.container())
+        # In a container the contract arrives as a mount over the workspace's
+        # own AGENTS.md, so a leftover here would apply it twice.
+        self.assertFalse(prompt.exists())
+
+    def test_codex_replaces_rather_than_appends_on_every_preparation(self):
+        profile = CodexProfile(self.source)
+        profile.prepare(self.home, self.host())
+        self.contract.write_text("revised contract")
+        profile.prepare(self.home, self.host())
+        self.assertEqual((self.home.host / "AGENTS.md").read_text(), "revised contract")
+
+    def test_codex_contract_is_not_a_profile_entry_and_survives_nothing_else(self):
+        from vibesim_agent.providers.codex.home import PROFILE_ENTRIES
+
+        # The slot is free precisely because the profile copy never touches it.
+        self.assertNotIn("AGENTS.md", PROFILE_ENTRIES)

@@ -72,6 +72,14 @@ class AgentSettings(ConfigModel):
         default="http://host.docker.internal:8765",
         description="Callback URL visible to runner",
     )
+    host_analyzer_base_url: str | None = Field(
+        default=None,
+        description="Analyzer URL visible to host execution; unset reuses the runner URL",
+    )
+    host_managed_backend_url: str | None = Field(
+        default=None,
+        description="Callback URL visible to host execution; unset reuses the runner URL",
+    )
     naming_model: str = Field(
         default="deepseek/deepseek-v4-flash",
         min_length=1,
@@ -84,9 +92,17 @@ class AgentSettings(ConfigModel):
         default=8, gt=0, description="Automatic naming timeout in seconds"
     )
 
-    @field_validator("analyzer_base_url", "managed_backend_url", "naming_base_url")
+    @field_validator(
+        "analyzer_base_url",
+        "managed_backend_url",
+        "naming_base_url",
+        "host_analyzer_base_url",
+        "host_managed_backend_url",
+    )
     @classmethod
-    def http_url(cls, value: str) -> str:
+    def http_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         parsed = urlsplit(value)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("must be an absolute HTTP URL")
@@ -96,10 +112,10 @@ class AgentSettings(ConfigModel):
             raise ValueError("invalid port")
         return value.rstrip("/")
 
-    @field_validator("analyzer_base_url")
+    @field_validator("analyzer_base_url", "host_analyzer_base_url")
     @classmethod
-    def analyzer_origin(cls, value: str) -> str:
-        if urlsplit(value).path:
+    def analyzer_origin(cls, value: str | None) -> str | None:
+        if value is not None and urlsplit(value).path:
             raise ValueError("must be an HTTP origin without a path")
         return value
 
@@ -236,7 +252,16 @@ def _load(
         key = _environment_name(prefix, name, field)
         if key is not None and key in environment:
             value = environment[key].strip()
-            if name in ("hf_home", "worktree_root") and not value:
+            if (
+                name
+                in (
+                    "hf_home",
+                    "worktree_root",
+                    "host_analyzer_base_url",
+                    "host_managed_backend_url",
+                )
+                and not value
+            ):
                 values[name] = None
             else:
                 values[name] = value

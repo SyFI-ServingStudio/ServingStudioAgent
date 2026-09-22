@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
+import os
+import signal
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,8 +22,18 @@ StopProcess = Callable[[asyncio.subprocess.Process], Awaitable[None]]
 KillProcess = Callable[[asyncio.subprocess.Process], None]
 
 
-def _kill_process(process: asyncio.subprocess.Process) -> None:
+def kill_process(process: asyncio.subprocess.Process) -> None:
     process.kill()
+
+
+def kill_process_group(process: asyncio.subprocess.Process) -> None:
+    """Signal the whole group, because the leader is not what holds the pipes.
+
+    A locally spawned CLI leads its own session and starts children of its own
+    (MCP servers, shell tools). Killing only the leader orphans those, and they
+    are the processes still holding the pipes this class has to drain.
+    """
+    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
 
 
 class ProcessStream:
@@ -64,7 +76,7 @@ class ProcessStream:
             )
         self.cwd = cwd
         self.start_new_session = start_new_session
-        self.kill = kill if kill is not None else _kill_process
+        self.kill = kill if kill is not None else kill_process
         self.command = tuple(command)
         self.input_data = input_data
         self.idle_timeout = idle_timeout

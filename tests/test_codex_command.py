@@ -100,20 +100,21 @@ class CodexCommandTests(unittest.TestCase):
         self.assertFalse(any(arg.startswith("service_tier=") for arg in command))
 
     def test_config_paths_are_toml_quoted_and_prompt_stays_out_of_argv(self):
-        builder = replace(
-            self.builder(),
+        execution = replace(
+            docker_execution(self.builder().environment),
             mcp_python='/quoted/"python',
             mcp_server="/space path/server.py",
         )
-        command = builder.build(self.request(), home="/role-home")
+        request = replace(self.request(), execution=execution)
+        command = self.builder().build(request, home="/role-home")
         values = [
             command[index + 1] for index, part in enumerate(command) if part == "-c"
         ]
         parsed = tomllib.loads("\n".join(values))
         self.assertEqual(
-            parsed["mcp_servers"]["analyzer"]["command"], builder.mcp_python
+            parsed["mcp_servers"]["analyzer"]["command"], execution.mcp_python
         )
-        self.assertNotIn(self.request().prompt, command)
+        self.assertNotIn(request.prompt, command)
 
 
 class CodexSandboxPostureTests(unittest.TestCase):

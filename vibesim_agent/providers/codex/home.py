@@ -4,7 +4,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...runtime.invocation import InvocationHome
+from ...runtime.invocation import InvocationHome, RoleContext
 
 PROFILE_ENTRIES = (
     "auth.json",
@@ -22,7 +22,7 @@ PROFILE_ENTRIES = (
 class CodexProfile:
     source: Path
 
-    def prepare(self, home: InvocationHome) -> None:
+    def prepare(self, home: InvocationHome, context: RoleContext) -> None:
         source = self.source.resolve(strict=True)
         destination = home.host.resolve()
         if not source.is_dir():
@@ -46,6 +46,15 @@ class CodexProfile:
                 shutil.copytree(entry, target)
             elif entry.is_file():
                 shutil.copy2(entry, target)
+        # `PROFILE_ENTRIES` does not include AGENTS.md, so this slot is free.
+        # Codex reads `$CODEX_HOME/AGENTS.md` as global instructions, which is
+        # how the role contract reaches a host turn -- additively, alongside the
+        # worktree's own AGENTS.md, where a container mount would replace it.
+        global_prompt = home.host / "AGENTS.md"
+        if global_prompt.is_symlink() or global_prompt.is_file():
+            global_prompt.unlink()
+        if context.global_prompt is not None:
+            shutil.copyfile(context.global_prompt, global_prompt)
         for name in ("sessions", "tmp", "shell_snapshots", "log", "cache"):
             path = home.host / name
             if path.is_symlink():

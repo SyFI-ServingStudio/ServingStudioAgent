@@ -18,6 +18,7 @@ from vibesim_agent.providers.codex.command import CodexCommand
 from tests.runtime_fixtures import execution_environment
 from vibesim_agent.runtime import execution as execution_module
 from vibesim_agent.runtime.invocation import RemoteInvocation, signal_remote
+from vibesim_agent.runtime.process import kill_process
 
 
 class LocalCommand:
@@ -46,6 +47,8 @@ class LocalExecution:
     """
 
     cwd = None
+    start_new_session = False
+    kill = staticmethod(kill_process)
     agent_prompt = "/workspace/AGENTS.md"
     managed_context = "/managed/context.json"
     stop_timeout = execution_module.STOP_TIMEOUT

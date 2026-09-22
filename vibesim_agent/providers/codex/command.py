@@ -11,8 +11,6 @@ from ..base import AgentRequest
 @dataclass(frozen=True)
 class CodexCommand:
     environment: ExecutionEnvironment
-    mcp_python: str = "/opt/vibesim-analyzer-mcp-venv/bin/python"
-    mcp_server: str = "/opt/vibesim/analyzer-evidence-mcp/server.py"
     catalog_filename: str | None = None
     inherited_environment: tuple[str, ...] = ()
     permission_profile: str = ":danger-full-access"
@@ -73,10 +71,10 @@ class CodexCommand:
             settings["service_tier"] = selection.service_tier
         settings.update(
             {
-                "mcp_servers.analyzer.command": self.mcp_python,
-                "mcp_servers.analyzer.args": [self.mcp_server],
-                "mcp_servers.analyzer.env.ANALYZER_MCP_SOURCE": self.environment.agent.analyzer_source,
-                "mcp_servers.analyzer.env.ANALYZER_MCP_BASE_URL": self.environment.agent.analyzer_base_url,
+                "mcp_servers.analyzer.command": request.execution.mcp_python,
+                "mcp_servers.analyzer.args": [request.execution.mcp_server],
+                "mcp_servers.analyzer.env.ANALYZER_MCP_SOURCE": request.execution.analyzer_source,
+                "mcp_servers.analyzer.env.ANALYZER_MCP_BASE_URL": request.execution.analyzer_base_url,
                 "mcp_servers.analyzer.env.VIBESIM_MANAGED_RUN_CONTEXT": request.execution.managed_context,
             }
         )

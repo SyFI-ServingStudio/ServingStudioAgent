@@ -1,5 +1,7 @@
 import json
 import unittest
+
+from vibesim_agent.runtime.invocation import RoleContext
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -156,7 +158,7 @@ class NamedProviderCompositionTests(unittest.TestCase):
                 setup.registry.select(provider_id),
             )
             home = provider.adapter.home(request)
-            setup.runtimes[provider_id].prepare(home)
+            setup.runtimes[provider_id].prepare(home, RoleContext(skills="/workspace/skills"))
             homes.add(home.host)
         self.assertEqual(len(homes), 5)
         self.assertNotIn("secret", json.dumps(setup.registry.catalog()))
@@ -247,15 +249,15 @@ class NamedProviderCompositionTests(unittest.TestCase):
             self.root / "oauth-runtime", "/runtime", Role.ASSISTANT, "scope"
         )
         profile = ClaudeProfile(self.oauth)
-        profile.prepare(home)
+        profile.prepare(home, RoleContext(skills="/workspace/skills"))
         target = home.host / ".credentials.json"
         self.assertEqual(target.read_text(), '{"token":"oauth-original"}')
         self.assertFalse((home.host / "history.jsonl").exists())
         target.write_text('{"token":"cli-refreshed"}')
-        profile.prepare(home)
+        profile.prepare(home, RoleContext(skills="/workspace/skills"))
         self.assertEqual(target.read_text(), '{"token":"cli-refreshed"}')
         (self.oauth / ".credentials.json").write_text('{"token":"new-host-login"}')
-        profile.prepare(home)
+        profile.prepare(home, RoleContext(skills="/workspace/skills"))
         self.assertEqual(target.read_text(), '{"token":"new-host-login"}')
         self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 

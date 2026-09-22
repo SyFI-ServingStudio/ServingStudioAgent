@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import signal
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -19,6 +21,20 @@ STOP_TIMEOUT = 3 * (2 * SIGNAL_TIMEOUT + SIGNAL_GRACE) + 5
 class InvocationHome:
     host: Path
     container: str
+
+
+@dataclass(frozen=True)
+class RoleContext:
+    """What a role home needs that depends on where the turn will run.
+
+    `skills` is a symlink target: `/workspace/skills` under a mount, the
+    worktree's own directory on the host. `global_prompt` is set only on the
+    host, where Codex reads `$CODEX_HOME/AGENTS.md` -- in a container the role
+    contract arrives as a bind mount over the workspace's own AGENTS.md instead.
+    """
+
+    skills: str
+    global_prompt: Path | None = None
 
 
 async def signal_remote(
@@ -107,6 +123,57 @@ class RemoteInvocation:
             except Exception as error:  # noqa: BLE001 - later signals must still run
                 self.logger.warning(
                     "%s %s signal failed: %s", self.label, signal, error
+                )
+            try:
+                await asyncio.wait_for(process.wait(), self.signal_grace)
+                return
+            except TimeoutError:
+                pass
+        raise RuntimeError(f"{self.label} invocation did not stop after INT/TERM/KILL")
+
+    def remove_pid(self) -> None:
+        with contextlib.suppress(OSError):
+            self.host_pid.unlink(missing_ok=True)
+
+
+class HostInvocation:
+    """Stop a locally spawned CLI by signalling the process group it leads."""
+
+    def __init__(
+        self,
+        *,
+        execution_id: str,
+        home: InvocationHome,
+        logger: logging.Logger,
+        label: str,
+        signal_grace: float = SIGNAL_GRACE,
+    ):
+        self.logger = logger
+        self.label = label
+        self.signal_grace = signal_grace
+        self.host_pid = home.host / f"call-{execution_id}.pid"
+        self.pid_file = str(self.host_pid)
+
+    def mark_cancelled(self) -> None:
+        """Genuinely nothing to do, and not a placeholder.
+
+        The marker exists because a `docker exec` client can exit before the
+        remote shell it asked for has started, leaving a turn running that
+        nobody is watching. There is no such window here: asyncio's
+        `create_subprocess_exec` returns only once fork and exec have both
+        succeeded, so by the time anything can cancel, the process is already
+        ours to signal. Writing a marker would create a file nothing reads.
+        """
+
+    async def stop(self, process: asyncio.subprocess.Process) -> None:
+        for name in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(os.getpgid(process.pid), name)
+            except ProcessLookupError:
+                return
+            except OSError as error:  # noqa: PERF203 - later signals must still run
+                self.logger.warning(
+                    "%s %s signal failed: %s", self.label, name.name, error
                 )
             try:
                 await asyncio.wait_for(process.wait(), self.signal_grace)

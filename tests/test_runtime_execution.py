@@ -1,11 +1,18 @@
+import asyncio
 import json
+import logging
+import os
+import subprocess
+import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from tests.runtime_fixtures import agent_request, docker_execution, execution_environment
-from vibesim_agent.runtime.execution import PID_WRAPPER, DockerExecution
-from vibesim_agent.runtime.invocation import STOP_TIMEOUT, InvocationHome
+from vibesim_agent.runtime.execution import PID_WRAPPER, DockerExecution, HostExecution
+from vibesim_agent.runtime.invocation import STOP_TIMEOUT, HostInvocation, InvocationHome
+from vibesim_agent.runtime.process import kill_process_group
 
 
 class DockerExecutionTests(unittest.TestCase):
@@ -130,5 +137,155 @@ class ManagedContextSeamTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
+class HostExecutionTests(unittest.TestCase):
+    def execution(self, **overrides):
+        return HostExecution(
+            **{
+                "repo": Path("/trees/wt-topic"),
+                "agent_prompt": "/state/prompts/AGENTS.md",
+                "managed_context": "/state/c/managed/context.json",
+                "analyzer_source": "external",
+                "analyzer_base_url": "http://172.17.0.1:63044",
+                "mcp_python": "/trees/wt-topic/.venv/bin/python",
+                "mcp_server": "/agent/vibesim_agent/analyzer_evidence_mcp/server.py",
+                **overrides,
+            }
+        )
+
+    def test_command_assigns_the_turn_variables_and_execs_without_a_shell(self):
+        execution = self.execution()
+        command = execution.command(
+            ["codex", "exec", "--json"],
+            environment={"CODEX_HOME": "/state/home"},
+            pid_file="/state/home/call-1.pid",
+            label="vibesim-codex",
+        )
+        # The pid wrapper answers a `docker exec` race that does not exist here,
+        # and a shell would mean quoting argv that carries whole JSON schemas.
+        self.assertNotIn("sh", command)
+        self.assertNotIn("docker", command)
+        self.assertEqual(command[0], "env")
+        self.assertEqual(command[-3:], ["codex", "exec", "--json"])
+        assignments = dict(part.split("=", 1) for part in command[1:-3])
+        # Without CODEX_HOME the CLI would silently fall back to the operator's
+        # own `~/.codex` rather than the role home this turn prepared.
+        self.assertEqual(assignments["CODEX_HOME"], "/state/home")
+        self.assertEqual(
+            assignments["ANALYZER_MCP_BASE_URL"], execution.analyzer_base_url
+        )
+        self.assertEqual(
+            assignments["VIBESIM_MANAGED_RUN_CONTEXT"], execution.managed_context
+        )
+        self.assertEqual(
+            assignments["VIBESIM_MANAGED_JOB_CONTEXT"], execution.managed_context
+        )
+
+    def test_the_assigned_command_actually_runs_with_those_variables(self):
+        # `env` is in the argv, so it has to be the real one: a typo here would
+        # only show up as a CLI that cannot find its role home.
+        execution = self.execution()
+        command = execution.command(
+            [sys.executable, "-c", "import os;print(os.environ['CODEX_HOME'])"],
+            environment={"CODEX_HOME": "/state/home"},
+            pid_file="/unused",
+            label="vibesim-codex",
+        )
+        output = subprocess.run(command, capture_output=True, text=True, check=True)
+        self.assertEqual(output.stdout.strip(), "/state/home")
+
+    def test_conflicting_inherited_names_are_still_refused(self):
+        for name in ("CODEX_HOME", "ANALYZER_MCP_BASE_URL", "VIBESIM_MANAGED_RUN_CONTEXT"):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "conflicts"):
+                    self.execution().command(
+                        ["codex"],
+                        environment={"CODEX_HOME": "/state/home"},
+                        inherited=(name,),
+                        pid_file="/p",
+                        label="vibesim-codex",
+                    )
+
+    def test_container_only_variables_are_dropped_from_the_spawn(self):
+        spawned = self.execution().spawn_environment(
+            {
+                "PATH": "/usr/bin",
+                "ANTHROPIC_API_KEY": "secret",
+                "HOME": "/home/runner",
+                "UV_PROJECT_ENVIRONMENT": "/opt/vibesim-venv",
+                "UV_CACHE_DIR": "/opt/vibesim-uv-cache",
+                "VIBESIM_EXPECTED_LOCK_SHA": "sha",
+                "VIBESIM_RUNNER_GPUS": "all",
+                "NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
+                "DG_USE_LOCAL_VERSION": "0",
+            }
+        )
+        # These name paths inside the runner image. Inheriting either uv
+        # variable makes `uv run` in the worktree fail outright.
+        self.assertEqual(spawned, {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "secret"})
+        self.assertIsNone(self.execution().spawn_environment(None))
+
+    def test_the_group_is_what_gets_killed(self):
+        execution = self.execution()
+        self.assertTrue(execution.start_new_session)
+        self.assertIs(execution.kill, kill_process_group)
+        self.assertEqual(execution.cwd, Path("/trees/wt-topic"))
+
+    def test_role_home_is_the_host_path(self):
+        self.assertEqual(
+            self.execution().home_path(InvocationHome(Path("/host"), "/in-container")),
+            "/host",
+        )
+
+    def test_a_relative_repository_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            self.execution(repo=Path("wt-topic"))
+
+
+class HostInvocationTests(unittest.IsolatedAsyncioTestCase):
+    def invocation(self, directory, **overrides):
+        return HostInvocation(
+            execution_id="e1",
+            home=InvocationHome(Path(directory), str(directory)),
+            logger=logging.getLogger("host-invocation-test"),
+            label="Codex",
+            **overrides,
+        )
+
+    async def test_stop_reaps_a_grandchild_the_leader_would_orphan(self):
+        with TemporaryDirectory() as directory:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-u", "-c", GRANDCHILD,
+                stdout=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+            grandchild = int((await process.stdout.readline()).strip())
+            await self.invocation(directory, signal_grace=0.2).stop(process)
+
+            self.assertIsNotNone(process.returncode)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(grandchild, 0)
+
+    async def test_an_already_dead_process_stops_without_error(self):
+        with TemporaryDirectory() as directory:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", "pass", start_new_session=True
+            )
+            await process.wait()
+            await self.invocation(directory, signal_grace=0.2).stop(process)
+
+    async def test_mark_cancelled_writes_nothing(self):
+        with TemporaryDirectory() as directory:
+            invocation = self.invocation(directory)
+            invocation.mark_cancelled()
+            # There is no window to guard: create_subprocess_exec returns only
+            # after fork and exec have both succeeded.
+            self.assertEqual(list(Path(directory).iterdir()), [])
+            self.assertEqual(invocation.pid_file, str(Path(directory) / "call-e1.pid"))
+
+
+GRANDCHILD = (
+    "import subprocess,sys,time;"
+    "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']);"
+    "print(child.pid, flush=True);"
+    "time.sleep(30)"
+)

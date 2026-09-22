@@ -16,7 +16,7 @@ from vibesim_agent.providers.base import AgentRequest
 from vibesim_agent.providers.claude.adapter import ClaudeAdapter
 from vibesim_agent.providers.codex.adapter import CodexAdapter
 from vibesim_agent.runtime.command import ExecutionEnvironment
-from vibesim_agent.runtime.invocation import InvocationHome
+from vibesim_agent.runtime.invocation import InvocationHome, RoleContext
 
 
 class CompositionTests(unittest.IsolatedAsyncioTestCase):
@@ -120,12 +120,12 @@ class CompositionTests(unittest.IsolatedAsyncioTestCase):
         home = self.home(request)
         profile = self.settings.providers["gpt"].home
         (profile / "models_catalog.json").write_text("{}")
-        self.setup.runtimes["gpt"].prepare(home)
+        self.setup.runtimes["gpt"].prepare(home, RoleContext(skills="/workspace/skills"))
         adapter = self.setup.registry.provider("gpt").adapter
         first = adapter.command_for_home(home)
         self.assertEqual(first.catalog_filename, "models_catalog.json")
         (profile / "models_catalog.json").unlink()
-        self.setup.runtimes["gpt"].prepare(home)
+        self.setup.runtimes["gpt"].prepare(home, RoleContext(skills="/workspace/skills"))
         second = adapter.command_for_home(home)
         self.assertIsNone(second.catalog_filename)
         self.assertIsNone(adapter.command.catalog_filename)
@@ -136,7 +136,7 @@ class CompositionTests(unittest.IsolatedAsyncioTestCase):
         (profile / "config.toml").write_text('model_provider="changed"\n')
         home = self.home(self.request("gpt"))
         with self.assertRaisesRegex(ValueError, "backend changed"):
-            self.setup.runtimes["gpt"].prepare(home)
+            self.setup.runtimes["gpt"].prepare(home, RoleContext(skills="/workspace/skills"))
         self.assertFalse(home.host.exists())
 
     async def test_adapter_processes_receive_selected_environment_and_resume(self):
@@ -178,7 +178,7 @@ class CompositionTests(unittest.IsolatedAsyncioTestCase):
 
         for provider_id in ("gpt", "deepseek", "claude"):
             request = self.request(provider_id)
-            self.setup.runtimes[provider_id].prepare(self.home(request))
+            self.setup.runtimes[provider_id].prepare(self.home(request), RoleContext(skills="/workspace/skills"))
             with patch("asyncio.create_subprocess_exec", spawn):
                 for session in (None, "saved"):
                     events = [

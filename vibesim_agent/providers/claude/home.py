@@ -1,17 +1,18 @@
 """Isolated Claude state with optional host-login credential supply."""
 
+import os
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from ...runtime.invocation import InvocationHome
+from ...runtime.invocation import InvocationHome, RoleContext
 
 
 @dataclass(frozen=True)
 class ClaudeProfile:
     source: Path | None = None
 
-    def prepare(self, home: InvocationHome) -> None:
+    def prepare(self, home: InvocationHome, context: RoleContext) -> None:
         if home.host.is_symlink():
             raise ValueError("Claude runtime home must not be a symlink")
         home.host.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -42,5 +43,12 @@ class ClaudeProfile:
                 marker.write_text(digest)
                 marker.chmod(0o600)
         skills = home.host / "skills"
-        if not skills.is_symlink() and not skills.exists():
-            skills.symlink_to("/workspace/skills", target_is_directory=True)
+        # Re-point rather than create-if-absent: the role home outlives a switch
+        # between execution modes, and a stale container path would otherwise
+        # survive forever as a symlink into a directory that does not exist.
+        if skills.is_symlink():
+            if os.readlink(skills) != context.skills:
+                skills.unlink()
+                skills.symlink_to(context.skills, target_is_directory=True)
+        elif not skills.exists():
+            skills.symlink_to(context.skills, target_is_directory=True)

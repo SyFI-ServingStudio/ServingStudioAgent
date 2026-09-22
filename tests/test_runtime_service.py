@@ -40,7 +40,7 @@ class RuntimeServiceTests(unittest.IsolatedAsyncioTestCase):
         self.providers = ProviderRegistry()
         self.prepared = []
 
-        def prepare(home):
+        def prepare(home, context):
             home.host.mkdir(parents=True, exist_ok=True)
             self.prepared.append(home)
 

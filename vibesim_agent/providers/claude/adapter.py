@@ -61,6 +61,8 @@ class ClaudeAdapter:
             stop_timeout=request.execution.stop_timeout,
             environment=request.execution.spawn_environment(self.process_environment),
             cwd=request.execution.cwd,
+            start_new_session=request.execution.start_new_session,
+            kill=request.execution.kill,
         )
         started = asyncio.get_running_loop().time()
         buffer = bytearray()

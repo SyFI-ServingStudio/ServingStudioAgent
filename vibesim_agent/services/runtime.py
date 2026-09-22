@@ -6,7 +6,7 @@ import json
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ..domain.errors import ProviderUnavailable
 from ..domain.identifiers import validate_conversation_id
@@ -17,9 +17,10 @@ from ..providers.registry import ProviderRegistry
 from ..runtime.container import ContainerManager, ContainerSpec
 from ..runtime.execution import DockerExecution, Execution
 from ..runtime.homes import role_home
-from ..runtime.invocation import InvocationHome
+from ..runtime.invocation import InvocationHome, RoleContext
 from ..runtime.mounts import (
     PROMPTS_TARGET,
+    WORKSPACE_TARGET,
     Mount,
     managed_context_target,
     workspace_mounts,
@@ -35,7 +36,7 @@ class WorkspaceRuntime:
 
 @dataclass(frozen=True)
 class ProviderRuntime:
-    prepare: Callable[[InvocationHome], None]
+    prepare: Callable[[InvocationHome, RoleContext], None]
     binaries: tuple[str, ...]
 
 
@@ -166,8 +167,11 @@ class RuntimeService:
                 else None,
             )
         )
+        # Derived here rather than from the Execution, which does not exist
+        # until the container has been ensured -- after the homes are ready.
+        context = RoleContext(skills=str(PurePosixPath(WORKSPACE_TARGET) / "skills"))
         for _, _, provision, home in active:
-            provision.prepare(home)
+            provision.prepare(home, context)
             mounts.append(Mount(home.host, home.container))
         if directory is not None:
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)

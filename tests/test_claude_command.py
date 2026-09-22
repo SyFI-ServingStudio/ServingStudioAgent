@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from tests import test_codex_command as codex_fixture
+from tests.runtime_fixtures import docker_execution
 from vibesim_agent.domain.roles import Role
 from vibesim_agent.providers.base import OutputMode
 from vibesim_agent.providers.claude.command import ClaudeCommand
@@ -105,21 +106,25 @@ class ClaudeCommandTests(unittest.TestCase):
 
     def test_credentials_are_inherited_by_name_and_mcp_values_are_json(self):
         builder = replace(
-            self.builder(),
-            inherited_environment=("ANTHROPIC_API_KEY",),
+            self.builder(), inherited_environment=("ANTHROPIC_API_KEY",)
+        )
+        execution = replace(
+            docker_execution(builder.environment),
             mcp_python='/space/"python',
             mcp_server="/space dir/server.py",
         )
         command = builder.build_tracked(
-            self.request(), home="/home", pid_file="/home/call.pid"
+            replace(self.request(), execution=execution),
+            home="/home",
+            pid_file="/home/call.pid",
         )
         self.assertIn("ANTHROPIC_API_KEY", command)
         self.assertFalse(any(arg.startswith("ANTHROPIC_API_KEY=") for arg in command))
         mcp = json.loads(command[command.index("--mcp-config") + 1])["mcpServers"][
             "analyzer"
         ]
-        self.assertEqual(mcp["command"], builder.mcp_python)
-        self.assertEqual(mcp["args"], [builder.mcp_server])
+        self.assertEqual(mcp["command"], execution.mcp_python)
+        self.assertEqual(mcp["args"], [execution.mcp_server])
 
     def test_tracked_shell_honors_cancellation_before_executing(self):
         with TemporaryDirectory() as directory:

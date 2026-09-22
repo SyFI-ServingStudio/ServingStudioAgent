@@ -15,8 +15,6 @@ class ClaudeCommand:
     environment: ExecutionEnvironment
     schemas: Mapping[str, dict]
     inherited_environment: tuple[str, ...] = ()
-    mcp_python: str = "/opt/vibesim-analyzer-mcp-venv/bin/python"
-    mcp_server: str = "/opt/vibesim/analyzer-evidence-mcp/server.py"
     permission_mode: str = "auto"
     permission_prompts: str = "none"
     allowed_tools: tuple[str, ...] = ("Bash(uv run *)",)
@@ -72,11 +70,11 @@ class ClaudeCommand:
         mcp = {
             "mcpServers": {
                 "analyzer": {
-                    "command": self.mcp_python,
-                    "args": [self.mcp_server],
+                    "command": request.execution.mcp_python,
+                    "args": [request.execution.mcp_server],
                     "env": {
-                        "ANALYZER_MCP_SOURCE": self.environment.agent.analyzer_source,
-                        "ANALYZER_MCP_BASE_URL": self.environment.agent.analyzer_base_url,
+                        "ANALYZER_MCP_SOURCE": request.execution.analyzer_source,
+                        "ANALYZER_MCP_BASE_URL": request.execution.analyzer_base_url,
                         "VIBESIM_MANAGED_RUN_CONTEXT": request.execution.managed_context,
                     },
                 }

@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ..runtime.invocation import InvocationHome
+from ..runtime.invocation import InvocationHome, RoleContext
 from ..settings import (
     ConfigurationError,
     Settings,
@@ -140,8 +140,10 @@ def session_scope(settings: Settings, provider_id: str, adapter_id: str) -> str:
 
 
 def guarded_profile_prepare(
-    settings: Settings, provider: Provider, prepare: Callable[[InvocationHome], None]
-) -> Callable[[InvocationHome], None]:
+    settings: Settings,
+    provider: Provider,
+    prepare: Callable[[InvocationHome, RoleContext], None],
+) -> Callable[[InvocationHome, RoleContext], None]:
     """Fail closed if backend identity changed since this registry was built."""
 
     def validate():
@@ -153,9 +155,9 @@ def guarded_profile_prepare(
                 "provider backend changed; rebuild the registry before preparing a runtime"
             )
 
-    def guarded(home: InvocationHome) -> None:
+    def guarded(home: InvocationHome, context: RoleContext) -> None:
         validate()
-        prepare(home)
+        prepare(home, context)
         validate()
 
     return guarded
