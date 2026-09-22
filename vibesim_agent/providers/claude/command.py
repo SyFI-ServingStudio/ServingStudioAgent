@@ -18,6 +18,12 @@ class ClaudeCommand:
     permission_mode: str = "auto"
     permission_prompts: str = "none"
     allowed_tools: tuple[str, ...] = ("Bash(uv run *)",)
+    # `user` rather than nothing. Skill discovery follows the setting sources,
+    # and dropping all three left Claude with its built-ins only -- the
+    # workspace's own library was linked into the role home and never read.
+    # The user source is that isolated home (`CLAUDE_CONFIG_DIR`), not the
+    # operator's `~/.claude`, so this reads no settings a turn did not create.
+    setting_sources: tuple[str, ...] = ("user",)
 
     def __post_init__(self):
         if self.permission_mode not in {
@@ -30,6 +36,8 @@ class ClaudeCommand:
             raise ValueError("unsupported Claude permission mode")
         if self.permission_prompts not in {"host", "none"}:
             raise ValueError("unsupported Claude permission prompt target")
+        if any(source not in {"user", "project", "local"} for source in self.setting_sources):
+            raise ValueError("unsupported Claude setting source")
         if any("," in tool or not tool for tool in self.allowed_tools):
             # The flag is comma-or-space separated, so an embedded comma would
             # silently split one pattern into two broader ones.
@@ -99,7 +107,7 @@ class ClaudeCommand:
             "--permission-prompts",
             self.permission_prompts,
             "--setting-sources",
-            "",
+            ",".join(self.setting_sources),
             # A mount target in a container and a path outside the tree on the
             # host; either way it is the role contract, not the repo's own file.
             "--append-system-prompt-file",
@@ -109,7 +117,7 @@ class ClaudeCommand:
             json.dumps(mcp),
         ]
         if self.allowed_tools:
-            # `--setting-sources ""` drops every settings file, so without this
+            # The isolated home carries no settings of its own, so without this
             # the workspace's own hot path would reach the classifier on each
             # call. Read-only commands are already allowed by the CLI itself.
             command.extend(["--allowedTools", ",".join(self.allowed_tools)])

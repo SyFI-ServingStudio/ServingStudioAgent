@@ -174,7 +174,9 @@ class ClaudePermissionPostureTests(unittest.TestCase):
     def test_allowlist_covers_the_workspace_hot_path_as_one_argument(self):
         command = self.tracked(self.builder())
         self.assertEqual(self.value(command, "--allowedTools"), "Bash(uv run *)")
-        self.assertEqual(self.value(command, "--setting-sources"), "")
+        # `user` is the isolated role home, which is where the workspace skills
+        # are linked. With no source at all Claude loaded its built-ins only.
+        self.assertEqual(self.value(command, "--setting-sources"), "user")
 
     def test_empty_allowlist_omits_the_flag(self):
         self.assertNotIn("--allowedTools", self.tracked(self.builder(allowed_tools=())))
