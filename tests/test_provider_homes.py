@@ -173,13 +173,22 @@ class RoleContextTests(unittest.TestCase):
         self.home = InvocationHome(self.root / "role", "/role-home")
         self.contract = self.root / "AGENTS.md"
         self.contract.write_text("role contract")
+        self.library = self.root / "wt-topic/skills"
+        for name in ("dev-run-tests", "top-add-kernel"):
+            (self.library / name).mkdir(parents=True)
+            (self.library / name / "SKILL.md").write_text(f"# {name}")
+        # A stray file and a directory without a SKILL.md: neither is a skill.
+        (self.library / "README.md").write_text("not a skill")
+        (self.library / "scratch").mkdir()
 
     def container(self):
-        return RoleContext(skills="/workspace/skills")
+        return RoleContext(skills="/workspace/skills", skills_source=self.library)
 
     def host(self):
         return RoleContext(
-            skills=str(self.root / "wt-topic/skills"), global_prompt=self.contract
+            skills=str(self.library),
+            skills_source=self.library,
+            global_prompt=self.contract,
         )
 
     def test_claude_repoints_a_stale_skills_link_instead_of_keeping_it(self):
@@ -216,6 +225,48 @@ class RoleContextTests(unittest.TestCase):
         self.contract.write_text("revised contract")
         profile.prepare(self.home, self.host())
         self.assertEqual((self.home.host / "AGENTS.md").read_text(), "revised contract")
+
+    def test_codex_is_offered_the_workspace_skills_one_link_each(self):
+        profile = CodexProfile(self.source)
+        profile.prepare(self.home, self.container())
+        skills = self.home.host / "skills"
+        # A real directory, not a link to the workspace: Codex installs its own
+        # `.system` skills in here on first run, and pointed at the workspace
+        # that write would land inside the user's repository.
+        self.assertFalse(skills.is_symlink())
+        self.assertEqual(
+            sorted(entry.name for entry in skills.iterdir()),
+            ["dev-run-tests", "top-add-kernel"],
+        )
+        self.assertEqual(
+            os.readlink(skills / "dev-run-tests"), "/workspace/skills/dev-run-tests"
+        )
+
+    def test_codex_skill_links_follow_a_switch_of_execution_mode(self):
+        profile = CodexProfile(self.source)
+        profile.prepare(self.home, self.container())
+        profile.prepare(self.home, self.host())
+        link = self.home.host / "skills/dev-run-tests"
+        # The role home outlives the switch, and a container path left here
+        # would be a link into a directory that does not exist on this machine.
+        self.assertEqual(os.readlink(link), str(self.library / "dev-run-tests"))
+
+    def test_codex_keeps_what_it_installed_and_drops_a_retired_skill(self):
+        profile = CodexProfile(self.source)
+        profile.prepare(self.home, self.host())
+        system = self.home.host / "skills/.system"
+        (system / "imagegen").mkdir(parents=True)
+        (system / "imagegen/SKILL.md").write_text("# imagegen")
+        (self.library / "top-add-kernel/SKILL.md").unlink()
+
+        profile.prepare(self.home, self.host())
+        # Codex's own directory is untouched; the skill that stopped being one
+        # does not linger as a link to a path that no longer answers.
+        self.assertTrue((system / "imagegen/SKILL.md").is_file())
+        self.assertEqual(
+            sorted(entry.name for entry in (self.home.host / "skills").iterdir()),
+            [".system", "dev-run-tests"],
+        )
 
     def test_codex_contract_is_not_a_profile_entry_and_survives_nothing_else(self):
         from vibesim_agent.providers.codex.home import PROFILE_ENTRIES

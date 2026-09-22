@@ -310,7 +310,27 @@ class ExecutionModeTests(unittest.TestCase):
             # arrives as a mount instead, so this is host-only.
             self.assertEqual(context.global_prompt, Path(execution.agent_prompt))
             self.assertEqual(context.skills, str(self.repo / "skills"))
+            # The same directory read from this side, so a profile can list it.
+            self.assertEqual(context.skills_source, self.repo / "skills")
         self.assertTrue(Path(execution.agent_prompt).is_file())
+
+    def test_a_container_names_the_mount_but_still_says_where_to_read_it(self):
+        contexts = []
+        def record(home, context):
+            # The home still has to exist: it is mounted right after this.
+            home.host.mkdir(parents=True, exist_ok=True)
+            contexts.append(context)
+
+        self.runtimes = {
+            name: replace(runtime, prepare=record)
+            for name, runtime in self.runtimes.items()
+        }
+        self.prepare("managed")
+        for context in contexts:
+            # Two different strings for one directory: the CLI sees the mount
+            # target, and whoever enumerates the skills is out here.
+            self.assertEqual(context.skills, "/workspace/skills")
+            self.assertEqual(context.skills_source, self.repo / "skills")
 
     def test_a_missing_cli_refuses_the_turn_rather_than_spawning(self):
         with self.assertRaisesRegex(HostUnavailable, "test-cli"):

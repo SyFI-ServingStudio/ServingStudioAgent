@@ -214,6 +214,10 @@ class RuntimeService:
         )
         context = RoleContext(
             skills=str(workspace.repo / "skills"),
+            # The same directory twice here, and two different strings in a
+            # container: a profile that links the skills one by one needs to
+            # read this side and write the CLI's side.
+            skills_source=workspace.repo / "skills",
             # Only the host delivers the contract this way. In a container it
             # arrives as a mount over the workspace's own AGENTS.md instead.
             global_prompt=prompt,
@@ -266,7 +270,10 @@ class RuntimeService:
         )
         # Derived here rather than from the Execution, which does not exist
         # until the container has been ensured -- after the homes are ready.
-        context = RoleContext(skills=str(PurePosixPath(WORKSPACE_TARGET) / "skills"))
+        context = RoleContext(
+            skills=str(PurePosixPath(WORKSPACE_TARGET) / "skills"),
+            skills_source=workspace.repo / "skills",
+        )
         for _, _, provision, home in active:
             provision.prepare(home, context)
             mounts.append(Mount(home.host, home.container))

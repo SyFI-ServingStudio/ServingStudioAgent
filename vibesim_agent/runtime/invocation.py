@@ -30,12 +30,18 @@ class RoleContext:
     """What a role home needs that depends on where the turn will run.
 
     `skills` is a symlink target: `/workspace/skills` under a mount, the
-    worktree's own directory on the host. `global_prompt` is set only on the
-    host, where Codex reads `$CODEX_HOME/AGENTS.md` -- in a container the role
-    contract arrives as a bind mount over the workspace's own AGENTS.md instead.
+    worktree's own directory on the host. `skills_source` is that same
+    directory as *this* process sees it, which in a container is not the same
+    string -- a profile that has to enumerate the skills needs the host path
+    and has to write the CLI's path into the links it makes.
+
+    `global_prompt` is set only on the host, where Codex reads
+    `$CODEX_HOME/AGENTS.md` -- in a container the role contract arrives as a
+    bind mount over the workspace's own AGENTS.md instead.
     """
 
     skills: str
+    skills_source: Path | None = None
     global_prompt: Path | None = None
     # TOML appended to the managed Codex config. Per workspace, because the
     # host profile has to name this repository's two git directories.
