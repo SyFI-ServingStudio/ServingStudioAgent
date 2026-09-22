@@ -35,11 +35,12 @@ def workspace_kind(descriptor: dict[str, Any]) -> WorkspaceKind:
 
 
 def execution_mode(descriptor: dict[str, Any]) -> ExecutionMode:
-    """Single source of truth for the mode; the runtime branches on this too.
+    """What the browser is told, derived from the same value the runtime uses.
 
     Reported rather than stored. A stored copy would be a second answer that
-    goes stale the moment the mapping changes, and it is about to change once
-    host execution is switched on.
+    goes stale, and this one has already changed once: a copy of the tracked
+    files runs in a container, a real git tree runs on the host.
     """
-    del descriptor
-    return ExecutionMode.CONTAINER
+    if descriptor.get("storage_kind") == "managed":
+        return ExecutionMode.CONTAINER
+    return ExecutionMode.HOST

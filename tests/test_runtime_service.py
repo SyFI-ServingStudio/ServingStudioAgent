@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from tests.runtime_fixtures import execution_environment
 from vibesim_agent.domain.conversations import RoleRuntime
@@ -13,7 +13,9 @@ from vibesim_agent.domain.turns import TurnInput
 from vibesim_agent.prompts.render import Prompts
 from vibesim_agent.providers.base import AgentRequest, Model, Provider
 from vibesim_agent.providers.registry import ProviderRegistry
+from vibesim_agent.runtime.host import HostUnavailable
 from vibesim_agent.services.runtime import (
+    HostRuntime,
     ProviderRuntime,
     RuntimeService,
     WorkspaceRuntime,
@@ -213,3 +215,97 @@ class RuntimeServiceTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         with self.assertRaisesRegex(RuntimeError, "container cleanup failed"):
             await asyncio.wait_for(task, 2)
+
+
+class ExecutionModeTests(unittest.TestCase):
+    """The one branch: a copy of the tracked files, or a real git tree."""
+
+    setUp = RuntimeServiceTests.setUp
+
+    def service(self, storage_kind, **overrides):
+        state = self.root / "state"
+        context = state / "runtime" / "conversation" / "managed"
+        arguments = {
+            "workspace": lambda workspace_id: WorkspaceRuntime(
+                self.repo, state, storage_kind=storage_kind
+            ),
+            "providers": self.providers,
+            "runtimes": self.runtimes,
+            "containers": self.containers,
+            "prompts": self.prompts,
+            "mcp": self.mcp,
+            "container_root": "/runtime",
+            "namespace": "test-namespace",
+            "context_directory": lambda workspace_id, conversation_id: context,
+            "host": HostRuntime(
+                analyzer_base_url="http://172.17.0.1:63044",
+                managed_backend_url="http://172.17.0.1:63043",
+                mcp_python="/agent/.venv/bin/python",
+                mcp_server=self.root / "server.py",
+            ),
+            **overrides,
+        }
+        self.context = context
+        return RuntimeService(**arguments)
+
+    def prepare(self, storage_kind, **overrides):
+        return self.service(storage_kind, **overrides)._prepare(
+            replace(self.request, conversation_id="conversation")
+        )
+
+    def test_a_managed_copy_mounts_the_context_directory_read_only(self):
+        execution = self.prepare("managed")
+        self.assertEqual(execution.container, "container-id")
+        self.assertIsNone(execution.cwd)
+        spec = self.containers.ensure.call_args.args[0]
+        [mount] = [m for m in spec.mounts if m.source == self.context]
+        # Replaceable capability files: the runner must not be able to forge one.
+        self.assertTrue(mount.read_only)
+        self.assertEqual(str(mount.target), "/opt/vibesim/managed")
+        self.assertEqual(execution.managed_context, "/opt/vibesim/managed/context.json")
+
+    def test_a_real_tree_runs_here_with_the_context_as_a_host_path(self):
+        with patch("vibesim_agent.services.runtime.check_host_binaries") as check:
+            execution = self.prepare("external")
+        self.containers.ensure.assert_not_called()
+        self.assertEqual(execution.cwd, self.repo)
+        self.assertEqual(list(check.call_args.args[0]), ["test-cli", "test-cli"])
+        # The container constant names a mount target that does not exist here.
+        self.assertEqual(
+            execution.managed_context, str(self.context / "context.json")
+        )
+        self.assertTrue(self.context.is_dir())
+        self.assertEqual(execution.analyzer_base_url, "http://172.17.0.1:63044")
+        self.assertEqual(execution.managed_backend_url, "http://172.17.0.1:63043")
+        self.assertEqual(execution.mcp_server, str(self.root / "server.py"))
+
+    def test_the_host_contract_reaches_the_role_homes_and_the_repo_skills(self):
+        contexts = []
+        self.runtimes = {
+            name: replace(
+                runtime, prepare=lambda home, context: contexts.append(context)
+            )
+            for name, runtime in self.runtimes.items()
+        }
+        with patch("vibesim_agent.services.runtime.check_host_binaries"):
+            execution = self.prepare("external")
+        for context in contexts:
+            # Codex reads $CODEX_HOME/AGENTS.md; in a container the same file
+            # arrives as a mount instead, so this is host-only.
+            self.assertEqual(context.global_prompt, Path(execution.agent_prompt))
+            self.assertEqual(context.skills, str(self.repo / "skills"))
+        self.assertTrue(Path(execution.agent_prompt).is_file())
+
+    def test_a_missing_cli_refuses_the_turn_rather_than_spawning(self):
+        with self.assertRaisesRegex(HostUnavailable, "test-cli"):
+            self.prepare("external")
+        self.assertEqual(self.prepared, [])
+
+    def test_a_deployment_without_host_configuration_refuses_external_turns(self):
+        with self.assertRaisesRegex(ValueError, "not configured"):
+            self.prepare("external", host=None)
+        self.assertEqual(self.prepared, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

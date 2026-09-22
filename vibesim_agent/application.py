@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import subprocess
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -38,7 +39,12 @@ from .services.jobs import JobService
 from .services.name_generator import NameGenerator
 from .services.naming import NamingService
 from .services.recovery import RecoveryService
-from .services.runtime import ProviderRuntime, RuntimeService, WorkspaceRuntime
+from .services.runtime import (
+    HostRuntime,
+    ProviderRuntime,
+    RuntimeService,
+    WorkspaceRuntime,
+)
 from .services.turn import TurnService, TurnStorage
 from .services.workspace import WorkspaceService
 from .settings import Settings
@@ -153,7 +159,6 @@ def build_application(
     capabilities = CapabilityRegistry(clock=time.time)
     context = ManagedContext(
         capabilities,
-        settings.agent.managed_backend_url,
         lambda workspace_id, conversation_id: (
             context_directory(workspace_id, conversation_id) / context_target.name
         ),
@@ -168,12 +173,20 @@ def build_application(
         capabilities.revoke_turn(request.workspace_id, request.turn_id)
         context.remove(request.workspace_id, request.conversation_id)
 
-    runtime = RuntimeService(
-        workspace=lambda workspace_id: WorkspaceRuntime(
+    def workspace_runtime(workspace_id: str) -> WorkspaceRuntime:
+        storage_kind = workspaces.get(workspace_id)["storage_kind"]
+        return WorkspaceRuntime(
             workspaces.repo_path(workspace_id),
             workspaces.workspace_dir(workspace_id),
-            submodules,
-        ),
+            # The mount tuple exists to fill the empty gitlink directories a
+            # managed copy leaves behind. A real git tree already has its
+            # submodules checked out, and mounting over them would hide work.
+            () if storage_kind == "external" else submodules,
+            storage_kind=storage_kind,
+        )
+
+    runtime = RuntimeService(
+        workspace=workspace_runtime,
         providers=configured.registry,
         runtimes=configured.runtimes,
         containers=ContainerManager(
@@ -186,6 +199,27 @@ def build_application(
         conversation_path=workspaces.conversation_runtime_path,
         context_directory=context_directory,
         prepare_workspace=workspace_service.prepare,
+        host=HostRuntime(
+            # `host.docker.internal` resolves only inside a container. Both
+            # services already bind a host interface, so what a host turn needs
+            # is the same address under a name this machine can resolve --
+            # configured explicitly rather than rewritten at runtime.
+            analyzer_base_url=(
+                settings.agent.host_analyzer_base_url
+                or settings.agent.analyzer_base_url
+            ),
+            managed_backend_url=(
+                settings.agent.host_managed_backend_url
+                or settings.agent.managed_backend_url
+            ),
+            # The image's MCP virtualenv does not exist here; the Agent's own
+            # interpreter already has the same pinned `mcp` package.
+            mcp_python=sys.executable,
+            mcp_server=(
+                settings.agent.repo_root
+                / "vibesim_agent/analyzer_evidence_mcp/server.py"
+            ),
+        ),
     )
     driver = ConversationDriver(
         configured.registry,

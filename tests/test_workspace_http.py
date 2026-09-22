@@ -328,5 +328,7 @@ class WorktreeDisabledHttpTests(WorkspaceHttpTests):
         main = next(item for item in listing if item["workspace_id"] == "w_main")
         # w_main's descriptor predates the kind axis entirely.
         self.assertEqual(main["workspace_kind"], "checkout")
-        self.assertEqual(main["execution"], "container")
+        # Derived from storage_kind, which is why a descriptor written before
+        # host execution existed still reports the mode it now runs in.
+        self.assertEqual(main["execution"], "host")
         self.assertNotIn("workspace_kind", self.application.state.workspaces.get("w_main"))

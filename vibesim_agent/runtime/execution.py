@@ -61,6 +61,7 @@ class Execution(Protocol):
     mcp_server: str
     analyzer_source: str
     analyzer_base_url: str
+    managed_backend_url: str
     stop_timeout: float
     start_new_session: bool
     kill: KillProcess
@@ -124,6 +125,10 @@ class DockerExecution:
         # `host.docker.internal` by default, which only resolves inside a
         # container; host turns need the same address under another name.
         return self.environment.agent.analyzer_base_url
+
+    @property
+    def managed_backend_url(self) -> str:
+        return self.environment.agent.managed_backend_url
 
     def prefix(
         self,
@@ -222,6 +227,7 @@ class HostExecution:
     managed_context: str
     analyzer_source: str
     analyzer_base_url: str
+    managed_backend_url: str
     mcp_python: str
     mcp_server: str
 

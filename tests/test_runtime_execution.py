@@ -146,6 +146,7 @@ class HostExecutionTests(unittest.TestCase):
                 "managed_context": "/state/c/managed/context.json",
                 "analyzer_source": "external",
                 "analyzer_base_url": "http://172.17.0.1:63044",
+                "managed_backend_url": "http://172.17.0.1:63043",
                 "mcp_python": "/trees/wt-topic/.venv/bin/python",
                 "mcp_server": "/agent/vibesim_agent/analyzer_evidence_mcp/server.py",
                 **overrides,

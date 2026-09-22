@@ -103,11 +103,9 @@ class ManagedContext:
     def __init__(
         self,
         registry: CapabilityRegistry,
-        backend_url: str,
         path: Callable[[str, str], Path],
     ):
         self.registry = registry
-        self.backend_url = backend_url.rstrip("/")
         self.path = path
         self._lock = threading.RLock()
 
@@ -129,7 +127,10 @@ class ManagedContext:
                 payload = {
                     "schema_version": 1,
                     "managed_jobs_api": "agent-v1",
-                    "backend_url": self.backend_url,
+                    # Read off the turn, not fixed at construction: the default
+                    # `host.docker.internal` resolves only inside a container,
+                    # and the same backend needs another name on the host.
+                    "backend_url": request.execution.managed_backend_url.rstrip("/"),
                     "capability_token": capability.token,
                     "expires_at": capability.expires_at,
                 }

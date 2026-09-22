@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -15,8 +16,9 @@ from ..prompts.render import Prompts
 from ..providers.base import AgentRequest
 from ..providers.registry import ProviderRegistry
 from ..runtime.container import ContainerManager, ContainerSpec
-from ..runtime.execution import DockerExecution, Execution
+from ..runtime.execution import DockerExecution, Execution, HostExecution
 from ..runtime.homes import role_home
+from ..runtime.host import check_host_binaries
 from ..runtime.invocation import InvocationHome, RoleContext
 from ..runtime.mounts import (
     PROMPTS_TARGET,
@@ -32,12 +34,31 @@ class WorkspaceRuntime:
     repo: Path
     state: Path
     submodules: tuple[Path, ...] = ()
+    # The execution mode, spelled the way the registry already spells it:
+    # `managed` is a copy of the tracked files and runs in a container,
+    # `external` is a real git tree and runs here.
+    storage_kind: str = "managed"
 
 
 @dataclass(frozen=True)
 class ProviderRuntime:
     prepare: Callable[[InvocationHome, RoleContext], None]
     binaries: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class HostRuntime:
+    """What a host turn needs that the runner image otherwise supplies.
+
+    None of these have container defaults that work here: the analyzer and
+    callback URLs name `host.docker.internal`, and both MCP paths are baked
+    into the image.
+    """
+
+    analyzer_base_url: str
+    managed_backend_url: str
+    mcp_python: str
+    mcp_server: Path
 
 
 class RuntimeService:
@@ -55,6 +76,8 @@ class RuntimeService:
         conversation_path: Callable[[str, str], Path] | None = None,
         context_directory: Callable[[str, str], Path] | None = None,
         prepare_workspace: Callable[[str], str] | None = None,
+        host: HostRuntime | None = None,
+        logger: logging.Logger | None = None,
     ):
         if not namespace:
             raise ValueError("runtime namespace is required")
@@ -69,6 +92,8 @@ class RuntimeService:
         self.conversation_path = conversation_path
         self.context_directory = context_directory
         self.prepare_workspace = prepare_workspace
+        self.host = host
+        self.logger = logger or logging.getLogger("vibesim_agent.runtime")
         self.context_target = (
             managed_context_target(
                 containers.environment.managed_context,
@@ -153,6 +178,45 @@ class RuntimeService:
             prepared = Path(self.prepare_workspace(request.workspace_id))
             if prepared != workspace.repo:
                 raise ValueError("prepared workspace does not match runtime repository")
+        # The one place the mode is decided, on the axis the registry already
+        # records: a copy of the tracked files runs in a container, a real git
+        # tree runs here so that profiling, Slurm and Docker are reachable.
+        if workspace.storage_kind == "external":
+            return self._host(workspace, active, directory=directory, prompt=prompt)
+        return self._container(request, workspace, active, directory, prompt)
+
+    def _host(self, workspace, active, *, directory, prompt) -> Execution:
+        if self.host is None:
+            raise ValueError("host execution is not configured")
+        check_host_binaries(
+            (binary for _, _, provision, _ in active for binary in provision.binaries),
+            logger=self.logger,
+        )
+        environment = self.containers.environment
+        context = RoleContext(
+            skills=str(workspace.repo / "skills"),
+            # Only the host delivers the contract this way. In a container it
+            # arrives as a mount over the workspace's own AGENTS.md instead.
+            global_prompt=prompt,
+        )
+        for _, _, provision, home in active:
+            provision.prepare(home, context)
+        managed_context = environment.managed_context
+        if directory is not None:
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            managed_context = str(directory / PurePosixPath(managed_context).name)
+        return HostExecution(
+            repo=workspace.repo,
+            agent_prompt=str(prompt),
+            managed_context=managed_context,
+            analyzer_source=environment.agent.analyzer_source,
+            analyzer_base_url=self.host.analyzer_base_url,
+            managed_backend_url=self.host.managed_backend_url,
+            mcp_python=self.host.mcp_python,
+            mcp_server=str(self.host.mcp_server),
+        )
+
+    def _container(self, request, workspace, active, directory, prompt) -> Execution:
         mounts = list(
             workspace_mounts(
                 workspace=workspace.repo,
@@ -194,9 +258,9 @@ class RuntimeService:
                 (role.value, runtime.session_scope) for role, runtime, _, _ in active
             ),
         )
-        # The only place the mode is decided. Host execution has not been
-        # switched on yet, so every turn is still a container.
-        return DockerExecution(self.containers.environment, self.containers.ensure(spec))
+        return DockerExecution(
+            self.containers.environment, self.containers.ensure(spec)
+        )
 
     def _cleanup(self, workspace_id: str, conversation_id: str) -> None:
         root = self._root(workspace_id, conversation_id)
