@@ -136,7 +136,7 @@ class ManagedLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(self.app.state.capabilities.authorize(token))
         self.assertEqual(self.context_path(conversation_id).exists(), not removed)
 
-    async def test_success_resume_and_readonly_directory_mount(self):
+    async def test_success_resume_and_context_path_delivered_to_the_turn(self):
         await self.setup_app()
         cid = await self.create()
         for _ in range(2):
@@ -147,17 +147,12 @@ class ManagedLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [request.session_id for request, _ in self.calls], [None, "saved-assistant"]
         )
-        expected = (
-            f"type=bind,src={self.context_path(cid).parent},dst=/runtime,readonly"
-        )
-        mounts = [
-            command[i + 1]
-            for command in self.docker.calls
-            for i, value in enumerate(command)
-            if value == "--mount"
-        ]
-        self.assertIn(expected, mounts)
-        self.assertTrue(all("context.json" not in mount for mount in mounts))
+        # `w_main` is external, so these turns run here and the capability file
+        # is reached by path rather than through a read-only bind mount. The
+        # container form of the same delivery is in test_runtime_service.
+        self.assertEqual(self.docker.calls, [])
+        for request, _ in self.calls:
+            self.assertEqual(request.execution.managed_context, str(self.context_path(cid)))
         self.assertEqual(self.closed_authority, [True, True])
 
     async def test_two_roles_replace_visible_context_then_revoke_all(self):

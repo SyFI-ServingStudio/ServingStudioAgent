@@ -14,7 +14,7 @@ from vibesim_agent.providers.builtin import (
     provider_environment,
     session_scope,
 )
-from vibesim_agent.runtime.invocation import InvocationHome
+from vibesim_agent.runtime.invocation import InvocationHome, RoleContext
 from vibesim_agent.settings import ConfigurationError, load_settings
 
 
@@ -151,7 +151,10 @@ class ConfiguredProviderTests(unittest.TestCase):
         config = self.codex_home / "config.toml"
         config.write_text(config.read_text().replace("http://backend", "http://other"))
         with self.assertRaisesRegex(ConfigurationError, "rebuild"):
-            guarded(InvocationHome(self.root / "runtime", "/runtime"))
+            guarded(
+                InvocationHome(self.root / "runtime", "/runtime"),
+                RoleContext(skills="/workspace/skills"),
+            )
         prepare.assert_not_called()
         with self.assertRaises(ConfigurationError):
             build_registry(settings, adapters={})

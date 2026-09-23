@@ -7,8 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
+from fastapi import FastAPI
 from pydantic import SecretStr
 from tests import test_application as fixtures
+from vibesim_agent.api.workspaces import workspace_collection_router
 from vibesim_agent.storage.database import Database
 
 
@@ -230,3 +232,187 @@ class WorkspaceHttpTests(unittest.IsolatedAsyncioTestCase):
         repository.symlink_to(self.repo, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, "managed repository"):
             service.prepare(wid)
+
+
+class WorktreeWorkspaceHttpTests(WorkspaceHttpTests):
+    """Worktree creation over HTTP, against the fixture's real Git checkout."""
+
+    def setUp(self):
+        super().setUp()
+        self.trees = self.root / "trees"
+        self.trees.mkdir()
+        self.settings = self.settings.model_copy(
+            update={
+                "agent": self.settings.agent.model_copy(
+                    update={"worktree_root": self.trees}
+                )
+            }
+        )
+
+    async def create_worktree(self, **body):
+        return await self.client.post(
+            self.base, json={"displayName": "Kv Cache Logging", "kind": "worktree", **body}
+        )
+
+    async def test_capability_is_announced_beside_the_listing(self):
+        listing = (await self.client.get(self.base)).json()
+        self.assertEqual(
+            listing["capabilities"]["workspaceKinds"], ["copy", "worktree"]
+        )
+
+    async def test_creates_a_real_branch_and_registers_it_external(self):
+        response = await self.create_worktree()
+        self.assertEqual(response.status_code, 200, response.text)
+        descriptor = response.json()
+
+        self.assertEqual(descriptor["storage_kind"], "external")
+        self.assertEqual(descriptor["workspace_kind"], "worktree")
+        self.assertIs(descriptor["worktree_owned"], True)
+        # Derived from the display name, and the server reports what it used;
+        # the UI must never re-derive this.
+        self.assertEqual(descriptor["worktree_branch"], "kv-cache-logging")
+        self.assertEqual(descriptor["repo_path"], str(self.trees / "wt-kv-cache-logging"))
+        self.assertIn("kv-cache-logging", self.git("branch", "--list"))
+        self.assertEqual(descriptor["base_revision"], self.git("rev-parse", "HEAD"))
+        self.assertEqual(
+            (Path(descriptor["repo_path"]) / "AGENTS.md").read_text(),
+            "workspace instructions",
+        )
+
+    async def test_second_workspace_with_the_same_name_gets_its_own_branch(self):
+        first = (await self.create_worktree()).json()
+        second = (await self.create_worktree()).json()
+        self.assertEqual(first["worktree_branch"], "kv-cache-logging")
+        self.assertEqual(second["worktree_branch"], "kv-cache-logging-2")
+        self.assertNotEqual(first["repo_path"], second["repo_path"])
+
+    async def test_explicit_branch_collision_is_a_conflict_not_a_rename(self):
+        await self.create_worktree(branch="chosen")
+        response = await self.create_worktree(branch="chosen")
+        self.assertEqual(response.status_code, 409, response.text)
+
+    async def test_invalid_branch_is_rejected_before_anything_is_created(self):
+        response = await self.create_worktree(branch="bad branch")
+        self.assertEqual(response.status_code, 400, response.text)
+        self.assertEqual(self.git("worktree", "list").count("\n"), 0)
+
+    async def test_branch_and_base_do_not_apply_to_a_copy(self):
+        response = await self.client.post(
+            self.base, json={"displayName": "Trial", "kind": "copy", "branch": "x"}
+        )
+        self.assertEqual(response.status_code, 400, response.text)
+
+    async def test_unknown_kind_is_refused_by_the_schema(self):
+        response = await self.client.post(
+            self.base, json={"displayName": "Trial", "kind": "adopt"}
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+
+
+    # The naming model proposes the branch before the worktree exists. These
+    # mount the router alone, over the same service and real Git, with a
+    # stand-in for the model.
+    def naming(self, proposal):
+        self.proposals = []
+        self.proposal = proposal
+
+        async def propose(request):
+            self.proposals.append(request)
+            if isinstance(self.proposal, Exception):
+                raise self.proposal
+            return self.proposal
+
+        named = FastAPI()
+        named.include_router(
+            workspace_collection_router(
+                self.application.state.workspace_service, branch_topic=propose
+            )
+        )
+        self.named = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=named), base_url="http://test"
+        )
+        self.addAsyncCleanup(self.named.aclose)
+
+    async def named_worktree(self, **body):
+        return await self.named.post(
+            self.base, json={"displayName": "Kv Cache Logging", "kind": "worktree", **body}
+        )
+
+    async def test_the_models_branch_is_used_in_place_of_the_display_name(self):
+        self.naming("kv-cache-eviction-logging")
+        descriptor = (await self.named_worktree()).json()
+        self.assertEqual(self.proposals, ["Kv Cache Logging"])
+        self.assertEqual(descriptor["worktree_branch"], "kv-cache-eviction-logging")
+        self.assertEqual(
+            descriptor["repo_path"], str(self.trees / "wt-kv-cache-eviction-logging")
+        )
+        # The display name is still the reader's, untouched by the branch.
+        self.assertEqual(descriptor["display_name"], "Kv Cache Logging")
+
+    async def test_a_proposal_is_slugged_and_suffixed_rather_than_refused(self):
+        self.naming("KV Cache: Eviction Logging!")
+        first = (await self.named_worktree()).json()
+        second = (await self.named_worktree()).json()
+        # Unlike a typed branch, a collision here is nobody's mistake.
+        self.assertEqual(first["worktree_branch"], "kv-cache-eviction-logging")
+        self.assertEqual(second["worktree_branch"], "kv-cache-eviction-logging-2")
+
+    async def test_a_failed_or_empty_proposal_falls_back_to_the_display_name(self):
+        self.naming(None)
+        for proposal in (TimeoutError("slow"), "", "！？"):
+            with self.subTest(proposal=proposal):
+                self.proposal = proposal
+                response = await self.named_worktree()
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertTrue(
+                    response.json()["worktree_branch"].startswith("kv-cache-logging")
+                )
+
+    async def test_a_typed_branch_is_never_replaced_or_even_asked_about(self):
+        self.naming("unused")
+        descriptor = (await self.named_worktree(branch="chosen")).json()
+        self.assertEqual(descriptor["worktree_branch"], "chosen")
+        self.assertEqual(self.proposals, [])
+
+    async def test_a_copy_does_not_ask_for_a_branch(self):
+        self.naming("unused")
+        await self.named.post(self.base, json={"displayName": "Trial", "kind": "copy"})
+        self.assertEqual(self.proposals, [])
+
+
+class WorktreeDisabledHttpTests(WorkspaceHttpTests):
+    """Unset `worktree_root` is the default; the feature must stay off and say so."""
+
+    async def test_capability_omits_worktree_and_creation_is_not_implemented(self):
+        listing = (await self.client.get(self.base)).json()
+        self.assertEqual(listing["capabilities"]["workspaceKinds"], ["copy"])
+        response = await self.client.post(
+            self.base, json={"displayName": "Trial", "kind": "worktree"}
+        )
+        self.assertEqual(response.status_code, 501, response.text)
+
+    async def test_copies_still_record_their_kind(self):
+        descriptor = await self.create()
+        self.assertEqual(descriptor["workspace_kind"], "copy")
+        self.assertEqual(descriptor["storage_kind"], "managed")
+
+    async def test_main_checkout_reports_a_kind_it_never_stored(self):
+        listing = (await self.client.get(self.base)).json()["workspaces"]
+        main = next(item for item in listing if item["workspace_id"] == "w_main")
+        # w_main's descriptor predates the kind axis entirely.
+        self.assertEqual(main["workspace_kind"], "checkout")
+        # Derived from storage_kind, which is why a descriptor written before
+        # host execution existed still reports the mode it now runs in.
+        self.assertEqual(main["execution"], "host")
+        self.assertNotIn("workspace_kind", self.application.state.workspaces.get("w_main"))
+
+
+class SlugTests(unittest.TestCase):
+    def test_cuts_at_a_word_boundary(self):
+        from vibesim_agent.services.workspace import _slug
+
+        slug = _slug("When serving GLM5.2 with TP4 + EP4, which kernel takes the most time")
+        self.assertEqual(slug, "when-serving-glm5-2-with-tp4-ep4-which")
+        self.assertLessEqual(len(slug), 40)
+        self.assertEqual(_slug("a" * 60), "a" * 40)
+        self.assertEqual(_slug("为什么这么慢"), "workspace")

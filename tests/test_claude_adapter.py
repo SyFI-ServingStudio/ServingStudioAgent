@@ -15,6 +15,7 @@ from unittest.mock import patch
 from vibesim_agent.domain.roles import Role
 from vibesim_agent.providers.base import AgentRequest, Model, OutputMode, Selection
 from vibesim_agent.providers.claude import adapter as adapter_module
+from vibesim_agent.runtime import execution as execution_module
 from vibesim_agent.providers.claude.adapter import ClaudeAdapter
 from vibesim_agent.runtime.invocation import InvocationHome
 
@@ -40,19 +41,13 @@ class LocalCommand:
         ]
 
 
-class LocalAdapter(ClaudeAdapter):
-    async def _signal(self, container, pid_file, name):
-        path = Path(pid_file)
-        if path.exists():
-            try:
-                os.kill(int(path.read_text()), getattr(signal, "SIG" + name))
-            except ProcessLookupError:
-                pass
+from tests.test_codex_adapter import LocalExecution
 
 
 class ClaudeAdapterTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.home = Path(self.enterContext(TemporaryDirectory()))
+        self.execution = LocalExecution()
         self.model = Model("claude", "Claude", ("high",), "high")
         self.request = AgentRequest(
             "w",
@@ -60,12 +55,12 @@ class ClaudeAdapterTests(unittest.IsolatedAsyncioTestCase):
             "t",
             Role.ASSISTANT,
             "question",
-            "local",
+            self.execution,
             Selection("profile", self.model, "high", "default", "claude:v1"),
         )
 
     def adapter(self, code, *, timeout=2, schema=None):
-        return LocalAdapter(
+        return ClaudeAdapter(
             LocalCommand(code, schema),
             home=lambda _: InvocationHome(self.home, str(self.home)),
             idle_timeout=timeout,
@@ -214,7 +209,7 @@ class ClaudeAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_signal_helper_failure_still_reaches_kill(self):
         adapter = self.adapter("import time; time.sleep(30)", timeout=0.07)
-        original = adapter._signal
+        original = self.execution.local_signal
         signals = []
 
         async def interrupted_helper(container, pid_file, name):
@@ -223,8 +218,8 @@ class ClaudeAdapterTests(unittest.IsolatedAsyncioTestCase):
                 raise TimeoutError("helper blocked")
             await original(container, pid_file, name)
 
-        adapter._signal = interrupted_helper
-        with patch.object(adapter_module, "SIGNAL_GRACE", 0.02):
+        self.execution.signal = interrupted_helper
+        with patch.object(execution_module, "SIGNAL_GRACE", 0.02):
             async with asyncio.timeout(3):
                 events = await self.consume(adapter)
         self.assertEqual(signals, ["INT", "TERM", "KILL"])

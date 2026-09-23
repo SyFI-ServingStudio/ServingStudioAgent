@@ -1,4 +1,5 @@
 import json
+import os
 import tomllib
 import unittest
 from dataclasses import replace
@@ -11,7 +12,7 @@ from vibesim_agent.providers.claude.home import ClaudeProfile
 from vibesim_agent.providers.codex.command import CodexCommand
 from vibesim_agent.providers.codex.home import CodexProfile
 from vibesim_agent.runtime.homes import role_home
-from vibesim_agent.runtime.invocation import InvocationHome
+from vibesim_agent.runtime.invocation import InvocationHome, RoleContext
 
 
 class ProviderHomesTests(unittest.TestCase):
@@ -27,7 +28,7 @@ class ProviderHomesTests(unittest.TestCase):
         (self.source / "sessions/host.json").write_text("host conversation")
         (self.source / "history.jsonl").write_text("host history")
         profile = CodexProfile(self.source)
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertFalse((self.home.host / "sessions/host.json").exists())
         self.assertFalse((self.home.host / "history.jsonl").exists())
         saved = self.home.host / "sessions/saved.json"
@@ -35,14 +36,14 @@ class ProviderHomesTests(unittest.TestCase):
         marker = self.home.host / "call-cancelled.pid.cancel"
         marker.touch()
         (self.source / "auth.json").write_text('{"token":"new"}')
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertEqual(
             json.loads((self.home.host / "auth.json").read_text())["token"], "new"
         )
         self.assertEqual(saved.read_text(), "role conversation")
         self.assertTrue(marker.exists())
         (self.source / "auth.json").unlink()
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertFalse((self.home.host / "auth.json").exists())
 
     def test_codex_catalog_override_preserves_original_toml(self):
@@ -50,7 +51,7 @@ class ProviderHomesTests(unittest.TestCase):
         (self.source / "config.toml").write_text(config)
         (self.source / "models_catalog.json").write_text("{}")
         profile = CodexProfile(self.source)
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         builder = replace(
             CodexCommand(execution_environment()),
             catalog_filename=profile.catalog_filename,
@@ -65,11 +66,11 @@ class ProviderHomesTests(unittest.TestCase):
 
     def test_separate_roles_do_not_share_sessions(self):
         profile = CodexProfile(self.source)
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         saved = self.home.host / "sessions/saved.json"
         saved.write_text("first")
         second = InvocationHome(self.root / "second", "/second")
-        profile.prepare(second)
+        profile.prepare(second, RoleContext(skills="/workspace/skills"))
         self.assertEqual(list((second.host / "sessions").iterdir()), [])
         self.assertEqual(saved.read_text(), "first")
 
@@ -78,11 +79,11 @@ class ProviderHomesTests(unittest.TestCase):
         rules.mkdir()
         (rules / "default.rules").write_text("old rules")
         profile = CodexProfile(self.source)
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         (self.home.host / "cache/durable").write_text("cache")
         (rules / "default.rules").unlink()
         rules.rmdir()
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertFalse((self.home.host / "rules").exists())
         self.assertEqual((self.home.host / "cache/durable").read_text(), "cache")
 
@@ -93,7 +94,7 @@ class ProviderHomesTests(unittest.TestCase):
         (external / "saved").write_text("unchanged")
         (self.home.host / "sessions").symlink_to(external, target_is_directory=True)
         with self.assertRaisesRegex(ValueError, "must not be symlinks"):
-            CodexProfile(self.source).prepare(self.home)
+            CodexProfile(self.source).prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertEqual(list(external.iterdir()), [external / "saved"])
         self.assertEqual((external / "saved").read_text(), "unchanged")
 
@@ -123,12 +124,12 @@ class ProviderHomesTests(unittest.TestCase):
         profile = CodexProfile(self.source)
         for target in (self.source, self.source / "nested", self.root):
             with self.subTest(target=target), self.assertRaises(ValueError):
-                profile.prepare(InvocationHome(target, "/home"))
+                profile.prepare(InvocationHome(target, "/home"), RoleContext(skills="/workspace/skills"))
         self.home.host.symlink_to(self.source, target_is_directory=True)
         with self.assertRaises(ValueError):
-            profile.prepare(self.home)
+            profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         with self.assertRaises(ValueError):
-            ClaudeProfile().prepare(self.home)
+            ClaudeProfile().prepare(self.home, RoleContext(skills="/workspace/skills"))
 
     def test_scoped_role_paths_reject_symlinks_before_profile_preparation(self):
         root = self.root / "conversation"
@@ -149,13 +150,170 @@ class ProviderHomesTests(unittest.TestCase):
 
     def test_claude_preserves_existing_sessions_and_creates_container_skills_link(self):
         profile = ClaudeProfile()
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         saved = self.home.host / "sessions.json"
         saved.write_text("saved")
-        profile.prepare(self.home)
+        profile.prepare(self.home, RoleContext(skills="/workspace/skills"))
         self.assertEqual(saved.read_text(), "saved")
-        self.assertEqual(
-            (self.home.host / "skills").readlink(), Path("/workspace/skills")
-        )
+        # A directory of its own, never a link into the workspace; with no
+        # library to read there is nothing to offer in it.
+        self.assertTrue((self.home.host / "skills").is_dir())
+        self.assertFalse((self.home.host / "skills").is_symlink())
         self.assertEqual(self.home.host.stat().st_mode & 0o777, 0o700)
         self.assertFalse((self.home.host / "auth.json").exists())
+
+
+class RoleContextTests(unittest.TestCase):
+    """The role home outlives a switch between execution modes."""
+
+    def setUp(self):
+        self.root = Path(self.enterContext(TemporaryDirectory()))
+        self.source = self.root / "source"
+        self.source.mkdir()
+        (self.source / ".credentials.json").write_text('{"token":"t"}')
+        self.home = InvocationHome(self.root / "role", "/role-home")
+        self.contract = self.root / "AGENTS.md"
+        self.contract.write_text("role contract")
+        self.library = self.root / "wt-topic/skills"
+        for name in ("dev-run-tests", "top-add-kernel"):
+            (self.library / name).mkdir(parents=True)
+            (self.library / name / "SKILL.md").write_text(f"# {name}")
+        # A stray file and a directory without a SKILL.md: neither is a skill.
+        (self.library / "README.md").write_text("not a skill")
+        (self.library / "scratch").mkdir()
+
+    def container(self):
+        return RoleContext(skills="/workspace/skills", skills_source=self.library)
+
+    def host(self):
+        return RoleContext(
+            skills=str(self.library),
+            skills_source=self.library,
+            global_prompt=self.contract,
+            user_skills=True,
+        )
+
+    def user_skill(self, name):
+        (self.source / "skills" / name).mkdir(parents=True)
+        (self.source / "skills" / name / "SKILL.md").write_text(f"# user {name}")
+
+    def test_claude_replaces_the_legacy_directory_link_with_one_link_per_skill(self):
+        link = self.home.host / "skills"
+        self.home.host.mkdir(parents=True)
+        link.symlink_to("/workspace/skills", target_is_directory=True)
+        ClaudeProfile(self.source).prepare(self.home, self.container())
+        self.assertFalse(link.is_symlink())
+        self.assertEqual(
+            os.readlink(link / "dev-run-tests"), "/workspace/skills/dev-run-tests"
+        )
+
+    def test_claude_skill_links_follow_a_switch_of_execution_mode(self):
+        profile = ClaudeProfile(self.source)
+        profile.prepare(self.home, self.container())
+        profile.prepare(self.home, self.host())
+        link = self.home.host / "skills/dev-run-tests"
+        # Left alone, a container path would survive as a link into a directory
+        # that does not exist on this machine.
+        self.assertEqual(os.readlink(link), str(self.library / "dev-run-tests"))
+        profile.prepare(self.home, self.container())
+        self.assertEqual(os.readlink(link), "/workspace/skills/dev-run-tests")
+
+    def test_claude_is_offered_the_users_own_skills_on_the_host_only(self):
+        self.user_skill("run-gpu-job")
+        profile = ClaudeProfile(self.source)
+        skills = self.home.host / "skills"
+
+        profile.prepare(self.home, self.host())
+        # `$CLAUDE_CONFIG_DIR/skills` is Claude's user-level directory, and the
+        # config dir is this isolated home: unlinked, the skill that says how
+        # to submit a Slurm job is invisible exactly where `sbatch` works.
+        self.assertEqual(
+            os.readlink(skills / "run-gpu-job"),
+            str(self.source / "skills/run-gpu-job"),
+        )
+
+        profile.prepare(self.home, self.container())
+        # The user's skills are for their machine; a container gets the
+        # workspace's and nothing else.
+        self.assertEqual(
+            sorted(entry.name for entry in skills.iterdir()),
+            ["dev-run-tests", "top-add-kernel"],
+        )
+
+    def test_the_workspace_skill_wins_a_name_the_user_also_has(self):
+        self.user_skill("dev-run-tests")
+        ClaudeProfile(self.source).prepare(self.home, self.host())
+        # The workspace's copy is the one that matches the code in front of it.
+        self.assertEqual(
+            os.readlink(self.home.host / "skills/dev-run-tests"),
+            str(self.library / "dev-run-tests"),
+        )
+
+    def test_codex_writes_the_contract_only_where_it_is_the_delivery_path(self):
+        profile = CodexProfile(self.source)
+        prompt = self.home.host / "AGENTS.md"
+
+        profile.prepare(self.home, self.host())
+        # Codex reads $CODEX_HOME/AGENTS.md as global instructions; this is how
+        # the contract reaches a host turn.
+        self.assertEqual(prompt.read_text(), "role contract")
+
+        profile.prepare(self.home, self.container())
+        # In a container the contract arrives as a mount over the workspace's
+        # own AGENTS.md, so a leftover here would apply it twice.
+        self.assertFalse(prompt.exists())
+
+    def test_codex_replaces_rather_than_appends_on_every_preparation(self):
+        profile = CodexProfile(self.source)
+        profile.prepare(self.home, self.host())
+        self.contract.write_text("revised contract")
+        profile.prepare(self.home, self.host())
+        self.assertEqual((self.home.host / "AGENTS.md").read_text(), "revised contract")
+
+    def test_codex_is_offered_the_workspace_skills_one_link_each(self):
+        profile = CodexProfile(self.source)
+        profile.prepare(self.home, self.container())
+        skills = self.home.host / "skills"
+        # A real directory, not a link to the workspace: Codex installs its own
+        # `.system` skills in here on first run, and pointed at the workspace
+        # that write would land inside the user's repository.
+        self.assertFalse(skills.is_symlink())
+        self.assertEqual(
+            sorted(entry.name for entry in skills.iterdir()),
+            ["dev-run-tests", "top-add-kernel"],
+        )
+        self.assertEqual(
+            os.readlink(skills / "dev-run-tests"), "/workspace/skills/dev-run-tests"
+        )
+
+    def test_codex_skill_links_follow_a_switch_of_execution_mode(self):
+        profile = CodexProfile(self.source)
+        profile.prepare(self.home, self.container())
+        profile.prepare(self.home, self.host())
+        link = self.home.host / "skills/dev-run-tests"
+        # The role home outlives the switch, and a container path left here
+        # would be a link into a directory that does not exist on this machine.
+        self.assertEqual(os.readlink(link), str(self.library / "dev-run-tests"))
+
+    def test_codex_keeps_what_it_installed_and_drops_a_retired_skill(self):
+        profile = CodexProfile(self.source)
+        profile.prepare(self.home, self.host())
+        system = self.home.host / "skills/.system"
+        (system / "imagegen").mkdir(parents=True)
+        (system / "imagegen/SKILL.md").write_text("# imagegen")
+        (self.library / "top-add-kernel/SKILL.md").unlink()
+
+        profile.prepare(self.home, self.host())
+        # Codex's own directory is untouched; the skill that stopped being one
+        # does not linger as a link to a path that no longer answers.
+        self.assertTrue((system / "imagegen/SKILL.md").is_file())
+        self.assertEqual(
+            sorted(entry.name for entry in (self.home.host / "skills").iterdir()),
+            [".system", "dev-run-tests"],
+        )
+
+    def test_codex_contract_is_not_a_profile_entry_and_survives_nothing_else(self):
+        from vibesim_agent.providers.codex.home import PROFILE_ENTRIES
+
+        # The slot is free precisely because the profile copy never touches it.
+        self.assertNotIn("AGENTS.md", PROFILE_ENTRIES)

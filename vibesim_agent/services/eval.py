@@ -19,12 +19,12 @@ class EvalService:
         conversations: ConversationService,
         turns: TurnService,
         *,
-        remove_container: Callable[[str, str], Awaitable[None]],
+        release: Callable[[str, str], Awaitable[None]],
     ):
         self.workspaces = workspaces
         self.conversations = conversations
         self.turns = turns
-        self.remove_container = remove_container
+        self.release = release
         self._tasks: set[asyncio.Task] = set()
         self._closing = False
         self._close_task: asyncio.Task | None = None
@@ -80,7 +80,7 @@ class EvalService:
 
         async def cleanup(request: TurnInput) -> None:
             nonlocal retained
-            await self.remove_container(request.workspace_id, request.conversation_id)
+            await self.release(request.workspace_id, request.conversation_id)
             retained = False
 
         handle = self.turns.start(

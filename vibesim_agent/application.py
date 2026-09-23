@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import subprocess
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -23,10 +24,13 @@ from .providers.base import AgentRequest
 from .providers.registry import ProviderRegistry
 from .runtime.command import ExecutionEnvironment
 from .runtime.container import ContainerManager
+from .runtime.git import GitRunner
 from .runtime.homes import role_home
+from .runtime.host import host_workspace_roots
 from .runtime.invocation import InvocationHome
-from .runtime.mounts import PROMPTS_TARGET, managed_context_target
+from .runtime.mounts import managed_context_target
 from .runtime.workspace import WorkspaceSnapshot
+from .runtime.worktree import WorktreeProvisioner
 from .services.artifacts import ArtifactService
 from .services.capabilities import CapabilityRegistry, ManagedContext
 from .services.citations import CitationService
@@ -37,7 +41,12 @@ from .services.jobs import JobService
 from .services.name_generator import NameGenerator
 from .services.naming import NamingService
 from .services.recovery import RecoveryService
-from .services.runtime import ProviderRuntime, RuntimeService, WorkspaceRuntime
+from .services.runtime import (
+    HostRuntime,
+    ProviderRuntime,
+    RuntimeService,
+    WorkspaceRuntime,
+)
 from .services.turn import TurnService, TurnStorage
 from .services.workspace import WorkspaceService
 from .settings import Settings
@@ -83,12 +92,27 @@ def build_application(
     )
     workspaces = WorkspaceRegistry(settings.agent.workspaces_root)
     artifacts = ArtifactService(workspaces)
+    worktree_root = settings.agent.worktree_root
     workspace_service = WorkspaceService(
         workspaces,
         WorkspaceSnapshot(
             settings.agent.main_dir,
             process_environment=workspace_environment or {},
         ),
+        # Opt-in: provisioning writes real branches into the user's checkout, so
+        # a deployment that has not chosen a location does not get the feature.
+        worktrees=(
+            # Real `subprocess.run`, like the snapshot beside it. `run` here is
+            # the Docker boundary; sharing it would let a stubbed container
+            # runner silently stub Git too.
+            WorktreeProvisioner(
+                settings.agent.main_dir,
+                process_environment=workspace_environment or {},
+            )
+            if worktree_root is not None
+            else None
+        ),
+        worktree_root=worktree_root,
     )
     stores = {}
 
@@ -137,7 +161,6 @@ def build_application(
     capabilities = CapabilityRegistry(clock=time.time)
     context = ManagedContext(
         capabilities,
-        settings.agent.managed_backend_url,
         lambda workspace_id, conversation_id: (
             context_directory(workspace_id, conversation_id) / context_target.name
         ),
@@ -152,12 +175,20 @@ def build_application(
         capabilities.revoke_turn(request.workspace_id, request.turn_id)
         context.remove(request.workspace_id, request.conversation_id)
 
-    runtime = RuntimeService(
-        workspace=lambda workspace_id: WorkspaceRuntime(
+    def workspace_runtime(workspace_id: str) -> WorkspaceRuntime:
+        storage_kind = workspaces.get(workspace_id)["storage_kind"]
+        return WorkspaceRuntime(
             workspaces.repo_path(workspace_id),
             workspaces.workspace_dir(workspace_id),
-            submodules,
-        ),
+            # The mount tuple exists to fill the empty gitlink directories a
+            # managed copy leaves behind. A real git tree already has its
+            # submodules checked out, and mounting over them would hide work.
+            () if storage_kind == "external" else submodules,
+            storage_kind=storage_kind,
+        )
+
+    runtime = RuntimeService(
+        workspace=workspace_runtime,
         providers=configured.registry,
         runtimes=configured.runtimes,
         containers=ContainerManager(
@@ -170,25 +201,49 @@ def build_application(
         conversation_path=workspaces.conversation_runtime_path,
         context_directory=context_directory,
         prepare_workspace=workspace_service.prepare,
+        host=HostRuntime(
+            # `host.docker.internal` resolves only inside a container. Both
+            # services already bind a host interface, so what a host turn needs
+            # is the same address under a name this machine can resolve --
+            # configured explicitly rather than rewritten at runtime.
+            analyzer_base_url=(
+                settings.agent.host_analyzer_base_url
+                or settings.agent.analyzer_base_url
+            ),
+            managed_backend_url=(
+                settings.agent.host_managed_backend_url
+                or settings.agent.managed_backend_url
+            ),
+            # The image's MCP virtualenv does not exist here; the Agent's own
+            # interpreter already has the same pinned `mcp` package.
+            mcp_python=sys.executable,
+            mcp_server=(
+                settings.agent.repo_root
+                / "vibesim_agent/analyzer_evidence_mcp/server.py"
+            ),
+            git=GitRunner(workspace_environment or {}),
+            workspace_roots=host_workspace_roots(workspace_environment or {}),
+        ),
     )
     driver = ConversationDriver(
         configured.registry,
         prompts,
         prepare=runtime.prepare,
         before_call=prepare_call,
-        schema_directory=Path(str(PROMPTS_TARGET)),
         after_turn=finish_turn,
+        prompts_for=runtime.prompts_for,
+    )
+    names = NameGenerator(
+        api_key=settings.secrets.get("OPENROUTER_API_KEY"),
+        model=settings.agent.naming_model,
+        base_url=settings.agent.naming_base_url,
+        timeout=settings.agent.naming_timeout,
+        prompts=prompts,
     )
     naming = NamingService(
         workspaces,
         lambda workspace_id: storage(workspace_id).conversations,
-        NameGenerator(
-            api_key=settings.secrets.get("OPENROUTER_API_KEY"),
-            model=settings.agent.naming_model,
-            base_url=settings.agent.naming_base_url,
-            timeout=settings.agent.naming_timeout,
-            prompts=prompts,
-        ),
+        names,
     )
     turns = TurnService(
         storage,
@@ -217,14 +272,14 @@ def build_application(
         workspace_service,
         conversations,
         turns,
-        remove_container=runtime.remove_container,
+        release=runtime.release,
     )
     recovery = RecoveryService(
         workspaces,
         storage,
         capabilities=capabilities,
         context=context,
-        remove_container=runtime.remove_container,
+        release=runtime.release,
         ownership=ownership,
     )
 
@@ -246,7 +301,12 @@ def build_application(
         startup=recovery.recover,
         shutdown=shutdown,
     )
-    app.include_router(workspace_router(workspace_service))
+    app.include_router(
+        workspace_router(
+            workspace_service,
+            branch_topic=names.branch_topic if names.enabled else None,
+        )
+    )
     app.include_router(file_router(artifacts))
     app.include_router(
         tools_router(

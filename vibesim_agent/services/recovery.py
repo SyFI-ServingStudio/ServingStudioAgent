@@ -22,14 +22,14 @@ class RecoveryService:
         *,
         capabilities: CapabilityRegistry,
         context: ManagedContext,
-        remove_container: Callable[[str, str], Awaitable[None]],
+        release: Callable[[str, str], Awaitable[None]],
         ownership: WorkspaceOwnership | None = None,
     ):
         self.workspaces = workspaces
         self.storage = storage
         self.capabilities = capabilities
         self.context = context
-        self.remove_container = remove_container
+        self.release = release
         self.ownership = ownership or WorkspaceOwnership(workspaces.root)
         if self.ownership.root != workspaces.root:
             raise ValueError("recovery ownership must match workspace state root")
@@ -57,7 +57,7 @@ class RecoveryService:
                 for turn in turns:
                     conversation_id, turn_id = turn["conversation_id"], turn["id"]
                     self.capabilities.revoke_turn(workspace_id, turn_id)
-                    await self.remove_container(workspace_id, conversation_id)
+                    await self.release(workspace_id, conversation_id)
                     self.context.remove(workspace_id, conversation_id)
                     activity, _ = history_activity(
                         store.turns.events(conversation_id, turn_id), workspace_id

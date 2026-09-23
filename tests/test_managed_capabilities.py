@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests.runtime_fixtures import docker_execution, execution_environment
 from vibesim_agent.domain.roles import Role
 from vibesim_agent.providers.base import AgentRequest, Model, Selection
 from vibesim_agent.services.capabilities import (
@@ -21,15 +22,22 @@ from vibesim_agent.services.capabilities import (
 )
 
 
+def backend_execution(url: str):
+    environment = execution_environment()
+    return docker_execution(
+        replace(
+            environment, agent=environment.agent.model_copy(update={"managed_backend_url": url})
+        )
+    )
+
+
 class ManagedCapabilityTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(TemporaryDirectory()))
         self.now = 1000.0
         self.registry = CapabilityRegistry(clock=lambda: self.now)
         self.path = self.root / "control" / "managed-run.json"
-        self.context = ManagedContext(
-            self.registry, "http://backend:8765/", lambda w, c: self.path
-        )
+        self.context = ManagedContext(self.registry, lambda w, c: self.path)
         model = Model("model", "Model", ("high",), "high")
         self.request = AgentRequest(
             "w",
@@ -37,7 +45,9 @@ class ManagedCapabilityTests(unittest.TestCase):
             "t",
             Role.ASSISTANT,
             "prompt",
-            "container",
+            # The callback URL is read off the turn, so the request has to
+            # carry a real execution rather than a placeholder.
+            backend_execution("http://backend:8765/"),
             Selection("provider", model, "high", "default", "scope"),
         )
 
@@ -156,9 +166,7 @@ class ManagedCapabilityTests(unittest.TestCase):
             manager = (
                 self.context
                 if target
-                else ManagedContext(
-                    self.registry, "http://backend", lambda w, c: Path("relative")
-                )
+                else ManagedContext(self.registry, lambda w, c: Path("relative"))
             )
             with patch.object(self.registry, "issue", return_value=new):
                 if target:

@@ -4,7 +4,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...runtime.invocation import InvocationHome
+from ...runtime.invocation import InvocationHome, RoleContext
+from ...runtime.permissions import reject_retired_settings
+from ..skills import link_skills, offered_skills
 
 PROFILE_ENTRIES = (
     "auth.json",
@@ -22,7 +24,7 @@ PROFILE_ENTRIES = (
 class CodexProfile:
     source: Path
 
-    def prepare(self, home: InvocationHome) -> None:
+    def prepare(self, home: InvocationHome, context: RoleContext) -> None:
         source = self.source.resolve(strict=True)
         destination = home.host.resolve()
         if not source.is_dir():
@@ -46,11 +48,39 @@ class CodexProfile:
                 shutil.copytree(entry, target)
             elif entry.is_file():
                 shutil.copy2(entry, target)
+        # The user's whole `config.toml` is copied in above, so a `sandbox_mode`
+        # they added for themselves would silently switch Codex back to the
+        # retired permission system and take the profile with it.
+        config = home.host / "config.toml"
+        existing = config.read_text() if config.is_file() else ""
+        reject_retired_settings(existing)
+        if context.codex_config:
+            reject_retired_settings(context.codex_config)
+            config.write_text(
+                existing + ("\n" if existing and not existing.endswith("\n") else "")
+                + "\n" + context.codex_config
+            )
+        # `PROFILE_ENTRIES` does not include AGENTS.md, so this slot is free.
+        # Codex reads `$CODEX_HOME/AGENTS.md` as global instructions, which is
+        # how the role contract reaches a host turn -- additively, alongside the
+        # worktree's own AGENTS.md, where a container mount would replace it.
+        global_prompt = home.host / "AGENTS.md"
+        if global_prompt.is_symlink() or global_prompt.is_file():
+            global_prompt.unlink()
+        if context.global_prompt is not None:
+            shutil.copyfile(context.global_prompt, global_prompt)
         for name in ("sessions", "tmp", "shell_snapshots", "log", "cache"):
             path = home.host / name
             if path.is_symlink():
                 raise ValueError("Codex runtime directories must not be symlinks")
             path.mkdir(exist_ok=True)
+        # Codex already reads the user's own skills from `$HOME/.agents/skills`
+        # on the host, where `HOME` is inherited; only the workspace's need
+        # offering here, and a container sees nothing else.
+        link_skills(
+            home.host / "skills",
+            offered_skills(context.skills_source, context.skills),
+        )
 
     @property
     def catalog_filename(self) -> str | None:

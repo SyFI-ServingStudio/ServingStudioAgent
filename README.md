@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="#key-features">Features</a> ·
+  <a href="#execution-modes">Execution modes</a> ·
   <a href="#repository-map">Repository map</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="doc/architecture.md">Architecture</a>
@@ -41,8 +42,10 @@ browser interface.
   for different accounts or endpoints. Each connection declares its models,
   per-model reasoning efforts, and defaults in a private YAML file.
 - 📁 **Persistent workspaces.** Keep source code, experiments, and logs together.
-  Conversations in a workspace share its files, while each conversation has
-  its own Docker container and isolated provider sessions.
+  Conversations in a workspace share its files and each has its own isolated
+  provider sessions. A sandboxed copy also gets its own Docker container; a git
+  worktree runs on the host instead, where kernel profiling and Slurm work.
+  See [Execution modes](#execution-modes) for what that trade costs.
 - 🧩 **Flexible execution.** Work with a single assistant or use an orchestrator
   and implementer with separate provider selections and resumable sessions.
 - 💬 **Durable conversations.** Stream progress, revisit history, reconnect
@@ -51,6 +54,46 @@ browser interface.
 - 🔎 **Traceable experiments.** Track simulation, timing prediction, kernel
   profiling, and kernel measurement jobs. Analyzer resource references connect
   an agent's findings to the numerical results behind them.
+
+---
+
+<a id="execution-modes"></a>
+
+## 🏠 Execution modes
+
+A workspace decides where its turns run. There is no per-turn switch.
+
+| Workspace kind | Repository | Turns run | Good for |
+| --- | --- | --- | --- |
+| **Sandboxed copy** | a copy of the tracked files | in a per-conversation Docker container | experimenting safely; sharing a demo |
+| **Git worktree** / main checkout | a real branch of your checkout | on this machine, with the tree as the working directory | kernel profiling, Slurm jobs, anything needing the host's tools |
+
+The container's isolation is real, but so is its cost: most of this project's
+kernel profiling needs `docker`, a writable submodule, or an environment under
+your home directory, and none of those exist inside the runner. There is no
+Slurm client in the image either. A worktree workspace is how an agent reaches
+them.
+
+> [!WARNING]
+> **Host execution mode is trusted.** A host turn runs as you, in a real branch
+> of your checkout, and the two CLIs are not equally constrained.
+>
+> **Codex** runs under a named permission profile that does hold: writes to
+> `$HOME` and to other worktrees' working trees are refused. It has two openings
+> that were chosen on purpose — access to `/var/run/docker.sock`, which is
+> equivalent to root, and escalations approved by a model reviewer, which run
+> with no sandbox at all. It stops mistakes, not a determined escape.
+>
+> **Claude** has no OS boundary in this mode. Its permission mode is a model
+> classifier, and `Bash` goes around the tool allowlist.
+>
+> Committing from a worktree also means write access to the git common
+> directory, which every worktree shares — shared refs, objects, and other
+> branches included. Do not point host mode at a checkout you would not hand to
+> the model outright.
+
+Set `VIBESIM_AGENT_WORKTREE_ROOT` to enable worktree workspaces; leaving it
+unset disables the feature, and the browser says so rather than hiding it.
 
 ---
 
@@ -65,7 +108,7 @@ ServingStudioAgent/
 │   ├── services/     Conversations, turns, jobs, and workspace lifecycle
 │   ├── domain/       Roles, events, and shared data contracts
 │   ├── providers/    Codex and Claude CLI adapters
-│   ├── runtime/      Docker execution, mounts, and provider homes
+│   ├── runtime/      Container and host execution, mounts, and provider homes
 │   ├── storage/      SQLite persistence and workspace registry
 │   └── prompts/      Role instructions and response contracts
 ├── docker/           Runner image definition

@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from tests import test_codex_command as codex_fixture
+from tests.runtime_fixtures import docker_execution
 from vibesim_agent.domain.roles import Role
 from vibesim_agent.providers.base import OutputMode
 from vibesim_agent.providers.claude.command import ClaudeCommand
@@ -105,21 +106,25 @@ class ClaudeCommandTests(unittest.TestCase):
 
     def test_credentials_are_inherited_by_name_and_mcp_values_are_json(self):
         builder = replace(
-            self.builder(),
-            inherited_environment=("ANTHROPIC_API_KEY",),
+            self.builder(), inherited_environment=("ANTHROPIC_API_KEY",)
+        )
+        execution = replace(
+            docker_execution(builder.environment),
             mcp_python='/space/"python',
             mcp_server="/space dir/server.py",
         )
         command = builder.build_tracked(
-            self.request(), home="/home", pid_file="/home/call.pid"
+            replace(self.request(), execution=execution),
+            home="/home",
+            pid_file="/home/call.pid",
         )
         self.assertIn("ANTHROPIC_API_KEY", command)
         self.assertFalse(any(arg.startswith("ANTHROPIC_API_KEY=") for arg in command))
         mcp = json.loads(command[command.index("--mcp-config") + 1])["mcpServers"][
             "analyzer"
         ]
-        self.assertEqual(mcp["command"], builder.mcp_python)
-        self.assertEqual(mcp["args"], [builder.mcp_server])
+        self.assertEqual(mcp["command"], execution.mcp_python)
+        self.assertEqual(mcp["args"], [execution.mcp_server])
 
     def test_tracked_shell_honors_cancellation_before_executing(self):
         with TemporaryDirectory() as directory:
@@ -142,3 +147,46 @@ class ClaudeCommandTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 23)
             self.assertTrue(pid.read_text().strip().isdigit())
+
+
+class ClaudePermissionPostureTests(unittest.TestCase):
+    """Pins the posture that replaced `--dangerously-skip-permissions`."""
+
+    def builder(self, **overrides):
+        return replace(ClaudeCommandTests().builder(), **overrides)
+
+    def tracked(self, builder):
+        return builder.build_tracked(
+            ClaudeCommandTests().request(), home="/role-home", pid_file="/run/pid"
+        )
+
+    def value(self, command, flag):
+        return command[command.index(flag) + 1]
+
+    def test_posture_retires_the_bypass_flag_and_fails_closed(self):
+        command = self.tracked(self.builder())
+        self.assertNotIn("--dangerously-skip-permissions", command)
+        self.assertEqual(self.value(command, "--permission-mode"), "auto")
+        # `auto` falls back to a manual prompt it cannot answer under `-p`, so
+        # the default `host` target would hand the turn to nobody.
+        self.assertEqual(self.value(command, "--permission-prompts"), "none")
+
+    def test_allowlist_covers_the_workspace_hot_path_as_one_argument(self):
+        command = self.tracked(self.builder())
+        self.assertEqual(self.value(command, "--allowedTools"), "Bash(uv run *)")
+        # `user` is the isolated role home, which is where the workspace skills
+        # are linked. With no source at all Claude loaded its built-ins only.
+        self.assertEqual(self.value(command, "--setting-sources"), "user")
+
+    def test_empty_allowlist_omits_the_flag(self):
+        self.assertNotIn("--allowedTools", self.tracked(self.builder(allowed_tools=())))
+
+    def test_unsupported_posture_values_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "permission mode"):
+            # Renamed to `manual` after the pinned CLI; neither spelling is ours.
+            self.builder(permission_mode="default")
+        with self.assertRaisesRegex(ValueError, "permission prompt target"):
+            self.builder(permission_prompts="somebody")
+        with self.assertRaisesRegex(ValueError, "must not contain commas"):
+            # One comma would split a narrow pattern into two broader ones.
+            self.builder(allowed_tools=("Bash(uv run *),Bash(rm *)",))

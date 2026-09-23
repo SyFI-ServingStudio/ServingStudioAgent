@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import signal
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from .host import PGID_SUFFIX, record_process_group
 
 SIGNAL_TIMEOUT = 5
 SIGNAL_GRACE = 5
@@ -19,6 +23,33 @@ STOP_TIMEOUT = 3 * (2 * SIGNAL_TIMEOUT + SIGNAL_GRACE) + 5
 class InvocationHome:
     host: Path
     container: str
+
+
+@dataclass(frozen=True)
+class RoleContext:
+    """What a role home needs that depends on where the turn will run.
+
+    `skills` is a symlink target: `/workspace/skills` under a mount, the
+    worktree's own directory on the host. `skills_source` is that same
+    directory as *this* process sees it, which in a container is not the same
+    string -- a profile that has to enumerate the skills needs the host path
+    and has to write the CLI's path into the links it makes.
+
+    `user_skills` is set only on the host: the user's own skills are for
+    their machine, and a container is given the workspace's alone.
+
+    `global_prompt` is set only on the host, where Codex reads
+    `$CODEX_HOME/AGENTS.md` -- in a container the role contract arrives as a
+    bind mount over the workspace's own AGENTS.md instead.
+    """
+
+    skills: str
+    skills_source: Path | None = None
+    global_prompt: Path | None = None
+    user_skills: bool = False
+    # TOML appended to the managed Codex config. Per workspace, because the
+    # host profile has to name this repository's two git directories.
+    codex_config: str = ""
 
 
 async def signal_remote(
@@ -79,6 +110,13 @@ class RemoteInvocation:
         self._marker_attempted = False
         self._marker_error: OSError | None = None
 
+    def record(self, process: asyncio.subprocess.Process) -> None:
+        """Nothing to note: the container is the reaping unit, not the group.
+
+        The local process here is a `docker exec` client. Whatever it leaves
+        running lives in the container and goes away with it.
+        """
+
     def mark_cancelled(self) -> None:
         if self._marker_attempted:
             return
@@ -118,3 +156,68 @@ class RemoteInvocation:
     def remove_pid(self) -> None:
         with contextlib.suppress(OSError):
             self.host_pid.unlink(missing_ok=True)
+
+
+class HostInvocation:
+    """Stop a locally spawned CLI by signalling the process group it leads."""
+
+    def __init__(
+        self,
+        *,
+        execution_id: str,
+        home: InvocationHome,
+        logger: logging.Logger,
+        label: str,
+        signal_grace: float = SIGNAL_GRACE,
+    ):
+        self.logger = logger
+        self.label = label
+        self.signal_grace = signal_grace
+        self.host_pid = home.host / f"call-{execution_id}.pid"
+        self.pid_file = str(self.host_pid)
+        self.group_file = home.host / f"call-{execution_id}{PGID_SUFFIX}"
+
+    def record(self, process: asyncio.subprocess.Process) -> None:
+        # Written while the process is alive, because after a backend restart
+        # this file is the only thing that can find it again.
+        try:
+            record_process_group(self.group_file, process.pid)
+        except OSError as error:
+            self.logger.warning(
+                "Could not record the %s process group: %s", self.label, error
+            )
+
+    def mark_cancelled(self) -> None:
+        """Genuinely nothing to do, and not a placeholder.
+
+        The marker exists because a `docker exec` client can exit before the
+        remote shell it asked for has started, leaving a turn running that
+        nobody is watching. There is no such window here: asyncio's
+        `create_subprocess_exec` returns only once fork and exec have both
+        succeeded, so by the time anything can cancel, the process is already
+        ours to signal. Writing a marker would create a file nothing reads.
+        """
+
+    async def stop(self, process: asyncio.subprocess.Process) -> None:
+        for name in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(os.getpgid(process.pid), name)
+            except ProcessLookupError:
+                return
+            except OSError as error:  # noqa: PERF203 - later signals must still run
+                self.logger.warning(
+                    "%s %s signal failed: %s", self.label, name.name, error
+                )
+            try:
+                await asyncio.wait_for(process.wait(), self.signal_grace)
+                return
+            except TimeoutError:
+                pass
+        raise RuntimeError(f"{self.label} invocation did not stop after INT/TERM/KILL")
+
+    def remove_pid(self) -> None:
+        # The group record goes with it: the turn is over, and leaving it would
+        # make a later reap chase a process ID that has already been reused.
+        for path in (self.host_pid, self.group_file):
+            with contextlib.suppress(OSError):
+                path.unlink(missing_ok=True)

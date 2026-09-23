@@ -24,7 +24,7 @@ Always answer in English in the user-facing chat.
 - `w_main` points to the real `../ServingStudioSim` development checkout. Other workspaces
   copy only its git-tracked files and initialize their own local git repo.
 - Each conversation keeps isolated role/provider homes, sessions, temporary state,
-  rollout log, and Docker container.
+  and rollout log. A managed workspace also owns one Docker container.
 - The selected generated `AGENTS*.md` overlays the tracked workspace
   `AGENTS.md` target read-only. Do not generate or rewrite workspace
   instructions per conversation.
@@ -32,6 +32,62 @@ Always answer in English in the user-facing chat.
   Analyzer owns simulation, prediction, profile, measurement, plot, and hardware
   payloads. Join them by stable Analyzer resource ID; never reconstruct result
   data from a backend job row or an assistant message.
+
+## Execution Modes
+
+A workspace runs its turns in one of two places, decided by what the workspace
+*is* rather than by any per-turn setting:
+
+| Workspace | Repository | Turns run |
+| --- | --- | --- |
+| managed (`copy`) | a copy of the tracked files | in a per-conversation Docker container |
+| external (`checkout`, `worktree`) | a real git tree | directly on the host, with the tree as the working directory |
+
+The container exists for isolation. It also cuts the agent off from most of what
+this project actually does: 68 of the 81 kernels in
+`ServingStudioSim/profiling/` cannot be profiled inside it (`vllm_env` needs
+`docker`, `sglang_env`'s submodule is mounted read-only, `~/profile_envs/*` is
+not mounted at all), and there is no Slurm client in the image. Host mode is how
+those become reachable.
+
+### Host execution mode is trusted
+
+A host turn runs as the operator, in a real branch of the operator's checkout.
+Treat it that way. The two CLIs are **not** equally constrained, and the
+difference matters:
+
+- **Codex** runs under a named permission profile (`[permissions.vibesim_host]`,
+  extending `:workspace`), which is a real boundary: writes to `$HOME` and to a
+  sibling worktree's working tree are refused, and this has been verified rather
+  than inferred. It has two openings that were chosen deliberately. Access to
+  `/var/run/docker.sock` is equivalent to root (`docker run -v /:/host`), and it
+  is granted because 57 of those 81 kernels profile through a containerized
+  `vllm_env`. And an escalation approved by `approvals_reviewer = auto_review`
+  runs **completely outside** the sandbox — the profile is written wide
+  precisely so the everyday path never reaches that judgement. The boundary
+  stops mistakes and overreach; it does not stop a determined escape.
+- **Claude** has no OS boundary at all. `--permission-mode auto` is a model
+  classifier, and `Bash` is a structural way around its tool-level allowlist.
+
+A symmetric boundary would have to come from wrapping the process (bubblewrap,
+`systemd-run`), not from any CLI flag. Until then: do not point host mode at a
+checkout you would not hand to the model outright.
+
+One further asymmetry, in the agent's favour but worth knowing: the git common
+directory is shared by every worktree, so an agent able to commit in one
+worktree can also rewrite shared refs and objects and delete other branches.
+That is inherent to committing from a worktree and cannot be fixed in a profile.
+
+The profile also grants a few directories outside the tree, because `uv run`
+and the profiling environments need them: `$TMPDIR`, `$UV_CACHE_DIR`,
+`~/.cargo` and `~/profile_envs`. Anything nested under one of those becomes
+writable, so `VIBESIM_AGENT_WORKTREE_ROOT` must not point inside them — the
+sibling-worktree boundary depends on the worktrees living somewhere else.
+
+The versions also differ. The container pins its CLIs in `runner.Dockerfile`;
+the host uses whatever is on `PATH`, so one `npm i -g` can silently move host
+turns onto a Codex with different permission semantics. The readiness check logs
+a warning when the two disagree — believe it.
 
 ## Roles
 

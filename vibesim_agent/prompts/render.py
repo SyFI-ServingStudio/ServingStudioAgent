@@ -19,12 +19,38 @@ def agents_name(mode: AgentMode, autonomous: bool) -> str:
     return f"AGENTS{mode_suffix}{autonomous_suffix}.md"
 
 
+def role_name(role: Role, autonomous: bool) -> str:
+    return f"{role.value}{'.autonomous' if autonomous else ''}.txt"
+
+
+WORKSPACE = "/workspace"
+
+
 class Prompts:
-    def __init__(self, directory: Path):
+    """Rendered role contracts, and the prompts built from them.
+
+    Rendered once for containers, where the repository is always mounted at
+    `/workspace` and the selected contract over its `AGENTS.md`, and once per
+    repository for host execution, where both paths are real ones. The host has
+    no single contract location to name: the file differs by mode and by
+    autonomy, so there the role texts are rendered once for each.
+    """
+
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        workspace: str = WORKSPACE,
+        per_autonomy: bool = False,
+        autonomous: bool = False,
+    ):
         self.directory = directory
+        self.workspace = workspace
+        self.per_autonomy = per_autonomy
+        self.autonomous = autonomous
 
     @classmethod
-    def prepare(cls, directory: Path) -> Prompts:
+    def prepare(cls, directory: Path, *, workspace: Path | None = None) -> Prompts:
         sources = Path(__file__).parent
         environment = Environment(
             loader=FileSystemLoader(sources / "templates"),
@@ -33,17 +59,38 @@ class Prompts:
             lstrip_blocks=True,
             keep_trailing_newline=True,
         )
+        root = WORKSPACE if workspace is None else str(workspace)
+
+        def contract(mode: AgentMode, autonomous: bool) -> str:
+            if workspace is None:
+                return f"{WORKSPACE}/AGENTS.md"
+            return str(directory / agents_name(mode, autonomous))
+
+        # A container mounts every mode's contract at the same path, so the
+        # role texts are the same for both autonomy settings there.
+        autonomy = (False,) if workspace is None else (False, True)
         artifacts = {}
         for mode in AgentMode:
             for autonomous in (False, True):
                 artifacts[agents_name(mode, autonomous)] = (
                     environment.get_template("AGENTS.md.j2")
-                    .render(agent_mode=mode.value, autonomous=autonomous)
+                    .render(agent_mode=mode.value, autonomous=autonomous, workspace=root)
                     .encode()
                 )
-            artifacts[f"{mode.driver.value}.txt"] = (
-                environment.get_template("role.txt.j2")
-                .render(agent_mode=mode.value)
+            for autonomous in autonomy:
+                artifacts[role_name(mode.driver, autonomous)] = (
+                    environment.get_template("role.txt.j2")
+                    .render(
+                        agent_mode=mode.value,
+                        workspace=root,
+                        contract=contract(mode, autonomous),
+                    )
+                    .encode()
+                )
+        for autonomous in autonomy:
+            artifacts[role_name(Role.IMPLEMENTER, autonomous)] = (
+                environment.get_template("implementer.txt.j2")
+                .render(contract=contract(AgentMode.ORCHESTRATED, autonomous))
                 .encode()
             )
         for path in (sources / "contracts").iterdir():
@@ -54,12 +101,20 @@ class Prompts:
             path = directory / name
             if not path.is_file() or path.read_bytes() != content:
                 path.write_bytes(content)
-        return cls(directory)
+        return cls(directory, workspace=root, per_autonomy=workspace is not None)
+
+    def bound(self, *, autonomous: bool) -> Prompts:
+        """The same rendering, reading the role texts for one autonomy setting."""
+        return Prompts(
+            self.directory,
+            workspace=self.workspace,
+            per_autonomy=self.per_autonomy,
+            autonomous=autonomous,
+        )
 
     def role_text(self, role: Role) -> str:
-        return (
-            (self.directory / f"{role.value}.txt").read_text(encoding="utf-8").strip()
-        )
+        name = role_name(role, self.autonomous and self.per_autonomy)
+        return (self.directory / name).read_text(encoding="utf-8").strip()
 
     def schema_path(self, role: Role) -> Path:
         return self.directory / f"{role.value}.schema.json"
@@ -79,8 +134,8 @@ class Prompts:
         return (
             f"{self.role_text(mode.driver)}\n\n"
             f"Current conversation ID: `{conversation_id}`.\n"
-            f"Conversation plan: `/workspace/{conversation_id}_plan.md`.\n"
-            f"Conversation progress: `/workspace/{conversation_id}_progress.md`."
+            f"Conversation plan: `{self.workspace}/{conversation_id}_plan.md`.\n"
+            f"Conversation progress: `{self.workspace}/{conversation_id}_progress.md`."
         )
 
     def orchestrator_handoff_prompt(

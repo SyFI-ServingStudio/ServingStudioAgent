@@ -14,6 +14,7 @@ from ..domain.turns import Outcome, TurnInput, TurnResult
 from ..prompts.render import Prompts
 from ..providers.base import AgentRequest, Selection
 from ..providers.registry import ProviderRegistry
+from ..runtime.execution import Execution
 
 
 @dataclass(frozen=True)
@@ -28,16 +29,19 @@ class ConversationDriver:
         providers: ProviderRegistry,
         prompts: Prompts,
         *,
-        prepare: Callable[[TurnInput], Awaitable[str]],
+        prepare: Callable[[TurnInput], Awaitable[Execution]],
         before_call: Callable[[AgentRequest], Awaitable[None]],
-        schema_directory: Path,
         after_turn: Callable[[TurnInput], None] | None = None,
+        prompts_for: Callable[[TurnInput], Prompts] | None = None,
     ):
         self.providers = providers
         self.prompts = prompts
+        # The contract and the plan files are named by path, and the path
+        # depends on where the turn runs; without this every turn is told the
+        # container's.
+        self.prompts_for = prompts_for
         self.prepare = prepare
         self.before_call = before_call
-        self.schema_directory = schema_directory
         self.after_turn = after_turn
 
     def selection(self, request: TurnInput, role: Role) -> Selection:
@@ -68,7 +72,7 @@ class ConversationDriver:
         *,
         role: Role,
         prompt: str,
-        container: str,
+        execution: Execution,
         selection: Selection,
         sessions: dict[Role, str],
         hold_usage: bool,
@@ -79,10 +83,13 @@ class ConversationDriver:
             request.turn_id,
             role,
             prompt,
-            container,
+            execution,
             selection,
             session_id=sessions.get(role),
-            output_schema=self.schema_directory / f"{role.value}.schema.json",
+            # From the execution: the same file is a mount target in a
+            # container and a state-root path on the host, and only the
+            # execution knows which side this turn is running on.
+            output_schema=Path(execution.schema_directory) / f"{role.value}.schema.json",
         )
         # Invalidate the previous role's ready state before preparation can yield.
         yield {"kind": "role_start", "role": role.value}
@@ -149,14 +156,17 @@ class ConversationDriver:
         selections = {
             role: self.selection(request, role) for role in request.mode.roles
         }
-        container = await self.prepare(request)
+        execution = await self.prepare(request)
         context = (
             AnalyzerTurnContext.model_validate(request.analyzer_context)
             if request.analyzer_context is not None
             else None
         )
         user_text = prompt_with_analyzer_context(request.text, context)
-        prompt = self.prompts.driver_prompt(
+        prompts = (
+            self.prompts_for(request) if self.prompts_for is not None else self.prompts
+        )
+        prompt = prompts.driver_prompt(
             user_text, mode=request.mode, conversation_id=request.conversation_id
         )
         sessions = dict(request.sessions)
@@ -172,7 +182,7 @@ class ConversationDriver:
             and sessions.get(Role.IMPLEMENTER)
         ):
             pending_task = user_text
-            prompt = self.prompts.implementer_steer_prompt(user_text)
+            prompt = prompts.implementer_steer_prompt(user_text)
             may_reply = True
         while True:
             role = Role.IMPLEMENTER if pending_task is not None else driving_role
@@ -182,7 +192,7 @@ class ConversationDriver:
                     request,
                     role=role,
                     prompt=prompt,
-                    container=container,
+                    execution=execution,
                     selection=selections[role],
                     sessions=sessions,
                     hold_usage=role is driving_role,
@@ -215,7 +225,7 @@ class ConversationDriver:
                     return
                 summaries.append(decision["message"])
                 yield {"kind": "implementer", "text": decision["message"]}
-                prompt = self.prompts.orchestrator_handoff_prompt(
+                prompt = prompts.orchestrator_handoff_prompt(
                     pending_task,
                     decision["message"],
                     conversation_id=request.conversation_id,
@@ -237,7 +247,7 @@ class ConversationDriver:
                         summaries,
                     )
                     return
-                prompt = self.prompts.driver_repair_prompt(
+                prompt = prompts.driver_repair_prompt(
                     text,
                     agent_mode=request.mode.value,
                     conversation_id=request.conversation_id,
@@ -269,7 +279,7 @@ class ConversationDriver:
                         summaries,
                     )
                     return
-                prompt = self.prompts.driver_continue_prompt(
+                prompt = prompts.driver_continue_prompt(
                     action,
                     decision["message"],
                     agent_mode=request.mode.value,
@@ -287,6 +297,6 @@ class ConversationDriver:
                 return
             pending_task = decision["task"]
             yield {"kind": "decision", "action": "delegate", "task": pending_task}
-            prompt = self.prompts.implementer_prompt(
+            prompt = prompts.implementer_prompt(
                 pending_task, is_resume=bool(sessions.get(Role.IMPLEMENTER))
             )

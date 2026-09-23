@@ -11,7 +11,9 @@ from tempfile import TemporaryDirectory
 
 from tests.provider_fixture import write_minimal_providers
 from tools import runner_image
+from tools.runner_image import BUILD_OPTIONS
 from vibesim_agent.bootstrap import configuration
+from vibesim_agent.runtime.host import PINNED_VERSIONS
 
 
 class RunnerImageBuildTests(unittest.TestCase):
@@ -335,3 +337,40 @@ class RunnerImageBuildTests(unittest.TestCase):
         )
         self.assertEqual(len(copied), 1)
         self.assertEqual(self.source_bytes(), before)
+
+
+class RunnerImagePinTests(unittest.TestCase):
+    def test_build_defaults_match_the_dockerfile_args(self):
+        """`BUILD_OPTIONS` is passed as `--build-arg`, so it wins over the ARG.
+
+        The two therefore have to agree, and nothing else would notice if they
+        stopped: the image would simply be built with a different CLI than the
+        Dockerfile documents.
+        """
+        dockerfile = (
+            Path(__file__).parents[1] / "docker/runner.Dockerfile"
+        ).read_text()
+        declared = dict(
+            line.removeprefix("ARG ").split("=", 1)
+            for line in dockerfile.splitlines()
+            if line.startswith("ARG ") and "=" in line
+        )
+        for name, default in BUILD_OPTIONS.items():
+            with self.subTest(option=name):
+                self.assertEqual(declared.get(name), default)
+
+    def test_host_mode_compares_against_the_versions_actually_installed(self):
+        """A third copy of the pins, because `tools/` may not be imported at runtime.
+
+        `PINNED_VERSIONS` is what a host turn warns against, so if it drifts the
+        warning starts firing on a machine that is in fact in step with the
+        image -- or worse, stops firing on one that is not.
+        """
+        for binary, option in (
+            ("codex", "CODEX_NPM_PACKAGE"),
+            ("claude", "CLAUDE_NPM_PACKAGE"),
+        ):
+            with self.subTest(binary=binary):
+                self.assertEqual(
+                    BUILD_OPTIONS[option].rsplit("@", 1)[1], PINNED_VERSIONS[binary]
+                )

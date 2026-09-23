@@ -195,27 +195,35 @@ class WorkspaceRegistry:
             descriptor = self._validate_descriptor(
                 dict(descriptor), destination / "workspace.json"
             )
-            if (
-                descriptor["storage_kind"] != "managed"
-                or descriptor["repo_path"] != "repo"
-                or descriptor["logs_path"] != "repo/logs"
-                or workspace_id == "w_main"
-            ):
-                raise ValueError(
-                    "publication requires a new managed workspace with local repo and logs"
-                )
+            if workspace_id == "w_main":
+                raise ValueError("publication must not replace the main workspace")
+            managed = descriptor["storage_kind"] == "managed"
+            if managed:
+                if (
+                    descriptor["repo_path"] != "repo"
+                    or descriptor["logs_path"] != "repo/logs"
+                ):
+                    raise ValueError(
+                        "publication requires a managed workspace with local repo and logs"
+                    )
+            else:
+                self._validate_external_paths(descriptor)
             if (staging / "workspace.json").exists() or (
                 staging / "workspace.json"
             ).is_symlink():
                 raise ValueError("staging must not contain a published descriptor")
-            for name in ("repo", "workspace.sqlite"):
-                path = staging / name
-                if path.is_symlink() or not (
-                    path.is_dir() if name == "repo" else path.is_file()
-                ):
-                    raise ValueError(
-                        "staging requires a repository and initialized database"
-                    )
+            database = staging / "workspace.sqlite"
+            if database.is_symlink() or not database.is_file():
+                raise ValueError("staging requires an initialized database")
+            repository = staging / "repo"
+            if managed:
+                if repository.is_symlink() or not repository.is_dir():
+                    raise ValueError("staging requires a repository")
+            elif repository.exists() or repository.is_symlink():
+                # An external workspace's repository lives outside the registry.
+                # A staged one would be moved in and then silently shadowed by
+                # the absolute repo_path, leaving an orphan copy behind.
+                raise ValueError("external staging must not contain a repository")
             with Database(staging / "workspace.sqlite").connect():
                 pass
             destination.mkdir(exist_ok=False)
@@ -338,6 +346,22 @@ class WorkspaceRegistry:
         descriptor = json.loads(path.read_text(encoding="utf-8"))
         return self._validate_descriptor(descriptor, path)
 
+    def _validate_external_paths(self, descriptor: dict[str, Any]) -> None:
+        repo = Path(descriptor["repo_path"])
+        logs = Path(descriptor["logs_path"])
+        if not repo.is_absolute() or not logs.is_absolute():
+            raise ValueError("external workspace paths must be absolute")
+        if logs != repo / "logs":
+            raise ValueError("external workspace logs must sit inside its repository")
+        if repo.is_symlink() or not repo.is_dir():
+            raise ValueError("external workspace repository must already exist")
+        # Deleting a workspace rmtree's its registry directory. An external
+        # descriptor pointing inside the registry would make that delete reach a
+        # real checkout, so the two trees are kept disjoint in both directions.
+        resolved = repo.resolve()
+        if resolved.is_relative_to(self.root) or self.root.is_relative_to(resolved):
+            raise ValueError("external workspace repository must be outside the registry")
+
     def _validate_descriptor(
         self, descriptor: dict[str, Any], path: Path
     ) -> dict[str, Any]:
@@ -375,6 +399,18 @@ class WorkspaceRegistry:
         descriptor.setdefault("naming_state", "manual")
         if descriptor["naming_state"] not in NAMING_STATES:
             raise ValueError("invalid workspace naming_state")
+        # Optional, and deliberately not required: existing descriptors on disk
+        # predate them, and SCHEMA_VERSION must not move for an added key.
+        # `worktree_owned` separates a tree the Agent created from one a user
+        # handed over, which is what a future delete path has to know.
+        branch = descriptor.get("worktree_branch")
+        if branch is not None and (
+            not isinstance(branch, str) or not branch.strip() or "\x00" in branch
+        ):
+            raise ValueError("invalid workspace worktree_branch")
+        owned = descriptor.get("worktree_owned")
+        if owned is not None and not isinstance(owned, bool):
+            raise ValueError("invalid workspace worktree_owned")
         for name in ("created_at", "last_accessed_at"):
             value = descriptor[name]
             try:

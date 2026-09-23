@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
+import os
+import signal
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -16,6 +19,22 @@ class ProcessOutput:
 
 
 StopProcess = Callable[[asyncio.subprocess.Process], Awaitable[None]]
+KillProcess = Callable[[asyncio.subprocess.Process], None]
+NoteProcess = Callable[[asyncio.subprocess.Process], None]
+
+
+def kill_process(process: asyncio.subprocess.Process) -> None:
+    process.kill()
+
+
+def kill_process_group(process: asyncio.subprocess.Process) -> None:
+    """Signal the whole group, because the leader is not what holds the pipes.
+
+    A locally spawned CLI leads its own session and starts children of its own
+    (MCP servers, shell tools). Killing only the leader orphans those, and they
+    are the processes still holding the pipes this class has to drain.
+    """
+    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
 
 
 class ProcessStream:
@@ -25,6 +44,12 @@ class ProcessStream:
     explicit touch after finding durable activity) resets the idle deadline.
     Stderr warnings do not extend the deadline.
     The stop callback must stop the remote call when running through Docker.
+
+    A local execution mode supplies `cwd`, `start_new_session` and `kill`
+    together: the spawned CLI then leads its own process group, so the last
+    resort must signal that group rather than the leader alone. Killing only
+    the leader would orphan the CLI's own children, and those children are the
+    ones holding the pipes this class has to drain.
     """
 
     def __init__(
@@ -37,12 +62,24 @@ class ProcessStream:
         poll_interval: float = 5,
         stop_timeout: float = 20,
         environment: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
+        start_new_session: bool = False,
+        kill: KillProcess | None = None,
+        started: NoteProcess | None = None,
     ):
         for value in (idle_timeout, poll_interval, stop_timeout):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("process timeouts must be finite and positive")
         if not command:
             raise ValueError("process command is required")
+        if cwd is not None and not (cwd.is_absolute() and cwd.is_dir()):
+            raise ValueError(
+                "process working directory must be an existing absolute directory"
+            )
+        self.cwd = cwd
+        self.start_new_session = start_new_session
+        self.kill = kill if kill is not None else kill_process
+        self.started = started
         self.command = tuple(command)
         self.input_data = input_data
         self.idle_timeout = idle_timeout
@@ -72,6 +109,8 @@ class ProcessStream:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=self.environment,
+                cwd=self.cwd,
+                start_new_session=self.start_new_session,
             )
         )
         try:
@@ -80,12 +119,22 @@ class ProcessStream:
             # Cancellation must not lose the process handle while spawn finishes.
             async def finish_startup():
                 self.process = await startup
+                self._note()
                 await self._close()
 
             await self._shield_cleanup(finish_startup())
             raise
+        self._note()
         self.touch()
         return self
+
+    def _note(self) -> None:
+        # Before anything can go wrong with the stream: a local execution mode
+        # has to be able to find this process again after a backend restart,
+        # and only the running process can tell it how.
+        if self.started is not None:
+            assert self.process is not None
+            self.started(self.process)
 
     async def __aexit__(self, *exc) -> None:
         await self._shield_cleanup(self._close())
@@ -141,7 +190,7 @@ class ProcessStream:
                 finally:
                     if self.process.returncode is None:
                         with contextlib.suppress(ProcessLookupError):
-                            self.process.kill()
+                            self.kill(self.process)
                     try:
                         await asyncio.wait_for(self.process.wait(), self.stop_timeout)
                     except asyncio.TimeoutError:

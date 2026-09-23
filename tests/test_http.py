@@ -2,12 +2,14 @@ import asyncio
 import json
 import logging
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import httpx
 
+from tests.runtime_fixtures import docker_execution
 from tests.http_support import LiveRequest, sse_events
 from tests.test_analyzer_context import dictionary
 from vibesim_agent.domain.conversations import RoleRuntime
@@ -80,7 +82,9 @@ class HttpV2Tests(unittest.IsolatedAsyncioTestCase):
         )
 
         async def prepare(request):
-            return "container"
+            # An execution rather than a name: the driver reads the schema
+            # directory off it, because that path differs by mode.
+            return replace(docker_execution(), schema_directory="/contracts")
 
         async def before_call(request):
             pass
@@ -91,7 +95,6 @@ class HttpV2Tests(unittest.IsolatedAsyncioTestCase):
             prompts,
             prepare=prepare,
             before_call=before_call,
-            schema_directory=Path("/contracts"),
         )
 
         def storage(workspace_id):

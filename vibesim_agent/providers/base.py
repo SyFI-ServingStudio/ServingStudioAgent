@@ -12,6 +12,7 @@ from uuid import uuid4
 from pydantic import SecretStr
 
 from ..domain.roles import Role
+from ..runtime.execution import Execution
 from ..settings import ProviderSettings, validate_provider_id
 
 
@@ -57,7 +58,7 @@ class AgentRequest:
     turn_id: str
     role: Role
     prompt: str
-    container: str
+    execution: Execution
     selection: Selection
     session_id: str | None = None
     output_schema: Path | None = None

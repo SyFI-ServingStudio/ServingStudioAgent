@@ -307,3 +307,95 @@ class WorkspaceRegistryMutationTests(unittest.TestCase):
         self.assertEqual(self.registry.registry_path.read_bytes(), before)
         self.assertFalse((self.root / "w_test").exists())
         self.assertEqual(list(self.root.glob(".registry.json.*")), [])
+
+
+class ExternalWorkspacePublicationTests(unittest.TestCase):
+    """External workspaces own a real checkout; the registry only points at it."""
+
+    descriptor = WorkspaceRegistryMutationTests.descriptor
+
+    def setUp(self):
+        self.root = Path(self.enterContext(TemporaryDirectory()))
+        self.registry = WorkspaceRegistry(self.root, clock=lambda: 50)
+        self.counter = 0
+        self.checkout = Path(self.enterContext(TemporaryDirectory())) / "wt-topic"
+        (self.checkout / "logs").mkdir(parents=True)
+
+    def external_stage(self):
+        self.counter += 1
+        stage = self.root / f".workspace-{self.counter}"
+        stage.mkdir()
+        Database.create(stage / "workspace.sqlite")
+        return stage
+
+    def external(self, **overrides):
+        return self.descriptor(
+            "w_worktree",
+            **{
+                "storage_kind": "external",
+                "repo_path": str(self.checkout),
+                "logs_path": str(self.checkout / "logs"),
+                **overrides,
+            },
+        )
+
+    def test_publishes_without_moving_the_checkout_into_the_registry(self):
+        descriptor = self.registry.publish(self.external_stage(), self.external())
+
+        self.assertEqual(descriptor["storage_kind"], "external")
+        self.assertEqual(self.registry.repo_path("w_worktree"), self.checkout.resolve())
+        self.assertTrue(self.checkout.is_dir())
+        # The registry directory holds state only; the tree stays where it is.
+        self.assertFalse((self.registry.workspace_dir("w_worktree") / "repo").exists())
+
+    def test_optional_worktree_keys_round_trip_without_a_schema_bump(self):
+        descriptor = self.registry.publish(
+            self.external_stage(), self.external(worktree_branch="wt", worktree_owned=True)
+        )
+        stored = self.registry.get("w_worktree")
+        self.assertEqual(stored["worktree_branch"], "wt")
+        self.assertIs(stored["worktree_owned"], True)
+        self.assertEqual(descriptor["schema_version"], 1)
+        for invalid in ({"worktree_branch": " "}, {"worktree_owned": "yes"}):
+            with self.subTest(**invalid):
+                with self.assertRaisesRegex(ValueError, "worktree_"):
+                    self.registry.publish(self.external_stage(), self.external(**invalid))
+
+    def test_repository_inside_the_registry_is_refused(self):
+        # Deleting a workspace rmtree's its registry directory, so this
+        # descriptor would turn a workspace delete into a checkout delete.
+        inside = self.registry.workspace_dir("w_worktree")
+        (inside / "logs").mkdir(parents=True)
+        with self.assertRaisesRegex(ValueError, "outside the registry"):
+            self.registry.publish(
+                self.external_stage(),
+                self.external(repo_path=str(inside), logs_path=str(inside / "logs")),
+            )
+
+    def test_relative_detached_or_missing_paths_are_refused(self):
+        cases = {
+            "absolute": {"repo_path": "repo", "logs_path": "repo/logs"},
+            "logs elsewhere": {"logs_path": str(self.checkout.parent / "logs")},
+            "missing": {
+                "repo_path": str(self.checkout.parent / "gone"),
+                "logs_path": str(self.checkout.parent / "gone/logs"),
+            },
+        }
+        for name, overrides in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaises(ValueError):
+                    self.registry.publish(
+                        self.external_stage(), self.external(**overrides)
+                    )
+
+    def test_staged_repository_is_refused_for_an_external_workspace(self):
+        stage = self.external_stage()
+        (stage / "repo").mkdir()
+        # Moving it in would leave an orphan copy shadowed by the absolute path.
+        with self.assertRaisesRegex(ValueError, "must not contain a repository"):
+            self.registry.publish(stage, self.external())
+
+    def test_managed_publication_still_requires_its_local_repository(self):
+        stage = self.external_stage()
+        with self.assertRaisesRegex(ValueError, "requires a repository"):
+            self.registry.publish(stage, self.descriptor("w_managed"))

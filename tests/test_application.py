@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import sqlite3
 import unittest
 from pathlib import Path
@@ -19,6 +21,20 @@ from vibesim_agent.settings import ProviderSettings, Settings
 from vibesim_agent.storage.database import Database, SchemaMismatch
 
 
+def git_init(repo):
+    subprocess.run(
+        ["git", "-C", str(repo), "init", "--template=", "-q"],
+        env={
+            **{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+        },
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+
 class ApplicationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.root = Path(self.enterContext(TemporaryDirectory()))
@@ -28,6 +44,10 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         self.repo.mkdir()
         (self.repo / "AGENTS.md").write_text("workspace instructions")
         (self.repo / "uv.lock").write_text("lock contents")
+        # `w_main` is external, so its turns run on the host and the Codex
+        # permission profile is built from this repository's own git
+        # directories. A plain directory would have none.
+        git_init(self.repo)
         self.mcp = self.root / "mcp"
         self.mcp.mkdir()
         (self.state / "workspace.json").write_text(
@@ -97,7 +117,9 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
         }
         return ProviderSetup(
             registry,
-            {"test": ProviderRuntime(ClaudeProfile().prepare, ("test-cli",))},
+            # A tool that really is on PATH: `w_main` is external, so its turns
+            # run on the host and the readiness check refuses a missing one.
+            {"test": ProviderRuntime(ClaudeProfile().prepare, ("sh",))},
             defaults,
             {"legacy-model": "test-model"},
             {"DOCKER_HOST": "unix:///explicit.sock"},
@@ -171,12 +193,65 @@ class ApplicationTests(unittest.IsolatedAsyncioTestCase):
             self.calls[0][1], restarted.state.runtime.home(self.calls[0][0])
         )
         self.assertTrue(self.calls[0][1].host.is_dir())
-        self.assertTrue(any(command[1] == "create" for command in self.docker.calls))
-        self.assertTrue(self.docker_environments)
-        self.assertTrue(all(env == {"DOCKER_HOST": "unix:///explicit.sock"} for env in self.docker_environments))
+        # `w_main` is external, so both turns ran here. Nothing asked Docker for
+        # anything, which is also what makes this work on a host without it.
+        self.assertEqual(self.docker.calls, [])
+        self.assertEqual(self.calls[0][0].execution.cwd, self.repo)
         self.assertEqual(
             (self.repo / "AGENTS.md").read_text(), "workspace instructions"
         )
+
+    def managed_workspace(self):
+        """A copy beside the external one, published the way the registry would.
+
+        Not in `setUp`: four other test modules borrow it, and a second listed
+        workspace changes what they count.
+        """
+        state = self.root / "workspaces/w_copy"
+        (state / "repo").mkdir(parents=True)
+        (state / "repo/AGENTS.md").write_text("copied instructions")
+        (state / "workspace.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "workspace_id": "w_copy",
+                    "display_name": "Copy",
+                    "state": "active",
+                    "storage_kind": "managed",
+                    "repo_path": "repo",
+                    "logs_path": "repo/logs",
+                    "created_at": 1,
+                    "last_accessed_at": 1,
+                }
+            )
+        )
+        Database.create(state / "workspace.sqlite")
+
+    async def test_a_managed_workspace_still_assembles_and_runs_a_container(self):
+        Database.create(self.state / "workspace.sqlite")
+        self.managed_workspace()
+        app = self.app()
+        base = "/api/agent/v1/workspaces/w_copy/conversations"
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(base, json={"agentMode": "single"})
+            self.assertEqual(created.status_code, 200, created.text)
+            path = base + "/" + created.json()["id"]
+            response = await client.post(path + "/messages", json={"text": "first"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn("event: done", response.text)
+        self.assertTrue(any(command[1] == "create" for command in self.docker.calls))
+        self.assertTrue(self.docker_environments)
+        self.assertTrue(
+            all(
+                env == {"DOCKER_HOST": "unix:///explicit.sock"}
+                for env in self.docker_environments
+            )
+        )
+        [(request, _)] = self.calls
+        self.assertIsNone(request.execution.cwd)
+        self.assertEqual(request.execution.agent_prompt, "/workspace/AGENTS.md")
 
     def test_old_database_rejected_without_migration_or_provider_start(self):
         path = self.state / "workspace.sqlite"

@@ -96,7 +96,7 @@ class FileHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_browser_denies_credentials_and_aliases_tools_requires_token(self):
         (self.repo / ".env").write_text("private")
         (self.repo / "alias.txt").symlink_to(".env")
-        (self.repo / ".git").mkdir()
+        # `.git` already exists: the fixture repository is a real checkout.
         (self.repo / ".git/config").write_text("vcs")
         for path in (".env", "alias.txt", ".git/config"):
             for endpoint in (self.base, self.base + "/meta"):
