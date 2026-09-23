@@ -12,6 +12,32 @@ from vibesim_agent.domain.roles import AgentMode, Role
 from vibesim_agent.prompts import render
 from vibesim_agent.prompts.render import Prompts
 
+# The one intended departure from the legacy contracts: the product was renamed
+# from VibeSim to ServingStudio. Undoing exactly these replacements has to give
+# back the legacy bytes, so the fixture still proves nothing else moved.
+REBRAND = (
+    ("# VibeSim Assistant Workspace", "# ServingStudio Agent Workspace"),
+    ("call the VibeSim simulator,", "call the ServingStudio simulator,"),
+    ("single VibeSim\nassistant", "single ServingStudio\nassistant"),
+    ("You are the VibeSim assistant.", "You are the ServingStudio assistant."),
+    ("You name VibeSim workspaces", "You name ServingStudio workspaces"),
+    ("VibeSim ", "ServingStudio Sim "),
+)
+
+
+def legacy(text: str) -> str:
+    for old, new in reversed(REBRAND):
+        text = text.replace(new, old)
+    return text
+
+
+def legacy_bundle(directory: Path) -> Prompts:
+    """Render, then undo the rename in place, for comparison with the fixture."""
+    bundle = Prompts.prepare(directory)
+    for path in directory.iterdir():
+        path.write_bytes(legacy(path.read_text(encoding="utf-8")).encode())
+    return bundle
+
 
 class PromptBundleTests(unittest.TestCase):
     def setUp(self):
@@ -21,36 +47,38 @@ class PromptBundleTests(unittest.TestCase):
 
     def test_repair_continue_handoff_and_steer_match_baseline(self):
         with TemporaryDirectory() as directory:
-            bundle = Prompts.prepare(Path(directory))
+            bundle = legacy_bundle(Path(directory))
             for mode in AgentMode:
                 options = {"agent_mode": mode.value, "conversation_id": "c"}
                 self.assertEqual(
-                    bundle.driver_repair_prompt("unparsed", **options),
+                    legacy(bundle.driver_repair_prompt("unparsed", **options)),
                     self.golden["modes"][mode.value]["repair"],
                 )
                 self.assertEqual(
-                    bundle.driver_continue_prompt("milestone", "completed", **options),
+                    legacy(bundle.driver_continue_prompt("milestone", "completed", **options)),
                     self.golden["modes"][mode.value]["continuation"],
                 )
             self.assertEqual(
-                bundle.orchestrator_handoff_prompt(
-                    "task", "summary", conversation_id="c"
+                legacy(
+                    bundle.orchestrator_handoff_prompt(
+                        "task", "summary", conversation_id="c"
+                    )
                 ),
                 self.golden["handoff"],
             )
             self.assertEqual(
-                bundle.implementer_steer_prompt("correction"),
+                legacy(bundle.implementer_steer_prompt("correction")),
                 self.golden["steer"],
             )
             for resume in (False, True):
                 self.assertEqual(
-                    bundle.implementer_prompt("task", is_resume=resume),
+                    legacy(bundle.implementer_prompt("task", is_resume=resume)),
                     self.golden["implementer"][str(resume).lower()],
                 )
 
     def test_rendered_bytes_and_driver_prompt_match_baseline(self):
         with TemporaryDirectory() as directory:
-            bundle = Prompts.prepare(Path(directory))
+            bundle = legacy_bundle(Path(directory))
             for name, expected in self.golden["rendered_sha256"].items():
                 self.assertEqual(
                     hashlib.sha256((bundle.directory / name).read_bytes()).hexdigest(),
@@ -71,7 +99,9 @@ class PromptBundleTests(unittest.TestCase):
             for name, expected in self.golden["contracts_sha256"].items():
                 if name in sources:
                     self.assertEqual(
-                        hashlib.sha256(sources[name].read_bytes()).hexdigest(),
+                        hashlib.sha256(
+                            legacy(sources[name].read_text()).encode()
+                        ).hexdigest(),
                         expected,
                         name,
                     )
@@ -82,9 +112,13 @@ class PromptBundleTests(unittest.TestCase):
                 )
             for mode in AgentMode:
                 self.assertEqual(
-                    bundle.driver_prompt("hello", mode=mode, conversation_id="c"),
+                    legacy(bundle.driver_prompt("hello", mode=mode, conversation_id="c")),
                     self.golden["modes"][mode.value]["driver"],
                 )
+
+    def test_rendering_again_leaves_unchanged_files_alone(self):
+        with TemporaryDirectory() as directory:
+            bundle = Prompts.prepare(Path(directory))
             before = {p.name: p.stat().st_mtime_ns for p in bundle.directory.iterdir()}
             Prompts.prepare(bundle.directory)
             self.assertEqual(
@@ -94,7 +128,7 @@ class PromptBundleTests(unittest.TestCase):
 
     def test_fingerprint_preserves_baseline_and_ignores_unused_roles(self):
         with TemporaryDirectory() as directory:
-            bundle = Prompts.prepare(Path(directory))
+            bundle = legacy_bundle(Path(directory))
             selection = RoleRuntime(
                 "gpt", "codex:gpt:v1", "gpt-5.6-sol", "high", "default"
             )
@@ -125,7 +159,7 @@ class PromptBundleTests(unittest.TestCase):
 
     def test_fingerprint_matches_baseline_for_all_models_and_mixed_roles(self):
         with TemporaryDirectory() as directory:
-            bundle = Prompts.prepare(Path(directory))
+            bundle = legacy_bundle(Path(directory))
             self.assertTrue(self.golden["model_ids"])
             self.assertEqual(
                 [case["model"] for case in self.golden["mixed"]],
@@ -203,3 +237,12 @@ class HostRenderingTests(unittest.TestCase):
                 bundle.role_text(Role.ORCHESTRATOR),
             )
             self.assertFalse((bundle.directory / "orchestrator.autonomous.txt").exists())
+
+
+class RebrandTests(unittest.TestCase):
+    def test_no_rendered_contract_names_the_retired_product(self):
+        with TemporaryDirectory() as directory:
+            for workspace in (None, Path("/repo/wt-x")):
+                bundle = Prompts.prepare(Path(directory) / str(bool(workspace)), workspace=workspace)
+                for path in bundle.directory.iterdir():
+                    self.assertNotIn("VibeSim", path.read_text(), path.name)

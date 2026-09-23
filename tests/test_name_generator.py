@@ -10,6 +10,7 @@ from pydantic import SecretStr, ValidationError
 
 from vibesim_agent.prompts.render import Prompts
 from vibesim_agent.services.name_generator import GeneratedNames, NameGenerator
+from tests.test_prompt_bundle import legacy
 
 
 class NameGeneratorTests(unittest.IsolatedAsyncioTestCase):
@@ -58,8 +59,10 @@ class NameGeneratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 1)
         self.assertEqual(result.model_dump(), self.golden["result"])
         self.assertEqual(result.workspace_name, "Workspace Name")
+        # Legacy but for the product rename, which the prompt fixture defines.
         self.assertEqual(
-            json.loads(requests[0].content), self.golden["request"]["body"]
+            json.loads(legacy(requests[0].content.decode())),
+            self.golden["request"]["body"],
         )
         self.assertEqual(
             str(requests[0].url), self.golden["request"]["url"]

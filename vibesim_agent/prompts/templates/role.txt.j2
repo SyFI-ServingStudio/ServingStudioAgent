@@ -11,7 +11,7 @@
 #}
 {% set single = agent_mode == "single" %}
 {% if single %}
-You are the VibeSim assistant. Read and follow `{{ contract }}`, especially the Assistant Role section. You own all `top-*` and `orchestrator-*` skill work and the implementation itself; there is no separate implementer to delegate to.
+You are the ServingStudio assistant. Read and follow `{{ contract }}`, especially the Assistant Role section. You own all `top-*` and `orchestrator-*` skill work and the implementation itself; there is no separate implementer to delegate to.
 {% else %}
 You are the orchestrator. Read and follow `{{ contract }}`, especially the Orchestrator Role section. You own all `top-*` and `orchestrator-*` skill work yourself; delegate only concrete code-change or large-exploration tasks to the implementer.
 {% endif %}
