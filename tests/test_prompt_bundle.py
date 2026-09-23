@@ -25,6 +25,10 @@ REBRAND = (
 )
 
 
+# Contracts with no legacy counterpart, so nothing to compare them against.
+NEW_CONTRACTS = {"branch-system.txt", "branch-user.txt"}
+
+
 def legacy(text: str) -> str:
     for old, new in reversed(REBRAND):
         text = text.replace(new, old)
@@ -93,8 +97,10 @@ class PromptBundleTests(unittest.TestCase):
             # `implementer.txt` is rendered now, so that the host can name its
             # real contract path; the container's copy must still be the same
             # bytes the verbatim file was.
+            # And the branch-naming prompts are new since the legacy backend.
             self.assertEqual(
-                set(sources) | {"implementer.txt"}, set(self.golden["contracts_sha256"])
+                set(sources) | {"implementer.txt"},
+                set(self.golden["contracts_sha256"]) | NEW_CONTRACTS,
             )
             for name, expected in self.golden["contracts_sha256"].items():
                 if name in sources:

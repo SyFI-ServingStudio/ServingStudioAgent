@@ -173,3 +173,75 @@ class NameGeneratorTests(unittest.IsolatedAsyncioTestCase):
                         GeneratedNames.model_validate(payload).model_dump(),
                         case["result"],
                     )
+
+
+class BranchTopicTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(TemporaryDirectory()))
+        self.prompts = Prompts.prepare(self.root / "prompts")
+
+    def generator(self, respond, timeout=8.0):
+        self.requests = []
+
+        def record(request):
+            self.requests.append(request)
+            return respond(request)
+
+        client_type = httpx.AsyncClient
+        return NameGenerator(
+            api_key=SecretStr("key"),
+            model="naming-model",
+            base_url="https://naming.invalid/api/v1",
+            timeout=timeout,
+            prompts=self.prompts,
+            client_factory=lambda **kwargs: client_type(
+                transport=httpx.MockTransport(record), **kwargs
+            ),
+        )
+
+    @staticmethod
+    def reply(content):
+        return lambda request: httpx.Response(
+            200, json={"choices": [{"message": {"content": content}}]}
+        )
+
+    async def test_asks_with_the_branch_contract_and_returns_the_branch(self):
+        generator = self.generator(self.reply(json.dumps({"branch": " glm5-decode-profile "})))
+        self.assertEqual(await generator.branch_topic("为什么 GLM5.2 decode 这么慢"), "glm5-decode-profile")
+        body = json.loads(self.requests[0].content)
+        self.assertEqual(
+            body["messages"][0]["content"],
+            (self.prompts.directory / "branch-system.txt").read_text().strip(),
+        )
+        # The request is passed through unescaped, so a Chinese question reaches
+        # the model as Chinese rather than as `\\u` escapes.
+        self.assertIn("为什么 GLM5.2 decode 这么慢", body["messages"][1]["content"])
+        self.assertEqual(
+            body["response_format"]["json_schema"]["schema"]["required"], ["branch"]
+        )
+        # Without this, providers that reason first spend the whole budget on it.
+        self.assertEqual(body["reasoning"], {"enabled": False})
+
+    async def test_the_wait_is_bounded_well_below_the_naming_timeout(self):
+        # The reader is waiting on "Send" while this runs.
+        seen = []
+        client_type = httpx.AsyncClient
+        generator = NameGenerator(
+            api_key=SecretStr("key"),
+            model="m",
+            base_url="https://naming.invalid",
+            timeout=30.0,
+            prompts=self.prompts,
+            client_factory=lambda **kwargs: seen.append(kwargs["timeout"])
+            or client_type(
+                transport=httpx.MockTransport(self.reply(json.dumps({"branch": "x-y"}))),
+                **kwargs,
+            ),
+        )
+        await generator.branch_topic("q")
+        self.assertEqual(seen, [4.0])
+
+    async def test_an_answer_without_a_branch_is_an_error_for_the_caller(self):
+        generator = self.generator(self.reply(json.dumps({"branch": "  "})))
+        with self.assertRaises(ValueError):
+            await generator.branch_topic("q")

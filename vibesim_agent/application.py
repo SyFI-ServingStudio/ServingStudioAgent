@@ -233,16 +233,17 @@ def build_application(
         after_turn=finish_turn,
         prompts_for=runtime.prompts_for,
     )
+    names = NameGenerator(
+        api_key=settings.secrets.get("OPENROUTER_API_KEY"),
+        model=settings.agent.naming_model,
+        base_url=settings.agent.naming_base_url,
+        timeout=settings.agent.naming_timeout,
+        prompts=prompts,
+    )
     naming = NamingService(
         workspaces,
         lambda workspace_id: storage(workspace_id).conversations,
-        NameGenerator(
-            api_key=settings.secrets.get("OPENROUTER_API_KEY"),
-            model=settings.agent.naming_model,
-            base_url=settings.agent.naming_base_url,
-            timeout=settings.agent.naming_timeout,
-            prompts=prompts,
-        ),
+        names,
     )
     turns = TurnService(
         storage,
@@ -300,7 +301,12 @@ def build_application(
         startup=recovery.recover,
         shutdown=shutdown,
     )
-    app.include_router(workspace_router(workspace_service))
+    app.include_router(
+        workspace_router(
+            workspace_service,
+            branch_topic=names.branch_topic if names.enabled else None,
+        )
+    )
     app.include_router(file_router(artifacts))
     app.include_router(
         tools_router(

@@ -1,6 +1,11 @@
 """Workspace browser and tools endpoints share explicit provisioning."""
 
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
+
 from fastapi import APIRouter, HTTPException
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..domain.workspaces import WorkspaceKind, execution_mode, workspace_kind
@@ -40,8 +45,32 @@ class UpdateWorkspace(BaseModel):
     state: str | None = None
 
 
+BranchTopic = Callable[[str], Awaitable[str]]
+logger = logging.getLogger("vibesim_agent.workspaces")
+
+
+async def _proposed_topic(branch_topic: BranchTopic | None, request: str) -> str | None:
+    """The naming model's branch, or None to fall back to the display name.
+
+    Never an error: a branch name is not worth failing a workspace over, and
+    the fallback is the name this endpoint always used.
+    """
+    if branch_topic is None:
+        return None
+    try:
+        return await branch_topic(request)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise
+    except Exception as error:  # noqa: BLE001 - any failure means "use the fallback"
+        logger.info("branch naming unavailable, using the display name: %s", error)
+        return None
+
+
 def workspace_collection_router(
-    service: WorkspaceService, *, prefix: str = "/api/agent/v1/workspaces"
+    service: WorkspaceService,
+    *,
+    prefix: str = "/api/agent/v1/workspaces",
+    branch_topic: BranchTopic | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix=prefix)
 
@@ -58,22 +87,34 @@ def workspace_collection_router(
         }
 
     @router.post("")
-    def create_workspace(body: NewWorkspace):
+    async def create_workspace(body: NewWorkspace):
         naming_state = "pending" if body.auto_name else "manual"
         try:
             if body.kind is WorkspaceKind.WORKTREE:
+                # Named before it exists, because a branch cannot be renamed
+                # afterwards the way the display name is. A branch the reader
+                # typed is theirs and is never replaced.
+                topic = (
+                    await _proposed_topic(branch_topic, body.display_name)
+                    if body.branch is None
+                    else None
+                )
                 return described(
-                    service.create_worktree(
+                    await run_in_threadpool(
+                        service.create_worktree,
                         body.display_name,
                         branch=body.branch,
                         base=body.base,
                         naming_state=naming_state,
+                        topic=topic,
                     )
                 )
             if body.branch is not None or body.base is not None:
                 raise ValueError("branch and base apply to worktree workspaces only")
             return described(
-                service.create(body.display_name, naming_state=naming_state)
+                await run_in_threadpool(
+                    service.create, body.display_name, naming_state=naming_state
+                )
             )
         except WorktreeUnavailable as error:
             raise HTTPException(501, str(error)) from None
@@ -85,8 +126,10 @@ def workspace_collection_router(
     return router
 
 
-def workspace_router(service: WorkspaceService) -> APIRouter:
-    router = workspace_collection_router(service)
+def workspace_router(
+    service: WorkspaceService, *, branch_topic: BranchTopic | None = None
+) -> APIRouter:
+    router = workspace_collection_router(service, branch_topic=branch_topic)
 
     @router.get("/{workspace_id}")
     def get_workspace(workspace_id: str):

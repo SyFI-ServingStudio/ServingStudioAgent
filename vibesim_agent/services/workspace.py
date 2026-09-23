@@ -31,7 +31,17 @@ def _slug(display_name: str) -> str:
         character if character.isascii() and character.isalnum() else "-"
         for character in display_name.lower()
     )
-    slug = "-".join(part for part in slug.split("-") if part)[:40].strip("-")
+    words = [part for part in slug.split("-") if part]
+    # Whole words only: a cut at a fixed width left names such as
+    # `...-which-k`. A single word longer than the limit is still cut.
+    slug = ""
+    for word in words:
+        candidate = f"{slug}-{word}" if slug else word
+        if len(candidate) > 40:
+            break
+        slug = candidate
+    if not slug and words:
+        slug = words[0][:40]
     return slug or "workspace"
 
 
@@ -108,8 +118,14 @@ class WorkspaceService:
         base: str | None = None,
         workspace_id: str | None = None,
         naming_state: str = "manual",
+        topic: str | None = None,
     ) -> dict:
         """Provision a real Git worktree and register it as an external workspace.
+
+        `topic` is a proposed branch name -- the naming model's reading of the
+        request -- used in place of the display name when no `branch` was asked
+        for. Being a proposal, it is slugged and suffixed on collision like the
+        display name would be; only an explicit `branch` is refused instead.
 
         Synchronous on purpose. The staging the background was meant to hide is
         ~50 ms; the cost is `git worktree add`, which cannot move off the request
@@ -130,7 +146,7 @@ class WorkspaceService:
             or destination_dir.is_symlink()
         ):
             raise ValueError(f"workspace already exists or is reserved: {workspace_id}")
-        branch, path = self._reserve_worktree_name(name, branch)
+        branch, path = self._reserve_worktree_name(name, branch, topic)
         worktree = self.worktrees.create(path, branch=branch, base=base)
         now = self.clock()
         descriptor = {
@@ -166,7 +182,7 @@ class WorkspaceService:
             raise
 
     def _reserve_worktree_name(
-        self, display_name: str, branch: str | None
+        self, display_name: str, branch: str | None, topic: str | None = None
     ) -> tuple[str, Path]:
         root = self.worktree_root
         if branch is not None:
@@ -181,7 +197,8 @@ class WorkspaceService:
             if self.worktrees.branch_exists(branch) or candidate.exists():
                 raise FileExistsError(f"worktree branch already exists: {branch}")
             return branch, candidate
-        base = _slug(display_name)
+        proposed = _slug(topic) if topic else "workspace"
+        base = proposed if proposed != "workspace" else _slug(display_name)
         for suffix in range(1, 100):
             topic = base if suffix == 1 else f"{base}-{suffix}"
             candidate = root / f"wt-{topic}"
