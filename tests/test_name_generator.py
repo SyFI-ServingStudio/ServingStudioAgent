@@ -59,11 +59,11 @@ class NameGeneratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 1)
         self.assertEqual(result.model_dump(), self.golden["result"])
         self.assertEqual(result.workspace_name, "Workspace Name")
-        # Legacy but for the product rename, which the prompt fixture defines.
-        self.assertEqual(
-            json.loads(legacy(requests[0].content.decode())),
-            self.golden["request"]["body"],
-        )
+        # Legacy but for the product rename, which the prompt fixture defines,
+        # and for reasoning, which is switched off on purpose (asserted below).
+        sent = json.loads(legacy(requests[0].content.decode()))
+        sent.pop("reasoning")
+        self.assertEqual(sent, self.golden["request"]["body"])
         self.assertEqual(
             str(requests[0].url), self.golden["request"]["url"]
         )
@@ -76,6 +76,7 @@ class NameGeneratorTests(unittest.IsolatedAsyncioTestCase):
         body = json.loads(requests[0].content)
         self.assertEqual(body["max_tokens"], 96)
         self.assertTrue(body["provider"]["zdr"])
+        self.assertEqual(body["reasoning"], {"enabled": False})
         self.assertNotIn("middle", body["messages"][1]["content"])
 
     async def test_disabled_configuration_does_not_create_client_or_read_prompts(self):

@@ -131,6 +131,9 @@ class NameGenerator:
             },
             max_tokens=96,
             timeout_seconds=self.timeout,
+            # The same budget as the branch topic, lost the same way: with
+            # reasoning on, the content came back empty and naming failed.
+            reasoning=False,
         )
         return GeneratedNames.model_validate_json(content)
 

@@ -99,11 +99,13 @@ class NamingService:
                 return
             self.registry.apply_generated_name(key[0], names.workspace_name)
             conversations.apply_generated_title(key[1], names.conversation_title)
-        except Exception:  # noqa: BLE001 - Keep failures isolated from chat.
+        except Exception as error:  # noqa: BLE001 - Keep failures isolated from chat.
             # Keep pending state for a later successful turn. Provider exceptions
-            # may embed request headers or generated text, so do not log them.
+            # may embed request headers or generated text, so only their type is
+            # logged: enough to tell a timeout from an empty or invalid reply.
             self.logger.warning(
-                "Automatic naming failed",
+                "Automatic naming failed (%s)",
+                type(error).__name__,
                 extra={"workspace_id": key[0], "conversation_id": key[1]},
             )
 
