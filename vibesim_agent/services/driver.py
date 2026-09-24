@@ -232,6 +232,11 @@ class ConversationDriver:
                 )
                 pending_task = None
                 may_reply = False
+                # The checkpoint budget is for a driver that stops without moving
+                # on. A finished implementer round is moving on, and a long task
+                # reports a milestone after each one; counting those across the
+                # turn failed healthy work on its fourth round.
+                continuations = 0
                 continue
             decision = parse_orchestrator(
                 text, allow_delegate=request.mode is AgentMode.ORCHESTRATED
@@ -245,6 +250,7 @@ class ConversationDriver:
                         Outcome.FAILED,
                         f"The {role.value} did not return a valid decision after two repair attempts.",
                         summaries,
+                        failure={"code": "agent_invalid_output"},
                     )
                     return
                 prompt = prompts.driver_repair_prompt(
@@ -277,6 +283,7 @@ class ConversationDriver:
                         Outcome.FAILED,
                         f"The {role.value} repeatedly stopped at a progress checkpoint. Continue the conversation to retry.",
                         summaries,
+                        failure={"code": "agent_checkpoint_loop"},
                     )
                     return
                 prompt = prompts.driver_continue_prompt(

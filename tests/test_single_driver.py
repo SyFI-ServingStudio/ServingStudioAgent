@@ -213,6 +213,9 @@ class SingleDriverTests(unittest.IsolatedAsyncioTestCase):
         )
         events = [event async for event in driver.run(self.request())]
         self.assertEqual(events[-1].outcome, Outcome.FAILED)
+        self.assertEqual(
+            events[-1].metadata["failure"], {"code": "agent_checkpoint_loop"}
+        )
         self.assertEqual(len(adapter.requests), 4)
 
     async def test_missing_final_is_runtime_failure_without_repair(self):
@@ -230,6 +233,9 @@ class SingleDriverTests(unittest.IsolatedAsyncioTestCase):
         )
         events = [event async for event in driver.run(self.request())]
         self.assertEqual(events[-1].outcome, Outcome.FAILED)
+        self.assertEqual(
+            events[-1].metadata["failure"], {"code": "agent_invalid_output"}
+        )
         self.assertEqual(len(adapter.requests), 3)
 
     async def test_closing_driver_closes_nested_provider_immediately(self):

@@ -231,6 +231,39 @@ class OrchestratedDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1].metadata["implementer_summaries"], ["first done"])
         self.assertEqual(len(adapter.requests), 4)
 
+    async def test_each_implementer_round_restores_the_checkpoint_budget(self):
+        milestone = {"action": "milestone", "message": "round landed"}
+        rounds = []
+        for index in range(4):
+            rounds += [
+                (Role.ORCHESTRATOR, delegate(f"round {index}")),
+                (Role.IMPLEMENTER, answer(f"round {index} done")),
+                (Role.ORCHESTRATOR, milestone),
+                (Role.ORCHESTRATOR, milestone),
+            ]
+        _, driver, adapter, request = self.setup_driver(
+            [*rounds, (Role.ORCHESTRATOR, answer("all done"))]
+        )
+        events = [event async for event in driver.run(request)]
+        self.assertEqual(events[-1].outcome, Outcome.ANSWER, events[-1].text)
+        self.assertEqual(len(adapter.requests), 17)
+
+    async def test_consecutive_checkpoints_still_fail_after_a_round(self):
+        milestone = {"action": "milestone", "message": "still here"}
+        _, driver, adapter, request = self.setup_driver(
+            [
+                (Role.ORCHESTRATOR, delegate()),
+                (Role.IMPLEMENTER, answer("first done")),
+                *[(Role.ORCHESTRATOR, milestone)] * 4,
+            ]
+        )
+        events = [event async for event in driver.run(request)]
+        self.assertEqual(events[-1].outcome, Outcome.FAILED)
+        self.assertEqual(
+            events[-1].metadata["failure"], {"code": "agent_checkpoint_loop"}
+        )
+        self.assertEqual(len(adapter.requests), 6)
+
     async def test_role_start_precedes_awaiting_initial_preparation(self):
         root, driver, adapter, request = self.setup_driver([])
         entered = asyncio.Event()

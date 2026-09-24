@@ -365,7 +365,10 @@ class TurnServiceTests(unittest.IsolatedAsyncioTestCase):
 
     def test_failure_messages_preserve_legacy_static_contract_without_importing_app(self):
         source = Path(__file__).parent / "fixtures/legacy_turn_failures.json"
-        self.assertEqual(_TURN_FAILURES, json.loads(source.read_text())["failures"])
+        legacy = json.loads(source.read_text())["failures"]
+        # Every legacy code keeps its words; codes added since only extend the map.
+        self.assertEqual({code: _TURN_FAILURES[code] for code in legacy}, legacy)
+        self.assertEqual(set(_TURN_FAILURES) - set(legacy), {"agent_checkpoint_loop"})
 
     async def test_unknown_failure_code_does_not_leak_into_structured_failure(self):
         class UnknownFailureDriver(Driver):
