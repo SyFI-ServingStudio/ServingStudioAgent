@@ -53,6 +53,10 @@ class UpdateConversationRuntime(BaseModel):
     codex_runtime: ConversationRuntime
 
 
+class RenameConversation(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
 def conversation_index_router(conversations: ConversationService) -> APIRouter:
     router = APIRouter()
 
@@ -207,6 +211,15 @@ def conversation_router(
             raise HTTPException(
                 409, {"code": "conversation_runtime_locked", "message": str(error)}
             ) from None
+        except KeyError:
+            raise HTTPException(404, "conversation not found") from None
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+
+    @router.patch("")
+    async def rename(workspace_id: str, cid: str, body: RenameConversation):
+        try:
+            return queries.rename(workspace_id, cid, body.title)
         except KeyError:
             raise HTTPException(404, "conversation not found") from None
         except ValueError as error:

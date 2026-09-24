@@ -95,6 +95,10 @@ class ConversationService:
             raise ConversationRuntimeLocked(str(error)) from error
         return self.get(workspace_id, conversation_id)
 
+    def rename(self, workspace_id: str, conversation_id: str, title: str) -> dict:
+        self.storage(workspace_id).conversations.rename(conversation_id, title)
+        return self.get(workspace_id, conversation_id)
+
     def browser_runtimes(
         self, overrides: Mapping[str, Mapping[str, str | None]]
     ) -> dict[Role, RoleRuntime]:

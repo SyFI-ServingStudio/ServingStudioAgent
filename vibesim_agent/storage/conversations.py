@@ -160,6 +160,21 @@ class Conversations:
             )
             return cursor.rowcount == 1
 
+    def rename(self, conversation_id: str, title: str) -> None:
+        """Set a reader-chosen title; `manual` keeps automatic naming from replacing it."""
+        clean_title = title.strip()
+        if not clean_title:
+            raise ValueError("conversation title must not be empty")
+        # `updated_at` is left alone: it orders conversations by activity, and a
+        # rename is not activity.
+        with self.database.connect(write=True) as connection:
+            cursor = connection.execute(
+                "UPDATE conversations SET title = ?, naming_state = 'manual' WHERE id = ?",
+                (clean_title, conversation_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(conversation_id)
+
     def messages(self, conversation_id: str, *, limit: int | None = None, offset: int = 0) -> tuple[Message, ...]:
         if offset < 0 or (limit is not None and limit < 1):
             raise ValueError("invalid message page")

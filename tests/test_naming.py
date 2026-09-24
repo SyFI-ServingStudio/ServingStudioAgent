@@ -106,6 +106,38 @@ class NamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(repeated.json()["naming_scheduled"])
         self.assertEqual(len(self.naming_calls), 1)
 
+    async def test_manual_title_survives_naming_already_in_flight(self):
+        response = await asyncio.wait_for(self.send(), 3)
+        self.assertTrue(response.json()["naming_scheduled"])
+        await asyncio.wait_for(self.entered.wait(), 3)
+        before = self.store.conversations.get(self.cid)
+        renamed = await self.client.patch(self.path, json={"title": "  My study  "})
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(renamed.json()["title"], "My study")
+        self.release.set()
+        await self.drain_current()
+        current = self.store.conversations.get(self.cid)
+        self.assertEqual(current["title"], "My study")
+        self.assertEqual(current["naming_state"], "manual")
+        self.assertEqual(current["updated_at"], before["updated_at"])
+        # The workspace was still pending, so it takes its generated name.
+        self.assertEqual(
+            self.application.state.workspaces.get(self.wid)["display_name"],
+            "Workload Study",
+        )
+
+    async def test_rename_rejects_blank_titles_and_unknown_conversations(self):
+        for body in ({"title": ""}, {}):
+            response = await self.client.patch(self.path, json=body)
+            self.assertEqual(response.status_code, 422, response.text)
+        blank = await self.client.patch(self.path, json={"title": "   "})
+        self.assertEqual(blank.status_code, 400, blank.text)
+        missing = await self.client.patch(
+            f"{self.base}/{self.wid}/conversations/missing", json={"title": "Name"}
+        )
+        self.assertEqual(missing.status_code, 404, missing.text)
+        self.assertEqual(self.store.conversations.get(self.cid)["title"], "New chat")
+
     async def test_terminal_database_failure_aborts_unstarted_naming(self):
         with (
             patch.object(
