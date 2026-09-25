@@ -109,6 +109,12 @@ Two provider roles:
   free-form handoff to the orchestrator. The orchestrator reviews that handoff
   before producing the user-facing answer.
 
+The implementer is a role of the system, not a subagent: the orchestrator
+reaches it only through `delegate`. Both CLIs offer their own subagents (Codex's
+collab tools, Claude's `Agent`), and an orchestrator that uses them does the
+implementer's work in its own session, where no implementer card, session, or
+progress reporting exists. The contracts forbid that.
+
 ### `single`
 
 One provider role:
