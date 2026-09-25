@@ -120,6 +120,27 @@ class HttpV2Tests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.turns.close)
         self.path = "/api/agent/v1/workspaces/w/conversations/c"
 
+    async def test_quiet_turn_stream_carries_keepalive_comments(self):
+        self.adapter.release.clear()
+        with patch("vibesim_agent.api.conversations.KEEPALIVE_SECONDS", 0.05):
+            response_task = asyncio.create_task(
+                self.client.post(self.path + "/messages", json={"text": "slow work"})
+            )
+            try:
+                await asyncio.wait_for(self.adapter.entered.wait(), 2)
+                await asyncio.sleep(0.3)
+                self.adapter.release.set()
+                response = await asyncio.wait_for(response_task, 3)
+            finally:
+                self.adapter.release.set()
+                if not response_task.done():
+                    response_task.cancel()
+                await asyncio.gather(response_task, return_exceptions=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(response.text.count(": keepalive\n\n"), 2)
+        kinds = [kind for kind, _ in sse_events(response.text)]
+        self.assertEqual(kinds[-1], "done")
+
     async def test_managed_events_stream_as_job_and_replay_keeps_original_kinds(self):
         self.adapter.release.clear()
         response_task = asyncio.create_task(
@@ -315,3 +336,38 @@ class HttpV2Tests(unittest.IsolatedAsyncioTestCase):
             {"code": "codex_family_unavailable", "families": ["test"]},
         )
         self.assertEqual(self.store.conversations.messages("c"), ())
+
+
+class KeepaliveTests(unittest.IsolatedAsyncioTestCase):
+    async def test_keepalive_fills_quiet_gaps_without_losing_or_reordering_frames(self):
+        from vibesim_agent.api.conversations import KEEPALIVE_FRAME, with_keepalive
+
+        async def frames():
+            yield "a"
+            await asyncio.sleep(0.12)
+            yield "b"
+            yield "c"
+
+        out = [frame async for frame in with_keepalive(frames(), 0.05)]
+        self.assertEqual([f for f in out if f != KEEPALIVE_FRAME], ["a", "b", "c"])
+        self.assertEqual(out[0], "a")
+        self.assertIn(KEEPALIVE_FRAME, out[1:-2])
+
+    async def test_closing_the_keepalive_stream_closes_the_source(self):
+        from contextlib import aclosing
+
+        from vibesim_agent.api.conversations import with_keepalive
+
+        closed = asyncio.Event()
+
+        async def frames():
+            try:
+                yield "a"
+                await asyncio.Event().wait()
+            finally:
+                closed.set()
+
+        async with aclosing(with_keepalive(frames(), 0.05)) as kept:
+            self.assertEqual(await anext(kept), "a")
+            await anext(kept)  # a keepalive while the source waits
+        self.assertTrue(closed.is_set())

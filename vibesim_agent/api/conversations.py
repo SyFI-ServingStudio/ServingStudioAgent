@@ -1,7 +1,8 @@
 """Browser chat routes; turn execution and cancellation live in the service."""
 
+import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
 from typing import Literal
 
@@ -55,6 +56,48 @@ class UpdateConversationRuntime(BaseModel):
 
 class RenameConversation(BaseModel):
     title: str = Field(min_length=1, max_length=200)
+
+
+# How long a turn's stream may go without a byte. A role can work for many
+# minutes between events, and a connection that carries nothing is one a proxy
+# or NAT may drop without telling either end; the browser then waits on a dead
+# socket. A comment line keeps it busy and lets the client time out a stall.
+KEEPALIVE_SECONDS = 15.0
+KEEPALIVE_FRAME = ": keepalive\n\n"
+
+
+async def with_keepalive(
+    frames: AsyncIterator[str], interval: float
+) -> AsyncIterator[str]:
+    """Pass `frames` through, adding a comment frame after each quiet `interval`.
+
+    The pending read is waited on, never cancelled: cancelling it would close
+    the turn stream underneath, and the next event would be lost.
+    """
+    iterator = aiter(frames)
+    pending: asyncio.Future | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(anext(iterator))
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                yield KEEPALIVE_FRAME
+                continue
+            try:
+                frame = pending.result()
+            except StopAsyncIteration:
+                return
+            finally:
+                pending = None
+            yield frame
+    finally:
+        if pending is not None:
+            pending.cancel()
+            try:
+                await pending
+            except (asyncio.CancelledError, StopAsyncIteration):
+                pass
 
 
 def conversation_index_router(conversations: ConversationService) -> APIRouter:
@@ -238,7 +281,7 @@ def conversation_router(
             raise HTTPException(404, "conversation not found")
 
     def stream_response(workspace_id, cid, turn_id):
-        async def stream():
+        async def frames():
             async with aclosing(turns.stream(workspace_id, cid, turn_id)) as events:
                 async for event in events:
                     payload = browser_event(event["kind"], event["payload"])
@@ -246,6 +289,12 @@ def conversation_router(
                         "job" if event["kind"] in MANAGED_JOB_EVENTS else event["kind"]
                     )
                     yield f"event: {kind}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        async def stream():
+            async with aclosing(frames()) as source:
+                async with aclosing(with_keepalive(source, KEEPALIVE_SECONDS)) as kept:
+                    async for frame in kept:
+                        yield frame
 
         return StreamingResponse(
             stream(),
