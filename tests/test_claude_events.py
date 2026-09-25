@@ -97,6 +97,36 @@ class ClaudeEventsTests(unittest.TestCase):
         event["uuid"] = {}
         self.consume(collector, event)
 
+    def test_tool_call_names_what_the_step_runs(self):
+        collector = self.collector()
+        long_command = "uv run python -m launcher " + "x" * 200
+        event = {
+            "type": "assistant",
+            "uuid": "tools",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {
+                            "command": "git status --short",
+                            "description": "Show  working\ntree status",
+                        },
+                    },
+                    {"type": "tool_use", "name": "Bash", "input": {"command": long_command}},
+                    {"type": "tool_use", "name": "Read", "input": {"file_path": "/w/a.py"}},
+                    {"type": "tool_use", "name": "TodoWrite", "input": {"todos": []}},
+                ]
+            },
+        }
+        texts = [e["text"] for e in self.consume(collector, event) if e["kind"] == "tool_call"]
+        self.assertEqual(texts[0], "assistant: Bash — Show working tree status")
+        self.assertTrue(texts[1].startswith("assistant: Bash — uv run python -m launcher x"))
+        self.assertTrue(texts[1].endswith("…"))
+        self.assertEqual(len(texts[1]), len("assistant: Bash — ") + 100)
+        self.assertEqual(texts[2], "assistant: Read — /w/a.py")
+        self.assertEqual(texts[3], "assistant: TodoWrite")
+
     def test_nested_session_and_result_never_replace_owner(self):
         collector = self.collector()
         self.assertEqual(

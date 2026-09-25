@@ -7,6 +7,25 @@ from jsonschema import Draft202012Validator
 
 from ..base import AgentRequest
 
+# Which input names what a tool call is doing, in order of preference. Bash
+# carries a short `description` of its command; the rest name their target.
+_TOOL_DETAIL_KEYS = ("description", "command", "file_path", "path", "pattern", "query", "url")
+_TOOL_DETAIL_LIMIT = 100
+
+
+def _tool_detail(tool_input: object) -> str:
+    """One line saying what a tool call does, or nothing when it says nothing."""
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in _TOOL_DETAIL_KEYS:
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            line = " ".join(value.split())
+            if len(line) > _TOOL_DETAIL_LIMIT:
+                line = line[: _TOOL_DETAIL_LIMIT - 1].rstrip() + "…"
+            return line
+    return ""
+
 
 class ClaudeOutputCollector:
     def __init__(self, request: AgentRequest, *, schema: dict | None = None):
@@ -65,10 +84,14 @@ class ClaudeOutputCollector:
                     continue
                 if block.get("type") == "tool_use":
                     self._mark_ready(events)
+                    # A role that works without narrating is otherwise a row of
+                    # bare tool names; the detail says what each step runs.
+                    text = f"{self.request.role.value}: {block.get('name', 'tool')}"
+                    detail = _tool_detail(block.get("input"))
                     events.append(
                         {
                             "kind": "tool_call",
-                            "text": f"{self.request.role.value}: {block.get('name', 'tool')}",
+                            "text": f"{text} — {detail}" if detail else text,
                         }
                     )
                 elif (
