@@ -125,6 +125,11 @@ a 2×2 matrix of `AGENTS*.md` files. The new service renders these at startup fr
 `vibesim_agent/prompts/templates/AGENTS.md.j2`; edit the template, never a generated
 file.
 
+Every role must run its subagents in the foreground, or wait for them to
+finish, before returning its JSON: returning ends the provider call, so a
+background subagent still running is cut off and its work silently lost. The
+rule lives in the template's Shared Rules.
+
 There is no judge, profiler, or autonomous retry loop. Each role keeps its own
 provider session and resumes it on later turns; the human user is the control loop.
 

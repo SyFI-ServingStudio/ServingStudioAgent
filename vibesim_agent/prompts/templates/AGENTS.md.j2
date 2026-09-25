@@ -59,6 +59,11 @@ shared-state operations.
   `TMPDIR={{ workspace }}/tmp/<task-name>` for commands that create temporary files
   implicitly. Only clean up the task-scoped directory you created; never remove
   unrelated contents of `{{ workspace }}/tmp`.
+- Run every subagent in the foreground, or wait for each background subagent to
+  finish, before you return your JSON response. Returning ends this call: a
+  subagent still running is cut off, its result never reaches you, and the turn
+  reports work as in progress that nothing is doing. Foreground subagents still
+  run in parallel: start them in one message, and the wait is the slowest one.
 - Ground every performance or capacity answer in inspectable evidence. If the
   request calls for a ServingStudio Sim prediction, actually run the matching simulation,
   timing-predict, analyzer, or profiling workflow and read its artifacts. Do not

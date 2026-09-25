@@ -1,9 +1,9 @@
 {
   "rendered_sha256": {
-    "AGENTS.md": "7eb991f3d86434188c7b98a103da0a7c5f570434c8f7bd7b142d08d1458ca217",
-    "AGENTS.autonomous.md": "99cf212b1a22d9da254a29db46025ff68bf8842d2c824f29bc9532a19ebac664",
-    "AGENTS.single.md": "7a638e1ec56b9b80bee2c97bf11d485a7373657c1c59b67d0709f6e9d85534f5",
-    "AGENTS.single.autonomous.md": "0d352ee01a47b57358ce9dc0fce82609303177814fffdb577767ca45e7f3277e",
+    "AGENTS.md": "c18428291be03a66df03b4bc6e98e2a213b105b57afd24bfc033b342d363071b",
+    "AGENTS.autonomous.md": "8570a4811fc198eea03272df1ccd6d2b63f956593afaf0e0b553b6344d31373a",
+    "AGENTS.single.md": "48e4dede9cb3771494ef104232d0d1bba1d41c21d6dca3d07ebb617049530a78",
+    "AGENTS.single.autonomous.md": "fb87c8374e5fd9e41c8b549610a143f149403c1abea10e9ee78fda29e8d8c98a",
     "orchestrator.txt": "f24d37d6523a27ad0d6135664954b584f1e33142b4d2fcef17f3b48477ce518e",
     "assistant.txt": "0b8a54582f1a25f26169cf019bbb9859072436cf3a81945b869b83ec8297bbe7"
   },
@@ -37,22 +37,22 @@
     {
       "mode": "orchestrated",
       "autonomous": false,
-      "fingerprint": "aae4e3d5a77c6181"
+      "fingerprint": "709f18bc2e8a75eb"
     },
     {
       "mode": "orchestrated",
       "autonomous": true,
-      "fingerprint": "80e0329988bbe72a"
+      "fingerprint": "d72af10cd5de5604"
     },
     {
       "mode": "single",
       "autonomous": false,
-      "fingerprint": "a3116357a0074f65"
+      "fingerprint": "1e7f2518e7a65e4f"
     },
     {
       "mode": "single",
       "autonomous": true,
-      "fingerprint": "e3919ef6437d0819"
+      "fingerprint": "d3b30c0fd29397d5"
     }
   ],
   "model_ids": [
@@ -90,22 +90,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "e92a85fc6584e237"
+          "fingerprint": "91ea00e9d83d102b"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "925b460363fb59d6"
+          "fingerprint": "ae29659883741377"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "e8611d1646e81b00"
+          "fingerprint": "d962730d3bb2c15a"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "8f7d1ce16531f090"
+          "fingerprint": "4301bf7d3e9172c8"
         }
       ]
     },
@@ -135,22 +135,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "01699bdac4917591"
+          "fingerprint": "63e392aba8cbd6ea"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "c70c2a51005af86b"
+          "fingerprint": "5982cff68eb27a9c"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "fcf2a17b559a2c29"
+          "fingerprint": "e10ce2f2b6ebc493"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "6a4224160486d914"
+          "fingerprint": "97294e9acb154413"
         }
       ]
     },
@@ -180,22 +180,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "6743f2500e23f720"
+          "fingerprint": "b9270c2b78a16ef0"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "cf61e9d1e90462ed"
+          "fingerprint": "3587eee7a3b0be74"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "3e82ea92e7b82a26"
+          "fingerprint": "89d85b0d4bde4450"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "fc15dcdc07defa60"
+          "fingerprint": "21ab2301068c8f1b"
         }
       ]
     },
@@ -225,22 +225,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "2183a3006d052315"
+          "fingerprint": "0265367fe6352f38"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "819da94a0930783a"
+          "fingerprint": "5019ccc335d1cb65"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "2a14c90bb588ca1c"
+          "fingerprint": "c6fb93881d0fdd00"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "7ba5700908763c3a"
+          "fingerprint": "fdb560a3a747f423"
         }
       ]
     },
@@ -270,22 +270,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "38c9c389ced5a2d0"
+          "fingerprint": "ea04333911c89653"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "1d700baa17511304"
+          "fingerprint": "2b65c54071dbde49"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "3243ebe9bf451cbb"
+          "fingerprint": "05873e465576b361"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "29e17d28295fb433"
+          "fingerprint": "ca3fbdb171938a0b"
         }
       ]
     },
@@ -315,22 +315,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "06b2c8dc479a9d31"
+          "fingerprint": "7a7d63b9ad7f0420"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "15692dc43f3c3574"
+          "fingerprint": "0f2982e2e1c1db57"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "04450b16ba27aebd"
+          "fingerprint": "5acf022ee33fde63"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "1802dd86067decc8"
+          "fingerprint": "d9d2c9d6d103512c"
         }
       ]
     }
