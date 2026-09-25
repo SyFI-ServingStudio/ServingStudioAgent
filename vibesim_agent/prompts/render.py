@@ -218,6 +218,30 @@ class Prompts:
             f"Last update:\n{message}\n"
         )
 
+    def implementer_continue_prompt(
+        self, action: str, message: str, *, user_message: str | None = None
+    ) -> str:
+        """Resume an implementer whose call stopped on a commentary envelope.
+
+        The resumed session still holds the task, so this names no new one. A
+        call that was answering the user repeats their `user:` line: the
+        contract offers `reply_user` only on a prompt that carries one.
+        """
+        terminal = "`final_answer`"
+        user = ""
+        if user_message is not None:
+            terminal += ", or `reply_user` if the user's message asks you something"
+            user = f"\nuser: {user_message}\n"
+        return (
+            f"{self.role_text(Role.IMPLEMENTER)}\n\n"
+            f"Your previous call ended with a non-terminal `{action}` update. The "
+            "runtime already showed it to the user. Continue the same task from that "
+            "checkpoint without repeating completed work. End this call only with "
+            f"{terminal}; use `progress` and `milestone` only for commentary emitted "
+            "while you keep working.\n\n"
+            f"Last update:\n{message}\n{user}"
+        )
+
     def implementer_steer_prompt(self, message: str) -> str:
         """Deliver a user correction to an implementer they interrupted mid-task.
 

@@ -7,7 +7,7 @@
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["final_answer", "reply_user"]
+      "enum": ["progress", "milestone", "final_answer", "reply_user"]
     },
     "message": { "type": "string" }
   }

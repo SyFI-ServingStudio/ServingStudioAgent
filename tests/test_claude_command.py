@@ -7,9 +7,23 @@ from tempfile import TemporaryDirectory
 
 from tests import test_codex_command as codex_fixture
 from tests.runtime_fixtures import docker_execution
+from vibesim_agent.domain.decisions import COMMENTARY_ACTIONS
 from vibesim_agent.domain.roles import Role
 from vibesim_agent.providers.base import OutputMode
 from vibesim_agent.providers.claude.command import ClaudeCommand
+
+
+def without_commentary_actions(arguments):
+    """The legacy command with the one intended change: Claude's final schema
+    no longer offers `progress`/`milestone`, which it streams as text instead."""
+    arguments = list(arguments)
+    if "--json-schema" in arguments:
+        at = arguments.index("--json-schema") + 1
+        schema = json.loads(arguments[at])
+        action = schema["properties"]["action"]
+        action["enum"] = [v for v in action["enum"] if v not in COMMENTARY_ACTIONS]
+        arguments[at] = json.dumps(schema)
+    return arguments
 
 
 class ClaudeCommandTests(unittest.TestCase):
@@ -68,7 +82,8 @@ class ClaudeCommandTests(unittest.TestCase):
                         ),
                     )
                     self.assertEqual(
-                        actual[actual.index("-p") :], legacy[legacy.index("-p") :]
+                        actual[actual.index("-p") :],
+                        without_commentary_actions(legacy[legacy.index("-p") :]),
                     )
                     self.assertNotIn(request.prompt, actual)
 
@@ -85,6 +100,28 @@ class ClaudeCommandTests(unittest.TestCase):
         self.assertEqual(builder.output_schema(request), original)
         original.clear()
         self.assertTrue(builder.output_schema(request))
+
+    def test_claude_final_schema_offers_only_terminal_actions(self):
+        builder = self.builder()
+        expected = {
+            Role.ASSISTANT: ["final_answer", "request_user_input"],
+            Role.ORCHESTRATOR: ["final_answer", "request_user_input", "delegate"],
+            Role.IMPLEMENTER: ["final_answer", "reply_user"],
+        }
+        for role, actions in expected.items():
+            with self.subTest(role=role):
+                request = replace(
+                    self.request(),
+                    role=role,
+                    output_schema=Path(f"/contracts/{role.value}.schema.json"),
+                )
+                schema = builder.output_schema(request)
+                self.assertEqual(schema["properties"]["action"]["enum"], actions)
+                # The shared contract Codex receives keeps the commentary actions.
+                shared = builder.schemas[f"{role.value}.schema.json"]
+                self.assertTrue(
+                    COMMENTARY_ACTIONS <= set(shared["properties"]["action"]["enum"])
+                )
 
     def test_capability_controls_schema_and_unknown_contract_rejected(self):
         request = self.request()

@@ -127,14 +127,17 @@ shared-state operations.
   the direction unambiguous, ask the user which direction they intend before
   running, {{ alignment_delegating }}comparing results, or proposing changes.{{ alignment_note }}
 
-- During long-running work, reporting meaningful `progress` and `milestone`
-  updates is important. The UI renders them as intermediate output. Emit each
-  update as its own assistant message containing exactly one schema-valid JSON
-  envelope, then immediately continue with the next genuine tool call. The
-  required stream shape is `tool call -> progress or milestone -> next tool
-  call`. Never concatenate envelopes or combine one with `final_answer`. Plan
-  updates while a real next tool action remains. Keep progress brief, do not
-  narrate every command, and do not print updates from shell/tool stdout.
+- Report progress while you work: until you return, these updates are all the
+  user sees of it. Send a `progress` update when you start a distinct step, and
+  a `milestone` when a phase, experiment, implementation slice, or verification
+  gate completes, stating its result. Do not go more than about five tool calls
+  without one. Emit each update as its own assistant message containing exactly
+  one JSON envelope in your role's format (see your role section), then
+  immediately continue with the next genuine tool call. The required stream
+  shape is `tool call -> progress or milestone -> next tool call`. An update
+  never ends your call. Never concatenate envelopes or combine one with your
+  final response. Keep each update to one or two sentences, do not narrate every
+  command, and do not print updates from shell/tool stdout.
 {# Four literal branches rather than spliced fragments: dropping "through the
    orchestrator" shifts the line wrap, and the orchestrated pair must stay
    byte-identical to its hand-written predecessor. #}
@@ -439,6 +442,21 @@ they match. Use `uv run ...` for Python commands from `{{ workspace }}`.
 When asked for git hygiene, create or switch to the requested branch, commit
 coherent completed work, and report `git status`, commit ids, and validation
 commands in the summary.
+
+Report progress with the envelopes from the Shared Rules. They carry
+`action` and `message` only, and each is followed by your next tool call.
+
+For a meaningful small progress update while continuing the same call:
+
+```json
+{ "action": "progress", "message": "Running the kernel's Rust tests." }
+```
+
+After a material phase or verification gate has completed:
+
+```json
+{ "action": "milestone", "message": "The fill job finished: 316 rows written, all within 15%." }
+```
 
 When finished, return exactly one JSON object with exactly these fields:
 `action` and `message`. Choose the action by who the message is for:

@@ -1,16 +1,16 @@
 {
   "rendered_sha256": {
-    "AGENTS.md": "c18428291be03a66df03b4bc6e98e2a213b105b57afd24bfc033b342d363071b",
-    "AGENTS.autonomous.md": "8570a4811fc198eea03272df1ccd6d2b63f956593afaf0e0b553b6344d31373a",
-    "AGENTS.single.md": "48e4dede9cb3771494ef104232d0d1bba1d41c21d6dca3d07ebb617049530a78",
-    "AGENTS.single.autonomous.md": "fb87c8374e5fd9e41c8b549610a143f149403c1abea10e9ee78fda29e8d8c98a",
+    "AGENTS.md": "66e9c54c01fed89c0dc5ca1b9d2041bcc5a9ee86eb63aa9999ffe3ff364bb169",
+    "AGENTS.autonomous.md": "a4b1ffa841953153880baedd113d92bc787f522b738bafba0047f4eac83fff07",
+    "AGENTS.single.md": "bd6d8848ef21ea335f2b2e8bae7ab09be0fc2645ce2ea70c5900d4ce28750b95",
+    "AGENTS.single.autonomous.md": "91ef8200fa91134d965fb3b846c83d8c29c7611fcd5a2c1abaebb3318e5321a7",
     "orchestrator.txt": "f24d37d6523a27ad0d6135664954b584f1e33142b4d2fcef17f3b48477ce518e",
     "assistant.txt": "0b8a54582f1a25f26169cf019bbb9859072436cf3a81945b869b83ec8297bbe7"
   },
   "contracts_sha256": {
     "assistant.schema.json": "f2b0e02ce194ab0ba35ab44caf58b621aa06031303c6c8100be1292519584f97",
-    "implementer.schema.json": "0913ddefab218a2a666bd4f52b63bd3e4afdfa7c20c48d7ef2c3219d2d30a4c8",
-    "implementer.txt": "0fbf1032125dd9e702f82a893648d2d894fc6defd8c5db97ad097c57561227ca",
+    "implementer.schema.json": "2135a2772c4916363c53f59ddb52edc3becb3d659ca33195822a7cb33bf2ff32",
+    "implementer.txt": "7bfecd4911dfdc872fc3a82d1c8ccc8109005456fe480fca04c0c31292927ea6",
     "naming-system.txt": "bdb35e8cd804a450dbf45776dd6a0fcf8b38fe1a14002454ebba5b48c0368588",
     "naming-user.txt": "18b524fe3b4f3c14ee4406898360b459a6ab5bfa1e8136e09d5449966d0d9107",
     "orchestrator.schema.json": "ab1b77fb6fb7d19eef248a92d9bdf52f3770e387a929ac0d7fca4a36e3802714"
@@ -28,31 +28,31 @@
     }
   },
   "handoff": "You are the orchestrator. Read and follow `/workspace/AGENTS.md`, especially the Orchestrator Role section. You own all `top-*` and `orchestrator-*` skill work yourself; delegate only concrete code-change or large-exploration tasks to the implementer.\n\nThe runtime gives you the current conversation ID on every call. You MUST maintain these two durable, conversation-scoped files in `/workspace`:\n\n- `<conversation-id>_plan.md`: the stable objective, approved plan, key decisions, phase boundaries, and remaining work.\n- `<conversation-id>_progress.md`: the current checkpoint, completed evidence, active task, latest implementer handoff, blockers, and exact next action.\n\nAt the beginning of every call, read both files if present before deciding what to do. Create them if absent once the objective is understood. Update them before delegating and again after every implementer handoff or material state change. Keep them concise and current; they are recovery state, not a transcript. Never commit them unless the user explicitly asks.\n\nYour final response must always be exactly one JSON object with exactly these fields: `action`, `message`, and `task`. Never output custom final objects such as `{\"status\":...,\"results\":[...]}`. If you have completed results, commands, or tables, put them inside the `message` string and set `action` to `final_answer` and `task` to `\"\"`.\n\nThe response schema fixes the three field types and allowed action names. You\nmust also satisfy these semantic combinations:\n\n- `progress`: non-empty `message`, empty `task`. Use it for a meaningful small\n  user-visible update such as selecting a workflow, beginning a bounded check,\n  or explaining the next immediate step. Keep it to one or two short sentences;\n  do not narrate every command.\n- `milestone`: non-empty `message`, empty `task`. Use it only after a material\n  phase, experiment, implementation slice, or verification gate has actually\n  completed. State the completed result or evidence, not merely what you intend\n  to do next.\n- `final_answer`: non-empty `message`, empty `task`.\n- `request_user_input`: non-empty `message`, empty `task`.\n- `delegate`: empty `message`, non-empty `task`.\n\nUse `final_answer` only for a completed user-facing result. Use\n`request_user_input` only when a specific clarification, authorization, or\nexternal choice is genuinely required before work can continue. Never put a\nprogress update, an intention, or future work such as \"Checking...\", \"I will\ninspect...\", or \"Next I will...\" in either terminal action.\n\nReporting meaningful `progress` and `milestone` updates during real work is\nimportant: they are user-visible intermediate output, not terminal output. Emit\neach update as its own assistant message containing exactly one JSON envelope,\nthen immediately continue with the next genuine tool call. The required stream\nshape is `tool call -> progress or milestone -> next tool call`. Never\nconcatenate two envelopes, and never put a `progress` or `milestone` envelope in\nthe same assistant message as `final_answer`. Plan updates before a real next\ntool action remains; if no tool action remains, return only the single terminal\nenvelope. Do not end the call with a non-terminal action. Use `delegate` only\nwhen a separate implementer task is needed.\n\nCurrent conversation ID: `c`.\nConversation plan: `/workspace/c_plan.md`.\nConversation progress: `/workspace/c_progress.md`.\n\nThe implementer returned a summary for your delegated task.\n\nYou do not share the implementer Codex session. Treat the text below as the explicit handoff record, review it against your own orchestration context, and return exactly one JSON object.\n\nIf the work is complete, use `final_answer`. If clarification, authorization, or an external choice is genuinely required, use `request_user_input`. If another bounded code-change, validation, or large exploration task is still needed, use `delegate` with that specific follow-up task.\n\nDelegated task:\ntask\n\nImplementer summary:\nsummary\n",
-  "steer": "You are implementor. Read and follow `/workspace/AGENTS.md`, especially the Implementer Role section.\n\nYour final response must be exactly one JSON object with exactly these fields: `action` and `message`. `action` is `final_answer` to hand completed work back to the orchestrator, or `reply_user` to answer the user directly and end the turn. `reply_user` is available only when this prompt carried a line marked `user:`; a task from the orchestrator always ends in `final_answer`.\n\nThe user interrupted you while you were working on the task above, and sent the message below. Read it first: if it asks you something, answer it with `reply_user`. If it corrects how you were going about the task, continue from where you stopped \u2014 keep the work you already completed, drop or redo only what the message contradicts, and end with `final_answer` as usual.\n\nuser: correction\n",
+  "steer": "You are implementor. Read and follow `/workspace/AGENTS.md`, especially the Implementer Role section.\n\nYour final response must be exactly one JSON object with exactly these fields: `action` and `message`. `action` is `final_answer` to hand completed work back to the orchestrator, or `reply_user` to answer the user directly and end the turn. `reply_user` is available only when this prompt carried a line marked `user:`; a task from the orchestrator always ends in `final_answer`. While you work, send `progress` and `milestone` updates as the contract's Shared Rules describe; an update never ends your call.\n\nThe user interrupted you while you were working on the task above, and sent the message below. Read it first: if it asks you something, answer it with `reply_user`. If it corrects how you were going about the task, continue from where you stopped \u2014 keep the work you already completed, drop or redo only what the message contradicts, and end with `final_answer` as usual.\n\nuser: correction\n",
   "implementer": {
-    "false": "You are implementor. Read and follow `/workspace/AGENTS.md`, especially the Implementer Role section.\n\nYour final response must be exactly one JSON object with exactly these fields: `action` and `message`. `action` is `final_answer` to hand completed work back to the orchestrator, or `reply_user` to answer the user directly and end the turn. `reply_user` is available only when this prompt carried a line marked `user:`; a task from the orchestrator always ends in `final_answer`.\n\nTask:\ntask\n",
-    "true": "You are implementor. Read and follow `/workspace/AGENTS.md`, especially the Implementer Role section.\n\nYour final response must be exactly one JSON object with exactly these fields: `action` and `message`. `action` is `final_answer` to hand completed work back to the orchestrator, or `reply_user` to answer the user directly and end the turn. `reply_user` is available only when this prompt carried a line marked `user:`; a task from the orchestrator always ends in `final_answer`.\n\nTask:\ntask\n"
+    "false": "You are implementor. Read and follow `/workspace/AGENTS.md`, especially the Implementer Role section.\n\nYour final response must be exactly one JSON object with exactly these fields: `action` and `message`. `action` is `final_answer` to hand completed work back to the orchestrator, or `reply_user` to answer the user directly and end the turn. `reply_user` is available only when this prompt carried a line marked `user:`; a task from the orchestrator always ends in `final_answer`. While you work, send `progress` and `milestone` updates as the contract's Shared Rules describe; an update never ends your call.\n\nTask:\ntask\n",
+    "true": "You are implementor. Read and follow `/workspace/AGENTS.md`, especially the Implementer Role section.\n\nYour final response must be exactly one JSON object with exactly these fields: `action` and `message`. `action` is `final_answer` to hand completed work back to the orchestrator, or `reply_user` to answer the user directly and end the turn. `reply_user` is available only when this prompt carried a line marked `user:`; a task from the orchestrator always ends in `final_answer`. While you work, send `progress` and `milestone` updates as the contract's Shared Rules describe; an update never ends your call.\n\nTask:\ntask\n"
   },
   "basic_fingerprints": [
     {
       "mode": "orchestrated",
       "autonomous": false,
-      "fingerprint": "709f18bc2e8a75eb"
+      "fingerprint": "36887072f8f9c1d4"
     },
     {
       "mode": "orchestrated",
       "autonomous": true,
-      "fingerprint": "d72af10cd5de5604"
+      "fingerprint": "422f2eb8077bc4bf"
     },
     {
       "mode": "single",
       "autonomous": false,
-      "fingerprint": "1e7f2518e7a65e4f"
+      "fingerprint": "070961bcce20a18f"
     },
     {
       "mode": "single",
       "autonomous": true,
-      "fingerprint": "d3b30c0fd29397d5"
+      "fingerprint": "a645b83d49d81752"
     }
   ],
   "model_ids": [
@@ -90,22 +90,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "91ea00e9d83d102b"
+          "fingerprint": "96c8f5241b48b4fd"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "ae29659883741377"
+          "fingerprint": "9edb8d31f629834f"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "d962730d3bb2c15a"
+          "fingerprint": "4aa831c127737fb3"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "4301bf7d3e9172c8"
+          "fingerprint": "95e5e7359347f7bd"
         }
       ]
     },
@@ -135,22 +135,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "63e392aba8cbd6ea"
+          "fingerprint": "1d310d443a4f1ce6"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "5982cff68eb27a9c"
+          "fingerprint": "f9fec3509231dbe5"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "e10ce2f2b6ebc493"
+          "fingerprint": "ace236b3f02a62df"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "97294e9acb154413"
+          "fingerprint": "38ae8bb70616e816"
         }
       ]
     },
@@ -180,22 +180,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "b9270c2b78a16ef0"
+          "fingerprint": "a3b9c09c90f0bf36"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "3587eee7a3b0be74"
+          "fingerprint": "fe7eb8ac9e4e43bc"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "89d85b0d4bde4450"
+          "fingerprint": "018c9db4159b3b03"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "21ab2301068c8f1b"
+          "fingerprint": "42b39dfc08a8724d"
         }
       ]
     },
@@ -225,22 +225,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "0265367fe6352f38"
+          "fingerprint": "ce45020dcbcf2f98"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "5019ccc335d1cb65"
+          "fingerprint": "af4d7e062d319cf7"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "c6fb93881d0fdd00"
+          "fingerprint": "794ea3e5de840e0e"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "fdb560a3a747f423"
+          "fingerprint": "ae7b0f0edb116ba2"
         }
       ]
     },
@@ -270,22 +270,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "ea04333911c89653"
+          "fingerprint": "b40e6eea9111660b"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "2b65c54071dbde49"
+          "fingerprint": "a6bb2d33a54b8fba"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "05873e465576b361"
+          "fingerprint": "8d182a9a2b8a4269"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "ca3fbdb171938a0b"
+          "fingerprint": "101fdfb1b452f02c"
         }
       ]
     },
@@ -315,22 +315,22 @@
         {
           "mode": "orchestrated",
           "autonomous": false,
-          "fingerprint": "7a7d63b9ad7f0420"
+          "fingerprint": "d13a47fb09f8f415"
         },
         {
           "mode": "orchestrated",
           "autonomous": true,
-          "fingerprint": "0f2982e2e1c1db57"
+          "fingerprint": "fe09cede42b15f0b"
         },
         {
           "mode": "single",
           "autonomous": false,
-          "fingerprint": "5acf022ee33fde63"
+          "fingerprint": "e19fe33faa8ab205"
         },
         {
           "mode": "single",
           "autonomous": true,
-          "fingerprint": "d9d2c9d6d103512c"
+          "fingerprint": "baf95c660fe60984"
         }
       ]
     }

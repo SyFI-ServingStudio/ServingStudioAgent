@@ -264,6 +264,73 @@ class OrchestratedDriverTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(adapter.requests), 6)
 
+    async def test_implementer_checkpoint_resumes_the_implementer_not_a_handoff(self):
+        _, driver, adapter, request = self.setup_driver(
+            [
+                (Role.ORCHESTRATOR, delegate("build it")),
+                (Role.IMPLEMENTER, {"action": "milestone", "message": "half built"}),
+                (Role.IMPLEMENTER, {"action": "progress", "message": "testing"}),
+                (Role.IMPLEMENTER, answer("built")),
+                (Role.ORCHESTRATOR, answer("reviewed")),
+            ]
+        )
+        events = [event async for event in driver.run(request)]
+        self.assertEqual(events[-1].outcome, Outcome.ANSWER)
+        self.assertEqual(events[-1].metadata["implementer_summaries"], ["built"])
+        notes = [
+            (event["level"], event["text"])
+            for event in events[:-1]
+            if event["kind"] == "intermediate_output"
+        ]
+        self.assertEqual(notes, [("milestone", "half built"), ("progress", "testing")])
+        handoffs = [event["text"] for event in events[:-1] if event["kind"] == "implementer"]
+        self.assertEqual(handoffs, ["built"])
+        resumed = adapter.requests[2]
+        self.assertEqual(resumed.role, Role.IMPLEMENTER)
+        self.assertEqual(resumed.session_id, "saved-implementer")
+        self.assertIn("non-terminal `milestone` update", resumed.prompt)
+        self.assertIn("half built", resumed.prompt)
+        self.assertNotIn("reply_user` if", resumed.prompt)
+        self.assertNotIn("\nuser: ", resumed.prompt)
+        self.assertIn("Implementer summary:\nbuilt", adapter.requests[4].prompt)
+
+    async def test_steered_implementer_checkpoint_keeps_the_user_line(self):
+        _, driver, adapter, request = self.setup_driver(
+            [
+                (Role.IMPLEMENTER, {"action": "progress", "message": "checking"}),
+                (Role.IMPLEMENTER, {"action": "reply_user", "message": "it is X"}),
+            ]
+        )
+        request = replace(
+            request,
+            resume_role="implementer",
+            sessions={Role.IMPLEMENTER: "old-session"},
+        )
+        events = [event async for event in driver.run(request)]
+        self.assertEqual(events[-1].text, "it is X")
+        self.assertEqual(events[-1].resume_role, Role.IMPLEMENTER)
+        self.assertIn("user: question", adapter.requests[1].prompt)
+        self.assertIn("reply_user` if", adapter.requests[1].prompt)
+
+    async def test_implementer_checkpoints_fail_after_the_budget(self):
+        stop = {"action": "progress", "message": "still going"}
+        _, driver, adapter, request = self.setup_driver(
+            [
+                (Role.ORCHESTRATOR, {"action": "milestone", "message": "planned"}),
+                (Role.ORCHESTRATOR, delegate()),
+                *[(Role.IMPLEMENTER, stop)] * 4,
+            ]
+        )
+        events = [event async for event in driver.run(request)]
+        self.assertEqual(events[-1].outcome, Outcome.FAILED)
+        self.assertEqual(
+            events[-1].metadata["failure"], {"code": "agent_checkpoint_loop"}
+        )
+        self.assertIn("implementer", events[-1].text)
+        # The orchestrator's checkpoint before delegating is not charged to
+        # the implementer round: all four implementer stops were allowed to run.
+        self.assertEqual(len(adapter.requests), 6)
+
     async def test_role_start_precedes_awaiting_initial_preparation(self):
         root, driver, adapter, request = self.setup_driver([])
         entered = asyncio.Event()

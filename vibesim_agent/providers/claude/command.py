@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+from ...domain.decisions import COMMENTARY_ACTIONS
 from ...runtime.command import ExecutionEnvironment
 from ..base import AgentRequest
 
@@ -57,7 +58,18 @@ class ClaudeCommand:
             or name not in self.schemas
         ):
             raise ValueError("unsupported agent output schema")
-        return deepcopy(self.schemas[name])
+        schema = deepcopy(self.schemas[name])
+        # Codex holds every assistant message to its output schema, so the
+        # shared contracts list `progress` and `milestone` for commentary.
+        # Claude's `--json-schema` binds only the final StructuredOutput call,
+        # and its commentary is plain assistant text. Offering the commentary
+        # actions there lets a progress update end the call, and each one then
+        # costs a resumed call from the driver's checkpoint loop.
+        action = schema["properties"]["action"]
+        action["enum"] = [
+            value for value in action["enum"] if value not in COMMENTARY_ACTIONS
+        ]
+        return schema
 
     def build_tracked(
         self, request: AgentRequest, *, home: str, pid_file: str

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..domain.decisions import parse_implementer, parse_orchestrator
+from ..domain.decisions import COMMENTARY_ACTIONS, parse_implementer, parse_orchestrator
 from ..domain.errors import ProviderUnavailable
 from ..domain.evidence import AnalyzerTurnContext, prompt_with_analyzer_context
 from ..domain.roles import AgentMode, Role, Sandbox
@@ -218,6 +218,32 @@ class ConversationDriver:
                 return
             if role is Role.IMPLEMENTER:
                 decision = parse_implementer(text, allow_reply_user=may_reply)
+                if decision["action"] in COMMENTARY_ACTIONS:
+                    # Stopping on an update is not a handoff: the task is still
+                    # the implementer's, so show the update and resume it.
+                    yield {
+                        "kind": "intermediate_output",
+                        "role": role.value,
+                        "model": selections[role].model.model_id,
+                        "effort": selections[role].effort,
+                        "level": decision["action"],
+                        "text": decision["message"],
+                    }
+                    continuations += 1
+                    if continuations > 3:
+                        yield self._result(
+                            Outcome.FAILED,
+                            f"The {role.value} repeatedly stopped at a progress checkpoint. Continue the conversation to retry.",
+                            summaries,
+                            failure={"code": "agent_checkpoint_loop"},
+                        )
+                        return
+                    prompt = prompts.implementer_continue_prompt(
+                        decision["action"],
+                        decision["message"],
+                        user_message=user_text if may_reply else None,
+                    )
+                    continue
                 if decision["action"] == "reply_user":
                     yield self._result(
                         Outcome.ANSWER, decision["message"], summaries, resume_role=role
@@ -260,7 +286,7 @@ class ConversationDriver:
                 )
                 continue
             action = decision["action"]
-            if action in {"progress", "milestone"}:
+            if action in COMMENTARY_ACTIONS:
                 yield {
                     "kind": "intermediate_output",
                     "role": role.value,
@@ -276,7 +302,7 @@ class ConversationDriver:
                     Outcome(action), decision["message"].strip(), summaries
                 )
                 return
-            if action in {"progress", "milestone"}:
+            if action in COMMENTARY_ACTIONS:
                 continuations += 1
                 if continuations > 3:
                     yield self._result(
@@ -303,6 +329,9 @@ class ConversationDriver:
                 )
                 return
             pending_task = decision["task"]
+            # A new implementer round is the driver moving on, not stopping; its
+            # own checkpoints get a fresh budget.
+            continuations = 0
             yield {"kind": "decision", "action": "delegate", "task": pending_task}
             prompt = prompts.implementer_prompt(
                 pending_task, is_resume=bool(sessions.get(Role.IMPLEMENTER))

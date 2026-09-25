@@ -64,6 +64,15 @@ class DecisionTests(unittest.TestCase):
             {"action": "final_answer", "message": "plain handoff"},
         )
 
+    def test_implementer_commentary_is_kept_not_taken_as_the_handoff(self):
+        for action in ("progress", "milestone"):
+            with self.subTest(action=action):
+                text = json.dumps({"action": action, "message": "halfway"})
+                self.assertEqual(
+                    parse_implementer(text, allow_reply_user=False),
+                    {"action": action, "message": "halfway"},
+                )
+
     def test_legacy_alias_fence_and_escaped_newlines(self):
         self.assertEqual(
             parse_orchestrator(

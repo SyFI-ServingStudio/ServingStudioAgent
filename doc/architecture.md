@@ -62,6 +62,14 @@ The driving role has two decision-repair attempts and three checkpoint
 continuations. Exhaustion is a failed turn, not a successful final answer.
 Completed implementer work remains in history when a later call fails.
 
+Both roles report `progress` and `milestone` envelopes while they work. Codex
+holds every assistant message to the role's output schema, so each schema lists
+those actions. Claude's schema binds only the final result, so its adapter
+removes them and the updates stream as text. A call that still ends on an update
+is resumed rather than treated as finished: the driver resumes the orchestrator,
+or the implementer without handing the update to the orchestrator as its
+summary. Each implementer round starts with a fresh three-continuation budget.
+
 ## Providers And Runtime
 
 A named provider identifies one CLI connection. A role selection fixes provider,

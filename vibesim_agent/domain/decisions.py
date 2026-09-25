@@ -4,6 +4,10 @@ import json
 import re
 from typing import Any
 
+# Envelopes a role sends while it keeps working. They never end a turn: the
+# driver shows one and resumes the role if a call stops on it.
+COMMENTARY_ACTIONS = frozenset({"progress", "milestone"})
+
 
 def _json_candidates(text: str) -> list[str]:
     stripped = text.strip()
@@ -52,7 +56,7 @@ def parse_orchestrator(
         )
         task_is_empty = task is None or (isinstance(task, str) and not task.strip())
         if (
-            action in {"progress", "milestone"}
+            action in COMMENTARY_ACTIONS
             and isinstance(message, str)
             and message.strip()
             and task_is_empty
@@ -122,6 +126,10 @@ def parse_implementer(
     `user:` line. A `reply_user` there would end the turn on an answer to a
     question nobody asked, so it is demoted rather than obeyed — the
     orchestrator still gets its summary and decides how the turn ends.
+
+    A `progress` or `milestone` envelope is returned as itself. A call that
+    stops on one has not finished its task, and handing that update to the
+    orchestrator as the summary would review half-done work as done.
     """
     for candidate in _json_candidates(text):
         try:
@@ -136,7 +144,7 @@ def parse_implementer(
         action = payload.get("action")
         if action is not None and not isinstance(action, str):
             continue
-        if action not in {"final_answer", "reply_user"}:
+        if action not in {"final_answer", "reply_user", *COMMENTARY_ACTIONS}:
             continue
         if action == "reply_user" and not allow_reply_user:
             action = "final_answer"
