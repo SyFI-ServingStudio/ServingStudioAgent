@@ -122,7 +122,8 @@ class ManagedCapabilityTests(unittest.TestCase):
                 "managed_jobs_api": "agent-v1",
                 "backend_url": "http://backend:8765",
                 "capability_token": capability.token,
-                "expires_at": 8200,
+                # Six hours: a blocking `--remote` job runs inside one turn.
+                "expires_at": 22600,
             },
         )
         self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
@@ -135,6 +136,14 @@ class ManagedCapabilityTests(unittest.TestCase):
         self.assertIsNotNone(self.registry.authorize(later.token))
         self.registry.revoke_turn("w", "t")
         self.assertIsNone(self.registry.authorize(later.token))
+
+    def test_context_issues_tokens_with_its_configured_lifetime(self):
+        context = ManagedContext(self.registry, lambda w, c: self.path, ttl_seconds=60)
+        capability = context.write(self.request)
+        self.assertEqual(capability.expires_at, 1060)
+        self.assertEqual(json.loads(self.path.read_text())["expires_at"], 1060)
+        self.now = 1060
+        self.assertIsNone(self.registry.authorize(capability.token))
 
     def test_replace_failure_revokes_new_token_preserves_old_file_and_cleans_private_temp(
         self,

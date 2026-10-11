@@ -104,9 +104,14 @@ class ManagedContext:
         self,
         registry: CapabilityRegistry,
         path: Callable[[str, str], Path],
+        *,
+        ttl_seconds: float = 21600,
     ):
         self.registry = registry
         self.path = path
+        # A turn's token must outlive the longest job it reports on: a
+        # `--remote` simulation blocks the turn until the remote run ends.
+        self.ttl_seconds = ttl_seconds
         self._lock = threading.RLock()
 
     def write(self, request: AgentRequest) -> Capability:
@@ -116,6 +121,7 @@ class ManagedContext:
                 conversation_id=request.conversation_id,
                 turn_id=request.turn_id,
                 role=request.role.value,
+                ttl_seconds=self.ttl_seconds,
             )
             temporary: Path | None = None
             descriptor: int | None = None

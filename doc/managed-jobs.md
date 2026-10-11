@@ -32,6 +32,13 @@ kinds emit job events. The capability must belong to the job's conversation
 and turn, and that turn must still be running. Storage rechecks ownership and
 turn state in the update transaction.
 
+A turn's capability expires `VIBESIM_AGENT_MANAGED_CAPABILITY_TTL` seconds
+after it is issued (default 21600, six hours), and is revoked when the turn
+ends, whichever comes first. A job that blocks the turn until it finishes --
+the launcher's `--remote` run waits for the remote job and reports its final
+status at the end -- must therefore finish within that lifetime; a later
+status report is refused, and the launcher only warns about it.
+
 ## Compatibility During Migration
 
 Both `/api/internal/` and `/api/agent/v1/internal/` continue to provide the

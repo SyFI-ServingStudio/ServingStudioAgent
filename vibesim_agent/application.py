@@ -164,6 +164,7 @@ def build_application(
         lambda workspace_id, conversation_id: (
             context_directory(workspace_id, conversation_id) / context_target.name
         ),
+        ttl_seconds=settings.agent.managed_capability_ttl,
     )
 
     async def prepare_call(request):

@@ -61,6 +61,11 @@ class AgentSettings(ConfigModel):
     safe_interrupt_timeout: float = Field(
         default=30, gt=0, description="Wait for a recoverable role before stopping"
     )
+    managed_capability_ttl: float = Field(
+        default=21600,
+        gt=0,
+        description="Managed-job token lifetime in seconds; a blocking job must end within it",
+    )
     analyzer_source: Literal["external", "workspace"] = Field(
         default="external", description="Default Analyzer source"
     )
