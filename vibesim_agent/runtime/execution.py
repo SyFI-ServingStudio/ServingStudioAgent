@@ -217,17 +217,23 @@ class DockerExecution:
 # Container-only names. Every one of these points at a path or a device that
 # does not exist on the host, and `uv run` in a worktree fails outright when it
 # inherits UV_PROJECT_ENVIRONMENT or UV_CACHE_DIR from the runner image.
+# VIRTUAL_ENV is the Agent's own venv, never the worktree's.
 CONTAINER_ONLY_VARIABLES = frozenset(
     {
         "HOME",
         "UV_PROJECT_ENVIRONMENT",
         "UV_CACHE_DIR",
+        "VIRTUAL_ENV",
         "VIBESIM_EXPECTED_LOCK_SHA",
         "VIBESIM_RUNNER_GPUS",
         "NVIDIA_DRIVER_CAPABILITIES",
         "DG_USE_LOCAL_VERSION",
     }
 )
+# Unless it names a directory here: then it is the host's own cache, the one
+# `host_workspace_roots` grants a Codex turn. Dropped, uv falls back to
+# `~/.cache/uv`, which that profile does not let it write.
+HOST_DIRECTORY_VARIABLES = frozenset({"UV_CACHE_DIR"})
 
 
 @dataclass(frozen=True)
@@ -306,6 +312,11 @@ class HostExecution:
             key: value
             for key, value in process_environment.items()
             if key not in CONTAINER_ONLY_VARIABLES
+            or (
+                key in HOST_DIRECTORY_VARIABLES
+                and Path(value).is_absolute()
+                and Path(value).is_dir()
+            )
         }
 
     def home_path(self, home: InvocationHome) -> str:

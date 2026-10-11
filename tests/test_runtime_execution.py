@@ -232,6 +232,19 @@ class HostExecutionTests(unittest.TestCase):
         self.assertEqual(spawned, {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "secret"})
         self.assertIsNone(self.execution().spawn_environment(None))
 
+    def test_the_host_uv_cache_reaches_the_spawn(self):
+        with TemporaryDirectory() as cache:
+            spawned = self.execution().spawn_environment(
+                {
+                    "PATH": "/usr/bin",
+                    "UV_CACHE_DIR": cache,
+                    "VIRTUAL_ENV": "/srv/agent/.venv",
+                }
+            )
+        # A host directory is the cache the Codex profile grants; the Agent's
+        # own venv is never the worktree's.
+        self.assertEqual(spawned, {"PATH": "/usr/bin", "UV_CACHE_DIR": cache})
+
     def test_the_group_is_what_gets_killed(self):
         execution = self.execution()
         self.assertTrue(execution.start_new_session)
