@@ -113,7 +113,11 @@ The implementer is a role of the system, not a subagent: the orchestrator
 reaches it only through `delegate`. Both CLIs offer their own subagents (Codex's
 collab tools, Claude's `Agent`), and an orchestrator that uses them does the
 implementer's work in its own session, where no implementer card, session, or
-progress reporting exists. The contracts forbid that.
+progress reporting exists. The contracts forbid that. The rule binds only the
+orchestrator: the implementer may run its own foreground subagents for
+independent parts of a task, and the contracts tell the orchestrator not to
+forbid it. Delegation granularity follows `top-add-kernel`: one kernel is one
+task, which the implementer runs end to end and the orchestrator reviews once.
 
 ### `single`
 
