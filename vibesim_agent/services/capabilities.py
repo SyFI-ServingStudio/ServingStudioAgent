@@ -10,7 +10,7 @@ import secrets
 import tempfile
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..providers.base import AgentRequest
@@ -33,10 +33,18 @@ class CapabilityRegistry:
 
     Restarting the backend creates an empty registry and invalidates old tokens.
     A persisted context file is not itself an authorization source.
+
+    A token lives until its turn ends (`revoke_turn`) or goes unused for its
+    lifetime: each authorized use renews it, so a turn that runs several long
+    jobs one after another keeps reporting on each of them.
     """
 
-    def __init__(self, *, clock: Callable[[], float]):
+    def __init__(self, *, clock: Callable[[], float], ttl_seconds: float):
+        if not math.isfinite(ttl_seconds) or ttl_seconds <= 0:
+            raise ValueError("capability lifetime must be finite and positive")
         self.clock = clock
+        # How long a token may go unused (`AgentSettings.managed_capability_ttl`).
+        self.ttl_seconds = ttl_seconds
         self._lock = threading.RLock()
         self._capabilities: dict[str, Capability] = {}
 
@@ -47,13 +55,10 @@ class CapabilityRegistry:
         conversation_id: str,
         turn_id: str,
         role: str,
-        ttl_seconds: float = 7200,
     ) -> Capability:
-        if not math.isfinite(ttl_seconds) or ttl_seconds <= 0:
-            raise ValueError("capability lifetime must be finite and positive")
         with self._lock:
             now = self.clock()
-            expires_at = now + ttl_seconds
+            expires_at = now + self.ttl_seconds
             if not math.isfinite(now) or not math.isfinite(expires_at):
                 raise ValueError("capability clock and expiry must be finite")
             self._purge_expired(now)
@@ -72,7 +77,12 @@ class CapabilityRegistry:
             if not math.isfinite(now):
                 raise ValueError("capability clock must be finite")
             self._purge_expired(now)
-            return self._capabilities.get(token)
+            capability = self._capabilities.get(token)
+            if capability is None:
+                return None
+            renewed = replace(capability, expires_at=now + self.ttl_seconds)
+            self._capabilities[token] = renewed
+            return renewed
 
     def revoke(self, token: str) -> None:
         with self._lock:
@@ -132,6 +142,7 @@ class ManagedContext:
                     # and the same backend needs another name on the host.
                     "backend_url": request.execution.managed_backend_url.rstrip("/"),
                     "capability_token": capability.token,
+                    # When the token lapses unless used; each use renews it.
                     "expires_at": capability.expires_at,
                 }
                 descriptor, name = tempfile.mkstemp(

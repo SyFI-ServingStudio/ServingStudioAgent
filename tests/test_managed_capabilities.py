@@ -35,7 +35,7 @@ class ManagedCapabilityTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(TemporaryDirectory()))
         self.now = 1000.0
-        self.registry = CapabilityRegistry(clock=lambda: self.now)
+        self.registry = CapabilityRegistry(clock=lambda: self.now, ttl_seconds=21600)
         self.path = self.root / "control" / "managed-run.json"
         self.context = ManagedContext(self.registry, lambda w, c: self.path)
         model = Model("model", "Model", ("high",), "high")
@@ -62,18 +62,29 @@ class ManagedCapabilityTests(unittest.TestCase):
         return self.registry.issue(**arguments)
 
     def test_issue_authorize_expiry_boundary_and_restart_invalidation(self):
-        capability = self.issue(ttl_seconds=10)
+        self.registry = CapabilityRegistry(clock=lambda: self.now, ttl_seconds=10)
+        capability = self.issue()
         self.assertEqual(capability.expires_at, 1010)
         self.assertEqual(self.registry.authorize(capability.token), capability)
         self.assertIsNone(self.registry.authorize("unknown"))
         self.assertNotIn(capability.token, repr(capability))
-        self.now = 1009.99
-        self.assertIsNotNone(self.registry.authorize(capability.token))
         self.now = 1010
         self.assertIsNone(self.registry.authorize(capability.token))
         next_token = self.issue()
-        restarted = CapabilityRegistry(clock=lambda: self.now)
+        restarted = CapabilityRegistry(clock=lambda: self.now, ttl_seconds=10)
         self.assertIsNone(restarted.authorize(next_token.token))
+
+    def test_each_use_renews_a_token_until_it_goes_unused_for_its_lifetime(self):
+        # A turn that runs two long jobs back to back reports on both: a
+        # token's lifetime counts from its last use, not from its issue.
+        self.registry = CapabilityRegistry(clock=lambda: self.now, ttl_seconds=10)
+        capability = self.issue()
+        for now in (1009.99, 1019.98, 1029.97):
+            self.now = now
+            renewed = self.registry.authorize(capability.token)
+            self.assertEqual(renewed.expires_at, now + 10)
+        self.now = 1039.97
+        self.assertIsNone(self.registry.authorize(capability.token))
 
     def test_turn_revocation_is_workspace_scoped_and_includes_all_roles(self):
         first = self.issue()
@@ -92,7 +103,7 @@ class ManagedCapabilityTests(unittest.TestCase):
     def test_invalid_lifetime_cannot_create_nonexpiring_capability(self):
         for ttl in (0, -1, float("inf"), float("nan")):
             with self.subTest(ttl=ttl), self.assertRaises(ValueError):
-                self.issue(ttl_seconds=ttl)
+                CapabilityRegistry(clock=lambda: self.now, ttl_seconds=ttl)
         self.now = float("nan")
         with self.assertRaises(ValueError):
             self.issue()
@@ -122,7 +133,8 @@ class ManagedCapabilityTests(unittest.TestCase):
                 "managed_jobs_api": "agent-v1",
                 "backend_url": "http://backend:8765",
                 "capability_token": capability.token,
-                "expires_at": 8200,
+                # Six hours: a blocking `--remote` job runs inside one turn.
+                "expires_at": 22600,
             },
         )
         self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
@@ -135,6 +147,15 @@ class ManagedCapabilityTests(unittest.TestCase):
         self.assertIsNotNone(self.registry.authorize(later.token))
         self.registry.revoke_turn("w", "t")
         self.assertIsNone(self.registry.authorize(later.token))
+
+    def test_context_issues_tokens_with_its_configured_lifetime(self):
+        self.registry = CapabilityRegistry(clock=lambda: self.now, ttl_seconds=60)
+        context = ManagedContext(self.registry, lambda w, c: self.path)
+        capability = context.write(self.request)
+        self.assertEqual(capability.expires_at, 1060)
+        self.assertEqual(json.loads(self.path.read_text())["expires_at"], 1060)
+        self.now = 1060
+        self.assertIsNone(self.registry.authorize(capability.token))
 
     def test_replace_failure_revokes_new_token_preserves_old_file_and_cleans_private_temp(
         self,

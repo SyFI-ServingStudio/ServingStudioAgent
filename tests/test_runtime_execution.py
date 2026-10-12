@@ -232,6 +232,26 @@ class HostExecutionTests(unittest.TestCase):
         self.assertEqual(spawned, {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "secret"})
         self.assertIsNone(self.execution().spawn_environment(None))
 
+    def test_only_a_granted_uv_cache_reaches_the_spawn(self):
+        with TemporaryDirectory() as cache, TemporaryDirectory() as other:
+            environment = {
+                "PATH": os.pathsep.join(["/srv/agent/.venv/bin", "/usr/bin"]),
+                "UV_CACHE_DIR": cache,
+                "VIRTUAL_ENV": "/srv/agent/.venv",
+            }
+            granted = self.execution(workspace_roots=(Path(cache),))
+            # The granted cache is the host's own; the Agent's venv, on PATH
+            # too, is never the worktree's.
+            self.assertEqual(
+                granted.spawn_environment(environment),
+                {"PATH": "/usr/bin", "UV_CACHE_DIR": cache},
+            )
+            # A directory the profile does not grant is not writable there.
+            ungranted = self.execution(workspace_roots=(Path(other),))
+            self.assertEqual(
+                ungranted.spawn_environment(environment), {"PATH": "/usr/bin"}
+            )
+
     def test_the_group_is_what_gets_killed(self):
         execution = self.execution()
         self.assertTrue(execution.start_new_session)

@@ -58,9 +58,20 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("VIBESIM_AGENT_PROVIDERS_FILE", reference)
         self.assertNotIn("VIBESIM_PROVIDER_EXAMPLE", reference)
 
+    def test_managed_token_lifetime_defaults_to_six_hours(self):
+        settings = load_settings(environment={"HOME": str(self.repo)}, repo_root=self.repo)
+        self.assertEqual(settings.agent.managed_capability_ttl, 21600)
+        settings = load_settings(
+            environment={"HOME": str(self.repo), "VIBESIM_AGENT_MANAGED_CAPABILITY_TTL": "900"},
+            repo_root=self.repo,
+        )
+        self.assertEqual(settings.agent.managed_capability_ttl, 900)
+        self.assertIn("VIBESIM_AGENT_MANAGED_CAPABILITY_TTL", environment_reference())
+
     def test_invalid_inputs_identify_keys_without_values(self):
         for key, value in (
             ("VIBESIM_AGENT_IDLE_TIMEOUT", "nan"),
+            ("VIBESIM_AGENT_MANAGED_CAPABILITY_TTL", "0"),
             ("VIBESIM_AGENT_PORT", "70000"),
             ("VIBESIM_RUNNER_UID", "not-an-id"),
             ("VIBESIM_AGENT_ANALYZER_BASE_URL", "http://secret:credential@host"),
