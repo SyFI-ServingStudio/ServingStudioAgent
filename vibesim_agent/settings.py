@@ -64,7 +64,10 @@ class AgentSettings(ConfigModel):
     managed_capability_ttl: float = Field(
         default=21600,
         gt=0,
-        description="Managed-job token lifetime in seconds; a blocking job must end within it",
+        description=(
+            "Managed-job token lifetime in seconds, renewed by each status report; "
+            "a job must report again within it"
+        ),
     )
     analyzer_source: Literal["external", "workspace"] = Field(
         default="external", description="Default Analyzer source"

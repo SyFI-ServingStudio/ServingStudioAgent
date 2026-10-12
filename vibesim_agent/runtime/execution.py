@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -217,7 +218,8 @@ class DockerExecution:
 # Container-only names. Every one of these points at a path or a device that
 # does not exist on the host, and `uv run` in a worktree fails outright when it
 # inherits UV_PROJECT_ENVIRONMENT or UV_CACHE_DIR from the runner image.
-# VIRTUAL_ENV is the Agent's own venv, never the worktree's.
+# VIRTUAL_ENV is the Agent's own venv, never the worktree's (and its `bin`
+# leaves PATH with it).
 CONTAINER_ONLY_VARIABLES = frozenset(
     {
         "HOME",
@@ -230,10 +232,6 @@ CONTAINER_ONLY_VARIABLES = frozenset(
         "DG_USE_LOCAL_VERSION",
     }
 )
-# Unless it names a directory here: then it is the host's own cache, the one
-# `host_workspace_roots` grants a Codex turn. Dropped, uv falls back to
-# `~/.cache/uv`, which that profile does not let it write.
-HOST_DIRECTORY_VARIABLES = frozenset({"UV_CACHE_DIR"})
 
 
 @dataclass(frozen=True)
@@ -250,6 +248,8 @@ class HostExecution:
     mcp_python: str
     mcp_server: str
     permissions: CodexPermissions
+    # The directories outside the tree the turn may write (`host_workspace_roots`).
+    workspace_roots: tuple[Path, ...] = ()
 
     stop_timeout: float = STOP_TIMEOUT
     # The CLI is the process, so it leads its own group and the group is what
@@ -308,16 +308,25 @@ class HostExecution:
     ) -> dict[str, str] | None:
         if process_environment is None:
             return None
-        return {
+        spawned = {
             key: value
             for key, value in process_environment.items()
             if key not in CONTAINER_ONLY_VARIABLES
-            or (
-                key in HOST_DIRECTORY_VARIABLES
-                and Path(value).is_absolute()
-                and Path(value).is_dir()
-            )
         }
+        # A uv cache the turn was granted is the host's own: dropped, uv falls
+        # back to `~/.cache/uv`, which the Codex profile does not let it write.
+        cache = process_environment.get("UV_CACHE_DIR")
+        if cache and Path(cache) in self.workspace_roots:
+            spawned["UV_CACHE_DIR"] = cache
+        # `uv run` put the Agent's venv first on PATH; a worktree's `python`
+        # must not resolve there.
+        venv = process_environment.get("VIRTUAL_ENV")
+        if venv and "PATH" in spawned:
+            own = str(Path(venv) / "bin")
+            spawned["PATH"] = os.pathsep.join(
+                entry for entry in spawned["PATH"].split(os.pathsep) if entry != own
+            )
+        return spawned
 
     def home_path(self, home: InvocationHome) -> str:
         return str(home.host)

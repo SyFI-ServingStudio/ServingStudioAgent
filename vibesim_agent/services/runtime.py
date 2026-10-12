@@ -244,6 +244,7 @@ class RuntimeService:
             mcp_python=self.host.mcp_python,
             mcp_server=str(self.host.mcp_server),
             permissions=permissions,
+            workspace_roots=self.host.workspace_roots,
         )
 
     def prompts_for(self, request: TurnInput) -> Prompts:

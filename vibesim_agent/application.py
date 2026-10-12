@@ -158,13 +158,14 @@ def build_application(
             raise ValueError("managed context directory escapes conversation runtime")
         return directory
 
-    capabilities = CapabilityRegistry(clock=time.time)
+    capabilities = CapabilityRegistry(
+        clock=time.time, ttl_seconds=settings.agent.managed_capability_ttl
+    )
     context = ManagedContext(
         capabilities,
         lambda workspace_id, conversation_id: (
             context_directory(workspace_id, conversation_id) / context_target.name
         ),
-        ttl_seconds=settings.agent.managed_capability_ttl,
     )
 
     async def prepare_call(request):
