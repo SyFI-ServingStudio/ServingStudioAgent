@@ -99,7 +99,9 @@ def _version(path, *, run) -> str | None:
 # its environments unless these are named. Derived from the backend's own
 # environment rather than configured: they are the same values this process
 # already uses, and a deployment that had to declare them would get it wrong.
-ROOT_VARIABLES = ("TMPDIR", "UV_CACHE_DIR", "CARGO_HOME")
+# HF_HOME is the shared model cache: without it a download lands in the
+# worktree, where no other workspace can reuse it.
+ROOT_VARIABLES = ("TMPDIR", "UV_CACHE_DIR", "CARGO_HOME", "HF_HOME")
 ROOT_HOME_DIRECTORIES = (".cargo", "profile_envs")
 
 
