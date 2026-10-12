@@ -24,7 +24,7 @@ from pathlib import Path
 # `tools/runner_image.py` because `tools/*` imports `vibesim_agent` and not the
 # other way round; `tests/test_runner_image_build.py` pins the three copies
 # together.
-PINNED_VERSIONS = {"codex": "0.155.1", "claude": "2.1.278"}
+PINNED_VERSIONS = {"codex": "0.160.1", "claude": "2.1.278"}
 
 _SEMVER = re.compile(r"\b(\d+\.\d+\.\d+)\b")
 _VERSION_TIMEOUT = 30
