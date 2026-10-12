@@ -78,9 +78,9 @@ directory is shared by every worktree, so an agent able to commit in one
 worktree can also rewrite shared refs and objects and delete other branches.
 That is inherent to committing from a worktree and cannot be fixed in a profile.
 
-The profile also grants a few directories outside the tree, because `uv run`
-and the profiling environments need them: `$TMPDIR`, `$UV_CACHE_DIR`,
-`~/.cargo` and `~/profile_envs`. Anything nested under one of those becomes
+The profile also grants a few directories outside the tree, because `uv run`,
+the profiling environments and model downloads need them: `$TMPDIR`,
+`$UV_CACHE_DIR`, `$HF_HOME`, `~/.cargo` and `~/profile_envs`. Anything nested under one of those becomes
 writable, so `VIBESIM_AGENT_WORKTREE_ROOT` must not point inside them — the
 sibling-worktree boundary depends on the worktrees living somewhere else.
 
@@ -113,7 +113,11 @@ The implementer is a role of the system, not a subagent: the orchestrator
 reaches it only through `delegate`. Both CLIs offer their own subagents (Codex's
 collab tools, Claude's `Agent`), and an orchestrator that uses them does the
 implementer's work in its own session, where no implementer card, session, or
-progress reporting exists. The contracts forbid that.
+progress reporting exists. The contracts forbid that. The rule binds only the
+orchestrator: the implementer may run its own foreground subagents for
+independent parts of a task, and the contracts tell the orchestrator not to
+forbid it. Delegation granularity follows `top-add-kernel`: one kernel is one
+task, which the implementer runs end to end and the orchestrator reviews once.
 
 ### `single`
 
