@@ -21,7 +21,29 @@ CLAUDE_AUTH_ENVIRONMENT = (
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
 )
-CLAUDE_ENVIRONMENT = (*CLAUDE_AUTH_ENVIRONMENT, "ANTHROPIC_BASE_URL")
+# Withheld from every process unless a Bedrock connection sets them: an
+# operator's own Bedrock shell would otherwise reroute a host Claude turn.
+BEDROCK_ENVIRONMENT = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+    "ANTHROPIC_BEDROCK_BASE_URL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_MODEL",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_PROFILE",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+)
+CLAUDE_ENVIRONMENT = (
+    *CLAUDE_AUTH_ENVIRONMENT,
+    "ANTHROPIC_BASE_URL",
+    *BEDROCK_ENVIRONMENT,
+)
 CLAUDE_MODEL_ALIASES = {"sonnet": "claude-sonnet-5", "opus": "claude-opus-5"}
 
 
@@ -45,6 +67,11 @@ def provider_environment(settings: Settings, provider_id: str) -> dict[str, str]
     }
     if connection.base_url is not None:
         result["ANTHROPIC_BASE_URL"] = connection.base_url
+    if connection.bedrock is not None:
+        result["CLAUDE_CODE_USE_BEDROCK"] = "1"
+        result["AWS_REGION"] = connection.bedrock.region
+        if connection.bedrock.haiku_model is not None:
+            result["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = connection.bedrock.haiku_model
     return result
 
 
@@ -122,6 +149,10 @@ def session_scope(settings: Settings, provider_id: str, adapter_id: str) -> str:
         }
         if selection.home is not None:
             backend["home"] = str(selection.home.resolve())
+        connection = settings.connections.get(provider_id)
+        if connection is not None and connection.bedrock is not None:
+            # Added only for Bedrock, so existing Anthropic scopes keep their hash.
+            backend["bedrock_region"] = connection.bedrock.region
     else:
         raise ConfigurationError("unsupported built-in adapter")
     identity = {
@@ -194,6 +225,11 @@ def build_registry(
             credentials = Credentials(
                 any_secrets=tuple(connection.environment.values())
             )
+            if connection.bedrock is not None:
+                # An access key is unusable without its secret (and session token).
+                credentials = Credentials(
+                    all_secrets=tuple(connection.environment.values())
+                )
             if selection.home is not None:
                 credentials = Credentials(
                     required_files=(selection.home / ".credentials.json",)

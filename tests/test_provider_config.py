@@ -266,6 +266,53 @@ class ProviderConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigurationError):
             self.load(document)
 
+    def test_bedrock_takes_aws_credentials_instead_of_an_anthropic_source(self):
+        document = json.loads(json.dumps(self.document))
+        work = document["providers"]["work"]
+        work.pop("base_url")
+        work.update(
+            bedrock={"region": "us-east-1", "haiku_model": "us.anthropic.haiku"},
+            environment={"AWS_BEARER_TOKEN_BEDROCK": "BEDROCK_KEY"},
+        )
+        result = self.load(document, BEDROCK_KEY="bedrock-secret")
+        connection = result.connections["work"]
+        self.assertEqual(connection.bedrock.region, "us-east-1")
+        self.assertEqual(connection.bedrock.haiku_model, "us.anthropic.haiku")
+        self.assertEqual(result.secrets["BEDROCK_KEY"].get_secret_value(), "bedrock-secret")
+        work["environment"] = {
+            "AWS_ACCESS_KEY_ID": "WORK_AWS_ID",
+            "AWS_SECRET_ACCESS_KEY": "WORK_AWS_SECRET",
+            "AWS_SESSION_TOKEN": "WORK_AWS_SESSION",
+        }
+        self.assertIsNotNone(self.load(document).connections["work"].bedrock)
+        for change in (
+            {"environment": {}},
+            {"environment": {"AWS_ACCESS_KEY_ID": "WORK_AWS_ID"}},
+            {"environment": {"ANTHROPIC_API_KEY": "WORK_KEY"}},
+            {
+                "environment": {
+                    "AWS_BEARER_TOKEN_BEDROCK": "BEDROCK_KEY",
+                    "AWS_ACCESS_KEY_ID": "WORK_AWS_ID",
+                    "AWS_SECRET_ACCESS_KEY": "WORK_AWS_SECRET",
+                }
+            },
+            {"base_url": "https://work.example.test"},
+            {"home": "~/.claudeme"},
+            {"bedrock": {}},
+            {"bedrock": {"region": "US-EAST-1"}},
+            {"bedrock": {"region": "us-east-1", "profile": "default"}},
+            {"bedrock": "us-east-1"},
+        ):
+            with self.subTest(change=change):
+                broken = json.loads(json.dumps(document))
+                broken["providers"]["work"].update(change)
+                with self.assertRaises(ConfigurationError):
+                    self.load(broken)
+        code = document["providers"]["code"]
+        code["bedrock"] = {"region": "us-east-1"}
+        with self.assertRaises(ConfigurationError):
+            self.load(document)
+
     def test_yaml_keeps_naming_secret(self):
         configured = load_settings(
             repo_root=self.root,

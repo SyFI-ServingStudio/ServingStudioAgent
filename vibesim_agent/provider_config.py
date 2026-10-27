@@ -17,11 +17,15 @@ from .settings import (
     ConnectionModelSettings,
     ConnectionSettings,
     ProviderSettings,
+    BedrockSettings,
     validate_provider_id,
 )
 
 _ROLES = {"orchestrator", "implementer", "assistant"}
 _CLAUDE_AUTH = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+# Bedrock accepts an API key, or an access-key pair with an optional session token.
+_BEDROCK_KEY = {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+_BEDROCK_AUTH = ({"AWS_BEARER_TOKEN_BEDROCK"}, _BEDROCK_KEY, {*_BEDROCK_KEY, "AWS_SESSION_TOKEN"})
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 _CODEX_CREDENTIAL = re.compile(r"[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET)")
 _CONTROL_NAMES = {"PATH", "HOME", "USER", "SHELL", "TMPDIR"}
@@ -31,6 +35,7 @@ _FIELDS = {
     "label",
     "environment",
     "base_url",
+    "bedrock",
     "session_identity",
     "home",
     "default_model",
@@ -143,9 +148,23 @@ def load_provider_config(
         if not isinstance(adapter, str) or adapter not in {"codex", "claude"}:
             _invalid()
         refs = dict(_mapping(value.get("environment", {})))
-        if adapter == "claude" and (set(refs) - _CLAUDE_AUTH or len(refs) > 1):
+        bedrock = value.get("bedrock")
+        if bedrock is not None:
+            # Bedrock authenticates with AWS credentials alone: no Anthropic
+            # endpoint, token or login home applies to it.
+            if (
+                adapter != "claude"
+                or {"home", "base_url"} & set(value)
+                or set(refs) not in _BEDROCK_AUTH
+            ):
+                _invalid()
+            try:
+                bedrock = BedrockSettings.model_validate(_mapping(bedrock))
+            except ValidationError:
+                _invalid()
+        elif adapter == "claude" and (set(refs) - _CLAUDE_AUTH or len(refs) > 1):
             _invalid()
-        if adapter == "claude" and bool(refs) == ("home" in value):
+        if adapter == "claude" and bedrock is None and bool(refs) == ("home" in value):
             _invalid()
         for target, source in list(refs.items()):
             if adapter == "codex" and _CODEX_CREDENTIAL.fullmatch(target) is None:
@@ -228,7 +247,11 @@ def load_provider_config(
         try:
             selections[provider_id] = ProviderSettings.model_validate(profile)
             connections[provider_id] = ConnectionSettings(
-                adapter=adapter, environment=refs, base_url=endpoint, **optional
+                adapter=adapter,
+                environment=refs,
+                base_url=endpoint,
+                bedrock=bedrock,
+                **optional,
             )
         except ValidationError:
             _invalid()

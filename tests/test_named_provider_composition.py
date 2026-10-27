@@ -163,6 +163,72 @@ class NamedProviderCompositionTests(unittest.TestCase):
         self.assertEqual(len(homes), 5)
         self.assertNotIn("secret", json.dumps(setup.registry.catalog()))
 
+    def test_bedrock_connection_alone_receives_bedrock_environment(self):
+        self.document["providers"]["bedrock"] = {
+            "adapter": "claude",
+            "default_model": "us.anthropic.claude-opus-5-5",
+            "default_effort": "high",
+            "models": {"us.anthropic.claude-opus-5-5": {"efforts": ["high"]}},
+            "bedrock": {"region": "us-west-2"},
+            "environment": {
+                "AWS_ACCESS_KEY_ID": "WORK_AWS_ID",
+                "AWS_SECRET_ACCESS_KEY": "WORK_AWS_SECRET",
+            },
+        }
+        # An operator shell that itself runs Claude on Bedrock.
+        self.env.update(
+            WORK_AWS_ID="aws-id",
+            WORK_AWS_SECRET="aws-secret",
+            CLAUDE_CODE_USE_BEDROCK="1",
+            AWS_REGION="us-east-1",
+            AWS_PROFILE="default",
+            ANTHROPIC_DEFAULT_OPUS_MODEL="us.anthropic.other",
+        )
+        setup = self.build()
+        provider = setup.registry.provider("bedrock")
+        self.assertTrue(setup.registry.available("bedrock"))
+        environment = provider.adapter.process_environment
+        self.assertEqual(
+            {
+                key: environment.get(key)
+                for key in (
+                    "CLAUDE_CODE_USE_BEDROCK",
+                    "AWS_REGION",
+                    "AWS_ACCESS_KEY_ID",
+                    "AWS_SECRET_ACCESS_KEY",
+                    "AWS_PROFILE",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                    "ANTHROPIC_BASE_URL",
+                )
+            },
+            {
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "AWS_REGION": "us-west-2",
+                "AWS_ACCESS_KEY_ID": "aws-id",
+                "AWS_SECRET_ACCESS_KEY": "aws-secret",
+                "AWS_PROFILE": None,
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": None,
+                "ANTHROPIC_BASE_URL": None,
+            },
+        )
+        self.assertEqual(
+            set(provider.adapter.command.inherited_environment),
+            {
+                "CLAUDE_CODE_USE_BEDROCK",
+                "AWS_REGION",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+            },
+        )
+        for other in ("claude", "claudeme", "gpt"):
+            environment = setup.registry.provider(other).adapter.process_environment
+            for key in ("CLAUDE_CODE_USE_BEDROCK", "AWS_REGION", "AWS_PROFILE"):
+                self.assertNotIn(key, environment)
+        for key in ("CLAUDE_CODE_USE_BEDROCK", "AWS_PROFILE", "WORK_AWS_SECRET"):
+            self.assertNotIn(key, setup.docker_environment)
+        self.env.pop("WORK_AWS_SECRET")
+        self.assertFalse(self.build().registry.available("bedrock"))
+
     def test_missing_connection_secret_does_not_fall_back_to_global_auth(self):
         self.env.pop("OTHER_CLAUDE_TOKEN")
         setup = self.build()

@@ -6,8 +6,8 @@ loaded automatically from the Agent checkout, independently of the current
 working directory. An explicit `VIBESIM_AGENT_PROVIDERS_FILE` absolute path takes
 precedence. The file is required; missing or invalid configuration fails startup.
 
-The example illustrates separate Codex, Claude gateway and Claude personal-login
-connections.
+The example illustrates separate Codex, Claude gateway, Claude personal-login
+and Claude on Amazon Bedrock connections.
 
 The file defines the provider list and all three role defaults. Provider-specific
 `VIBESIM_PROVIDER_*` variables are rejected, so a shell's old settings cannot
@@ -71,6 +71,69 @@ Validate login, original-session resume and token refresh separately: a successf
 turn or a resumed session does not demonstrate an actual OAuth refresh. Use an
 isolated conversation and retain the profile path and endpoint across restart
 checks. See [browser and execution validation](browser-acceptance.md).
+
+## Claude On Amazon Bedrock
+
+A Claude connection with a `bedrock` block runs the CLI against Amazon Bedrock
+(`CLAUDE_CODE_USE_BEDROCK=1`) in the declared region:
+
+```yaml
+claudebr:
+  adapter: claude
+  bedrock:
+    region: us-east-1
+    haiku_model: us.anthropic.claude-haiku-5-5   # optional
+  environment:
+    AWS_BEARER_TOKEN_BEDROCK: WORK_BEDROCK_KEY
+  default_model: us.anthropic.claude-opus-5-5
+  default_effort: high
+  models:
+    us.anthropic.claude-opus-5-5:
+      efforts: [low, medium, high, xhigh, max]
+```
+
+Model IDs are Bedrock model or inference-profile IDs and are passed to the CLI
+unchanged. `haiku_model` sets `ANTHROPIC_DEFAULT_HAIKU_MODEL` for the CLI's
+background calls. Set it when the CLI's built-in default is not enabled in the
+account or region.
+
+Authenticate with either a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`) or an
+access-key pair (`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, plus
+`AWS_SESSION_TOKEN` for temporary credentials). These credentials are the only
+authentication: `home`, `base_url` and the Anthropic credential names are rejected.
+`AWS_PROFILE` and `~/.aws` are not used, because container runners cannot read the host's
+AWS configuration. A connection with only some of its references set is unavailable.
+
+The region is part of the backend identity, so changing it starts new sessions.
+Host `CLAUDE_CODE_USE_BEDROCK`, `AWS_*` and `ANTHROPIC_*_MODEL` variables are
+removed from every process environment, so a host shell that runs Claude on Bedrock does not
+redirect other connections.
+
+### Through a LiteLLM proxy
+
+A LiteLLM proxy can also serve Bedrock models on the Anthropic Messages route. To
+the Agent it is an ordinary Claude gateway: set `base_url` to the proxy, use its key
+as `ANTHROPIC_AUTH_TOKEN`, and declare the proxy's model names:
+
+```yaml
+claudell:
+  adapter: claude
+  label: Claude Opus 5.5 (Bedrock via LiteLLM)
+  base_url: http://127.0.0.1:4000
+  environment:
+    ANTHROPIC_AUTH_TOKEN: LITELLM_MASTER_KEY
+  default_model: claude-opus-5-5
+  default_effort: high
+  models:
+    claude-opus-5-5:
+      efforts: [low, medium, high, xhigh, max]
+```
+
+The proxy owns the AWS credentials and region (`bedrock/<model id>` entries with
+`aws_region_name`). The CLI's background calls use its built-in Haiku model ID, so
+also map that name, e.g. `claude-haiku-4-5-20251001`, to a Bedrock Haiku model.
+Container runners reach a proxy only through an address they can resolve, such as
+the Docker bridge gateway; `127.0.0.1` serves host turns only.
 
 ## Sessions And Compatibility
 

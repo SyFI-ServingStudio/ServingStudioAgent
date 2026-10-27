@@ -73,6 +73,22 @@ providers:
       glm-5.3-fp4:
         efforts: [low, medium, high, xhigh, max]
 
+  claudebr:
+    adapter: claude
+    label: Claude Bedrock
+    bedrock:
+      region: us-east-1
+      haiku_model: us.anthropic.claude-haiku-5-5
+    environment:
+      AWS_BEARER_TOKEN_BEDROCK: WORK_BEDROCK_KEY
+    default_model: us.anthropic.claude-opus-5-5
+    default_effort: high
+    models:
+      us.anthropic.claude-opus-5-5:
+        efforts: [low, medium, high, xhigh, max]
+      us.anthropic.claude-sonnet-5-5:
+        efforts: [low, medium, high, xhigh, max]
+
 defaults:
   orchestrator: gpt
   implementer: gpt

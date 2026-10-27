@@ -143,6 +143,33 @@ class ConfiguredProviderTests(unittest.TestCase):
         config.write_text(config.read_text().replace("http://backend", "http://other"))
         self.assertNotEqual(session_scope(settings, "gpt", "codex"), original)
 
+    def test_bedrock_region_is_backend_identity(self):
+        original = session_scope(self.settings(CLAUDE_TOKEN="one"), "claude", "claude")
+        claude = self.document["providers"]["claude"]
+        claude.pop("base_url")
+        claude.update(
+            bedrock={"region": "us-east-1"},
+            environment={"AWS_BEARER_TOKEN_BEDROCK": "BEDROCK_KEY"},
+        )
+        (self.root / "providers.yaml").write_text(json.dumps(self.document))
+        east = self.settings(BEDROCK_KEY="one")
+        self.assertEqual(
+            provider_environment(east, "claude"),
+            {
+                "AWS_BEARER_TOKEN_BEDROCK": "one",
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "AWS_REGION": "us-east-1",
+            },
+        )
+        scope = session_scope(east, "claude", "claude")
+        self.assertNotEqual(scope, original)
+        self.assertEqual(
+            session_scope(self.settings(BEDROCK_KEY="two"), "claude", "claude"), scope
+        )
+        claude["bedrock"] = {"region": "us-west-2"}
+        (self.root / "providers.yaml").write_text(json.dumps(self.document))
+        self.assertNotEqual(session_scope(self.settings(), "claude", "claude"), scope)
+
     def test_guard_and_adapter_mismatch_fail_before_execution(self):
         settings = self.settings()
         provider = self.registry(settings).provider("gpt")

@@ -214,12 +214,22 @@ class ConnectionModelSettings(ConfigModel):
     efforts: tuple[str, ...]
 
 
+class BedrockSettings(ConfigModel):
+    """Claude through Amazon Bedrock: the region selects the endpoint."""
+
+    region: str = Field(pattern=r"^[a-z]{2}(-[a-z]+)+-[0-9]+$")
+    # Bedrock IDs for the CLI's background model; its built-in default may not
+    # be enabled in the account or region.
+    haiku_model: str | None = Field(default=None, min_length=1)
+
+
 class ConnectionSettings(ConfigModel):
     adapter: Literal["codex", "claude"]
     models: tuple[ConnectionModelSettings, ...]
     label: str | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     base_url: str | None = None
+    bedrock: BedrockSettings | None = None
     session_identity: str | None = None
 
 
