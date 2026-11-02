@@ -25,6 +25,10 @@ class ClaudeCommand:
     # The user source is that isolated home (`CLAUDE_CONFIG_DIR`), not the
     # operator's `~/.claude`, so this reads no settings a turn did not create.
     setting_sources: tuple[str, ...] = ("user",)
+    # Bedrock profile mode: ClaudeProfile copies the profile's keys into
+    # `<home>/.aws/`, and the AWS SDK is pointed there rather than at the
+    # operator's `~/.aws`, which a container does not have.
+    aws_profile: str | None = None
 
     def __post_init__(self):
         if self.permission_mode not in {
@@ -74,13 +78,23 @@ class ClaudeCommand:
     def build_tracked(
         self, request: AgentRequest, *, home: str, pid_file: str
     ) -> list[str]:
+        environment = {
+            "CLAUDE_CONFIG_DIR": home,
+            "DISABLE_AUTOUPDATER": "1",
+            "VIBESIM_AGENT_PID_FILE": pid_file,
+        }
+        if self.aws_profile is not None:
+            aws = str(PurePosixPath(home) / ".aws")
+            environment.update(
+                {
+                    "AWS_PROFILE": self.aws_profile,
+                    "AWS_SHARED_CREDENTIALS_FILE": f"{aws}/credentials",
+                    "AWS_CONFIG_FILE": f"{aws}/config",
+                }
+            )
         return request.execution.command(
             self.arguments(request),
-            environment={
-                "CLAUDE_CONFIG_DIR": home,
-                "DISABLE_AUTOUPDATER": "1",
-                "VIBESIM_AGENT_PID_FILE": pid_file,
-            },
+            environment=environment,
             inherited=self.inherited_environment,
             pid_file=pid_file,
             label="vibesim-claude",

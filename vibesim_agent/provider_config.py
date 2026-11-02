@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from pydantic import SecretStr, ValidationError
 
 from .settings import (
+    BedrockSettings,
     ConfigurationError,
     ConnectionModelSettings,
     ConnectionSettings,
@@ -22,6 +23,15 @@ from .settings import (
 
 _ROLES = {"orchestrator", "implementer", "assistant"}
 _CLAUDE_AUTH = {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"}
+# Bedrock accepts either an API key or a static key pair (with an optional
+# session token); an AWS profile is the file-based alternative to both.
+_BEDROCK_KEY_PAIR = {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+_BEDROCK_AUTH_SETS = (
+    {"AWS_BEARER_TOKEN_BEDROCK"},
+    _BEDROCK_KEY_PAIR,
+    {*_BEDROCK_KEY_PAIR, "AWS_SESSION_TOKEN"},
+)
+_BEDROCK_FIELDS = {"region", "profile", "credentials_file", "small_fast_model"}
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 _CODEX_CREDENTIAL = re.compile(r"[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET)")
 _CONTROL_NAMES = {"PATH", "HOME", "USER", "SHELL", "TMPDIR"}
@@ -37,6 +47,7 @@ _FIELDS = {
     "models",
     "default_effort",
     "service_tier",
+    "bedrock",
 }
 
 
@@ -70,6 +81,32 @@ def _reference(value):
     if value in _CONTROL_NAMES or value.startswith(_CONTROL_PREFIXES):
         _invalid()
     return value
+
+
+def _bedrock(value, environment) -> BedrockSettings:
+    if set(value) - _BEDROCK_FIELDS or "region" not in value:
+        _invalid()
+    fields = {key: _text(item) for key, item in value.items()}
+    if "credentials_file" in fields:
+        if "profile" not in fields:
+            _invalid()
+        fields["credentials_file"] = _expand_home(
+            Path(fields["credentials_file"]), environment
+        )
+    elif "profile" in fields:
+        fields["credentials_file"] = _expand_home(
+            Path("~/.aws/credentials"), environment
+        )
+    try:
+        return BedrockSettings.model_validate(fields)
+    except ValidationError:
+        _invalid()
+
+
+def _expand_home(path: Path, environment) -> Path:
+    if path.parts and path.parts[0] == "~":
+        return Path(_text(environment.get("HOME"))).joinpath(*path.parts[1:])
+    return path
 
 
 def _read(path):
@@ -143,10 +180,21 @@ def load_provider_config(
         if not isinstance(adapter, str) or adapter not in {"codex", "claude"}:
             _invalid()
         refs = dict(_mapping(value.get("environment", {})))
-        if adapter == "claude" and (set(refs) - _CLAUDE_AUTH or len(refs) > 1):
-            _invalid()
-        if adapter == "claude" and bool(refs) == ("home" in value):
-            _invalid()
+        bedrock = None
+        if "bedrock" in value:
+            if adapter != "claude" or "home" in value or "base_url" in value:
+                _invalid()
+            bedrock = _bedrock(_mapping(value["bedrock"]), environment)
+            # Exactly one credential source: an AWS profile or env references.
+            if (bedrock.profile is None) == (not refs):
+                _invalid()
+            if refs and set(refs) not in _BEDROCK_AUTH_SETS:
+                _invalid()
+        elif adapter == "claude":
+            if set(refs) - _CLAUDE_AUTH or len(refs) > 1:
+                _invalid()
+            if bool(refs) == ("home" in value):
+                _invalid()
         for target, source in list(refs.items()):
             if adapter == "codex" and _CODEX_CREDENTIAL.fullmatch(target) is None:
                 _invalid()
@@ -221,14 +269,15 @@ def load_provider_config(
             _invalid()
         optional["models"] = tuple(declarations)
         if "home" in value:
-            home = Path(_text(value["home"]))
-            if home.parts and home.parts[0] == "~":
-                home = Path(_text(environment.get("HOME"))).joinpath(*home.parts[1:])
-            profile["home"] = home
+            profile["home"] = _expand_home(Path(_text(value["home"])), environment)
         try:
             selections[provider_id] = ProviderSettings.model_validate(profile)
             connections[provider_id] = ConnectionSettings(
-                adapter=adapter, environment=refs, base_url=endpoint, **optional
+                adapter=adapter,
+                environment=refs,
+                base_url=endpoint,
+                bedrock=bedrock,
+                **optional,
             )
         except ValidationError:
             _invalid()

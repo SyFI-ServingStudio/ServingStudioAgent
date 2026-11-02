@@ -72,6 +72,36 @@ turn or a resumed session does not demonstrate an actual OAuth refresh. Use an
 isolated conversation and retain the profile path and endpoint across restart
 checks. See [browser and execution validation](browser-acceptance.md).
 
+## Amazon Bedrock
+
+A Claude connection with a `bedrock` block runs Claude Code against Amazon
+Bedrock (`CLAUDE_CODE_USE_BEDROCK=1`) in the declared `region`. Model IDs are
+Bedrock IDs or inference profiles, such as `us.anthropic.claude-opus-5-5`, and
+must be enabled for the account in that region. `base_url` and a Claude login
+`home` are rejected for Bedrock connections.
+
+Credentials come from exactly one source:
+
+- `profile`: a profile with static keys in `credentials_file` (default
+  `~/.aws/credentials`). Each runtime preparation copies only that profile's
+  access key, secret and optional session token into the isolated runtime home,
+  so a rotated host key reaches the next turn and other profiles never enter a
+  runner. SSO and `credential_process` profiles have no static keys there and
+  are rejected; export temporary keys or use an API key instead.
+- `environment`: `AWS_BEARER_TOKEN_BEDROCK` alone, or `AWS_ACCESS_KEY_ID` with
+  `AWS_SECRET_ACCESS_KEY` and optionally `AWS_SESSION_TOKEN`, using the same
+  reference or inline-value forms as other credentials.
+
+Optional `small_fast_model` sets Claude Code's background model
+(`ANTHROPIC_DEFAULT_HAIKU_MODEL`) when the CLI default is not enabled in the
+account. Region and profile are part of the session identity; key rotation is
+not.
+
+The operator's own Claude Code and AWS shell settings (`CLAUDE_CODE_USE_BEDROCK`,
+`AWS_*`, `ANTHROPIC_MODEL` and `ANTHROPIC_DEFAULT_*_MODEL`) are removed from every
+provider process and Docker operation, so a host configured for Bedrock does
+not silently switch another Claude connection's backend.
+
 ## Sessions And Compatibility
 
 Runtime homes remain separate by conversation, role and session scope. Models,

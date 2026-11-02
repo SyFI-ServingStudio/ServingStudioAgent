@@ -21,7 +21,39 @@ CLAUDE_AUTH_ENVIRONMENT = (
     "ANTHROPIC_AUTH_TOKEN",
     "CLAUDE_CODE_OAUTH_TOKEN",
 )
-CLAUDE_ENVIRONMENT = (*CLAUDE_AUTH_ENVIRONMENT, "ANTHROPIC_BASE_URL")
+# Host settings that would silently switch a Claude CLI's backend, account or
+# model mapping. They are stripped from every provider process; a connection
+# supplies its own through `provider_environment` (and Bedrock profile files
+# through the command), never by inheriting the operator's shell.
+BEDROCK_ENVIRONMENT = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+    "ANTHROPIC_BEDROCK_BASE_URL",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_PROFILE",
+    "AWS_DEFAULT_PROFILE",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_CONFIG_FILE",
+)
+CLAUDE_MODEL_ENVIRONMENT = (
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+)
+CLAUDE_ENVIRONMENT = (
+    *CLAUDE_AUTH_ENVIRONMENT,
+    "ANTHROPIC_BASE_URL",
+    *BEDROCK_ENVIRONMENT,
+    *CLAUDE_MODEL_ENVIRONMENT,
+)
 CLAUDE_MODEL_ALIASES = {"sonnet": "claude-sonnet-5", "opus": "claude-opus-5"}
 
 
@@ -45,6 +77,15 @@ def provider_environment(settings: Settings, provider_id: str) -> dict[str, str]
     }
     if connection.base_url is not None:
         result["ANTHROPIC_BASE_URL"] = connection.base_url
+    if connection.bedrock is not None:
+        result["CLAUDE_CODE_USE_BEDROCK"] = "1"
+        result["AWS_REGION"] = connection.bedrock.region
+        if connection.bedrock.small_fast_model is not None:
+            # Claude Code's background model; the CLI default may not be
+            # enabled in the account's Bedrock model access.
+            result["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = (
+                connection.bedrock.small_fast_model
+            )
     return result
 
 
@@ -122,6 +163,14 @@ def session_scope(settings: Settings, provider_id: str, adapter_id: str) -> str:
         }
         if selection.home is not None:
             backend["home"] = str(selection.home.resolve())
+        connection = settings.connections.get(provider_id)
+        if connection is not None and connection.bedrock is not None:
+            # Region and profile select the AWS account and endpoint; key
+            # rotation within a profile does not change session identity.
+            backend["bedrock"] = {
+                "region": connection.bedrock.region,
+                "profile": connection.bedrock.profile,
+            }
     else:
         raise ConfigurationError("unsupported built-in adapter")
     identity = {
@@ -194,7 +243,16 @@ def build_registry(
             credentials = Credentials(
                 any_secrets=tuple(connection.environment.values())
             )
-            if selection.home is not None:
+            if connection.bedrock is not None:
+                bedrock = connection.bedrock
+                credentials = (
+                    Credentials(required_files=(bedrock.credentials_file,))
+                    if bedrock.credentials_file is not None
+                    else Credentials(
+                        all_secrets=tuple(connection.environment.values())
+                    )
+                )
+            elif selection.home is not None:
                 credentials = Credentials(
                     required_files=(selection.home / ".credentials.json",)
                 )

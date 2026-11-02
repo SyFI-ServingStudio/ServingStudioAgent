@@ -214,6 +214,27 @@ class ConnectionModelSettings(ConfigModel):
     efforts: tuple[str, ...]
 
 
+class BedrockSettings(ConfigModel):
+    """Claude through Amazon Bedrock instead of an Anthropic-compatible endpoint.
+
+    With `profile`, only that profile's static keys are copied from
+    `credentials_file` into the isolated runtime home; otherwise the
+    connection's `environment` references supply the AWS credentials.
+    """
+
+    region: str = Field(pattern=r"^[a-z]{2}(-[a-z]+)+-[0-9]+$")
+    profile: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.-]+$")
+    credentials_file: Path | None = None
+    small_fast_model: str | None = Field(default=None, min_length=1)
+
+    @field_validator("credentials_file")
+    @classmethod
+    def absolute_credentials_file(cls, value: Path | None) -> Path | None:
+        if value is not None and not value.is_absolute():
+            raise ValueError("must be an absolute path")
+        return value
+
+
 class ConnectionSettings(ConfigModel):
     adapter: Literal["codex", "claude"]
     models: tuple[ConnectionModelSettings, ...]
@@ -221,6 +242,7 @@ class ConnectionSettings(ConfigModel):
     environment: dict[str, str] = Field(default_factory=dict)
     base_url: str | None = None
     session_identity: str | None = None
+    bedrock: BedrockSettings | None = None
 
 
 def validate_provider_id(provider_id: str) -> str:

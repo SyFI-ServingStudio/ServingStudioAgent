@@ -68,14 +68,27 @@ def build_builtin_setup(
                 )
                 for role in Role
             }
+            bedrock = settings.connections[provider_id].bedrock
+            aws_profile = bedrock.profile if bedrock is not None else None
             adapters[provider_id] = ClaudeAdapter(
-                ClaudeCommand(environment, schemas, inherited_environment=inherited),
+                ClaudeCommand(
+                    environment,
+                    schemas,
+                    inherited_environment=inherited,
+                    aws_profile=aws_profile,
+                ),
                 home=home,
                 idle_timeout=settings.agent.idle_timeout,
                 logger=log,
                 process_environment=process_environment,
             )
-            profiles[provider_id] = ClaudeProfile(selection.home)
+            profiles[provider_id] = ClaudeProfile(
+                selection.home,
+                aws_credentials=(
+                    bedrock.credentials_file if aws_profile is not None else None
+                ),
+                aws_profile=aws_profile,
+            )
             binaries[provider_id] = ("claude",)
         elif adapter_id == "codex":
             if selection.home is None:

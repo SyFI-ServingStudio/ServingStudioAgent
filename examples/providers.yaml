@@ -73,6 +73,24 @@ providers:
       glm-5.3-fp4:
         efforts: [low, medium, high, xhigh, max]
 
+  bedrock:
+    adapter: claude
+    label: Claude (Bedrock)
+    bedrock:
+      region: us-east-1
+      # Copies only this profile's static keys from ~/.aws/credentials. Or omit
+      # `profile` and map `environment` to AWS_BEARER_TOKEN_BEDROCK, or to
+      # AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+ AWS_SESSION_TOKEN).
+      profile: default
+      small_fast_model: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    default_model: us.anthropic.claude-opus-5-5
+    default_effort: high
+    models:
+      us.anthropic.claude-opus-5-5:
+        efforts: [low, medium, high, xhigh, max]
+      us.anthropic.claude-fable-5-1:
+        efforts: [low, medium, high, xhigh, max]
+
 defaults:
   orchestrator: gpt
   implementer: gpt
